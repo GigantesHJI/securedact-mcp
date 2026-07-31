@@ -74,6 +74,7 @@ Python 3.12 is required.
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[ml]"
 python -m pip install "securedact-mcp[ml]"
 
 securedact-mcp install

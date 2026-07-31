@@ -1,0 +1,20 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "en-direct-email-phone",
+      "language": "en",
+      "input": "Email: alex.fixture@example.test\nPhone: +44 20 7946 0958",
+      "expected_entities": [
+        {"text": "alex.fixture@example.test", "type": "email"},
+        {"text": "+44 20 7946 0958", "type": "phone"}
+      ],
+      "expected_assertions": [],
+      "expected_policy_actions": {"email": "redact", "phone": "redact"},
+      "sanitized_must_not_contain": ["alex.fixture@example.test", "+44 20 7946 0958"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "permit"
+    }
+  ]
+}
+

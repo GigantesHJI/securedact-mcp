@@ -1,0 +1,74 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "special-sex-life-record-subject",
+      "language": "en",
+      "input": "The clinical note contains information about the patient's sexual activity.",
+      "expected_entities": [
+        {"text": "sexual activity", "type": "sex_life"}
+      ],
+      "expected_assertions": [
+        {"category": "sex_life", "negated": false}
+      ],
+      "expected_policy_actions": {"sex_life": "review"},
+      "sanitized_must_not_contain": ["sexual activity"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    },
+    {
+      "id": "special-orientation-indirect-wife",
+      "language": "en",
+      "input": "Emma introduced her wife.",
+      "expected_entities": [
+        {"text": "her wife", "type": "sexual_orientation"}
+      ],
+      "expected_assertions": [
+        {"category": "sexual_orientation", "negated": false}
+      ],
+      "expected_policy_actions": {"sexual_orientation": "review"},
+      "sanitized_must_not_contain": ["her wife"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    },
+    {
+      "id": "special-biometric-structured-identifiers",
+      "language": "en",
+      "input": "Face-recognition embedding: FACE-77A91B.\nIris scan reference: IRIS-229183.\nVoiceprint identifier: VOICE-88172.",
+      "expected_entities": [
+        {"text": "FACE-77A91B", "type": "biometric_data"},
+        {"text": "IRIS-229183", "type": "biometric_data"},
+        {"text": "VOICE-88172", "type": "biometric_data"}
+      ],
+      "expected_assertions": [
+        {"category": "biometric_data", "negated": false},
+        {"category": "biometric_data", "negated": false},
+        {"category": "biometric_data", "negated": false}
+      ],
+      "expected_policy_actions": {"biometric_data": "block"},
+      "sanitized_must_not_contain": [
+        "FACE-77A91B",
+        "IRIS-229183",
+        "VOICE-88172"
+      ],
+      "expected_residual_safe": true,
+      "provider_dispatch": "block"
+    },
+    {
+      "id": "special-political-structured-record",
+      "language": "mixed",
+      "input": "Political preference: GroenLinks.",
+      "expected_entities": [
+        {"text": "GroenLinks", "type": "political_opinion"}
+      ],
+      "expected_assertions": [
+        {"category": "political_opinion", "negated": false}
+      ],
+      "expected_policy_actions": {"political_opinion": "review"},
+      "sanitized_must_not_contain": ["GroenLinks"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    }
+  ]
+}
+

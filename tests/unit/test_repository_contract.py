@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+import json
+import sys
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from scripts.validate_repo import validate_repository  # noqa: E402
+
+
+def test_repository_is_valid() -> None:
+    assert validate_repository(ROOT) == []
+
+
+def test_package_metadata_and_console_entry_point_match_server() -> None:
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        pyproject = tomllib.load(handle)
+
+    assert (ROOT / "src" / "securedact_mcp" / "server.py").exists()
+    assert pyproject["project"]["name"] == "securedact-mcp"
+    assert pyproject["project"]["scripts"]["securedact-mcp"] == "securedact_mcp.cli:main"
+
+
+def test_client_json_examples_are_valid_and_generic() -> None:
+    for name in ("cursor-mcp.json", "windsurf-mcp.json"):
+        content = (ROOT / "examples" / name).read_text(encoding="utf-8")
+        configuration = json.loads(content)
+
+        assert "<USERNAME>" in content
+        assert "Intel" not in content
+        assert configuration["mcpServers"]["securedact"]["args"] == [
+            "-m",
+            "securedact_mcp",
+        ]
+
+
+def test_desktop_gateway_and_provider_packages_are_absent() -> None:
+    relative_paths = {
+        path.relative_to(ROOT).as_posix().lower()
+        for path in ROOT.rglob("*")
+        if ".git" not in path.parts
+    }
+    assert not any("src-tauri" in path for path in relative_paths)
+    assert not any("apps/desktop" in path for path in relative_paths)
+    assert not any("securedact_api" in path for path in relative_paths)
+    assert not any("securedact_providers" in path for path in relative_paths)
+
+
+def test_windows_bootstrap_uses_only_local_trusted_commands() -> None:
+    script = (ROOT / "scripts" / "install-securedact-mcp.ps1").read_text(encoding="utf-8")
+    lowered = script.casefold()
+    for forbidden in (
+        "executionpolicy",
+        "invoke-webrequest",
+        "irm ",
+        "iex",
+        "curl",
+        "wget",
+        "winget",
+        "git-xet",
+        "git clone",
+        "hf download",
+        "-verb runas",
+    ):
+        assert forbidden not in lowered
+    assert "py -3.12" in script
+    assert "-m venv" in script
+    assert "models verify" in script
+    assert "smoke_test_entrypoint.py" in script
+
+
+def test_normal_model_installer_has_no_shell_or_cli_downloader_dependency() -> None:
+    installer = (ROOT / "src" / "securedact_mcp" / "model_installer.py").read_text(encoding="utf-8")
+    lowered = installer.casefold()
+    assert "snapshot_download" in installer
+    for forbidden in (
+        "import subprocess",
+        "os.system",
+        "git clone",
+        "git-xet",
+        "hf download",
+        "invoke-webrequest",
+        "curl ",
+        "wget ",
+    ):
+        assert forbidden not in lowered
+
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        pyproject = tomllib.load(handle)
+    ml_dependencies = "\n".join(pyproject["project"]["optional-dependencies"]["ml"])
+    assert "huggingface-hub" in ml_dependencies
+    assert "flair" in ml_dependencies
+    assert "torch" in ml_dependencies
+    assert "git-xet" not in ml_dependencies

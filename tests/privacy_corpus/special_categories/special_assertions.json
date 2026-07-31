@@ -1,0 +1,83 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "special-ethnicity",
+      "language": "en",
+      "input": "Emma identifies as Dutch-Moroccan.",
+      "expected_entities": [{"text": "Dutch-Moroccan", "type": "racial_or_ethnic_origin"}],
+      "expected_assertions": [{"category": "racial_or_ethnic_origin", "negated": false}],
+      "expected_policy_actions": {"racial_or_ethnic_origin": "review"},
+      "sanitized_must_not_contain": ["Dutch-Moroccan"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    },
+    {
+      "id": "special-political",
+      "language": "en",
+      "input": "John supports the Green Party.",
+      "expected_entities": [{"text": "Green Party", "type": "political_opinion"}],
+      "expected_assertions": [{"category": "political_opinion", "negated": false}],
+      "expected_policy_actions": {"political_opinion": "review"},
+      "sanitized_must_not_contain": ["Green Party"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    },
+    {
+      "id": "special-religion-negated",
+      "language": "en",
+      "input": "Anna is not Muslim.",
+      "expected_entities": [{"text": "Muslim", "type": "religious_or_philosophical_belief"}],
+      "expected_assertions": [{"category": "religious_or_philosophical_belief", "negated": true}],
+      "expected_policy_actions": {"religious_or_philosophical_belief": "review"},
+      "sanitized_must_not_contain": ["Muslim"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    },
+    {
+      "id": "special-union",
+      "language": "en",
+      "input": "Robert is a member of the Example Workers Union.",
+      "expected_entities": [{"text": "Workers Union", "type": "trade_union_membership"}],
+      "expected_assertions": [{"category": "trade_union_membership", "negated": false}],
+      "expected_policy_actions": {"trade_union_membership": "review"},
+      "sanitized_must_not_contain": ["Workers Union"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    },
+    {
+      "id": "special-genetic-block",
+      "language": "en",
+      "input": "Emma has a BRCA1 pathogenic variant.",
+      "expected_entities": [{"text": "BRCA1", "type": "genetic_data"}],
+      "expected_assertions": [{"category": "genetic_data", "negated": false}],
+      "expected_policy_actions": {"genetic_data": "block"},
+      "sanitized_must_not_contain": ["BRCA1"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "block"
+    },
+    {
+      "id": "special-biometric-block",
+      "language": "en",
+      "input": "Fingerprint template ID: BIO-FP-8821.",
+      "expected_entities": [{"text": "BIO-FP-8821", "type": "biometric_data"}],
+      "expected_assertions": [{"category": "biometric_data", "negated": false}],
+      "expected_policy_actions": {"biometric_data": "block"},
+      "sanitized_must_not_contain": ["BIO-FP-8821"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "block"
+    },
+    {
+      "id": "special-orientation",
+      "language": "en",
+      "input": "John identifies as bisexual.",
+      "expected_entities": [{"text": "bisexual", "type": "sexual_orientation"}],
+      "expected_assertions": [{"category": "sexual_orientation", "negated": false}],
+      "expected_policy_actions": {"sexual_orientation": "review"},
+      "sanitized_must_not_contain": ["bisexual"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    }
+  ]
+}
+

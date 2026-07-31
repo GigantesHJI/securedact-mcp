@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a scoped improvement without weakening privacy controls.
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user problem and privacy impact. Roadmap ideas are not
+        commitments, and provider or desktop code is outside this repository.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What local MCP privacy workflow needs improvement?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and threat-model impact
+      description: Address data flow, mappings, logs, files, models, and failure mode.
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Synthetic acceptance tests
+      description: Describe tests that prove the behavior without real data.
+    validations:
+      required: true
+

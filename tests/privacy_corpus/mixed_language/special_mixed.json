@@ -1,0 +1,29 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "mixed-special-assertions",
+      "language": "mixed",
+      "input": "Jan is katholiek. Emma is a member of a trade union. Sofia heeft diabetes type 2.",
+      "expected_entities": [
+        {"text": "katholiek", "type": "religious_or_philosophical_belief"},
+        {"text": "trade union", "type": "trade_union_membership"},
+        {"text": "diabetes type 2", "type": "health_data"}
+      ],
+      "expected_assertions": [
+        {"category": "religious_or_philosophical_belief", "negated": false},
+        {"category": "trade_union_membership", "negated": false},
+        {"category": "health_data", "negated": false}
+      ],
+      "expected_policy_actions": {
+        "religious_or_philosophical_belief": "review",
+        "trade_union_membership": "review",
+        "health_data": "review"
+      },
+      "sanitized_must_not_contain": ["katholiek", "trade union", "diabetes type 2"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    }
+  ]
+}
+

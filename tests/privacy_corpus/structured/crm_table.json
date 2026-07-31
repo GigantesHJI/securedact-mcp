@@ -1,0 +1,32 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "structured-crm-table",
+      "language": "en",
+      "input": "COPIED CRM RECORD\n| Field | Value |\n| National ID: NID-SYN-88271 | Customer number: CUST-551199 |\n| Case number: CASE-NL-4482 | Invoice number: INV-2026-718 |",
+      "expected_entities": [
+        {"text": "NID-SYN-88271", "type": "national_id"},
+        {"text": "CUST-551199", "type": "customer_number"},
+        {"text": "CASE-NL-4482", "type": "case_number"},
+        {"text": "INV-2026-718", "type": "invoice_number"}
+      ],
+      "expected_assertions": [],
+      "expected_policy_actions": {
+        "national_id": "redact",
+        "customer_number": "redact",
+        "case_number": "redact",
+        "invoice_number": "redact"
+      },
+      "sanitized_must_not_contain": [
+        "NID-SYN-88271",
+        "CUST-551199",
+        "CASE-NL-4482",
+        "INV-2026-718"
+      ],
+      "expected_residual_safe": true,
+      "provider_dispatch": "permit"
+    }
+  ]
+}
+

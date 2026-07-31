@@ -1,0 +1,60 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "structured-full-record-v1",
+      "language": "mixed",
+      "input": "Name: Emma de Vries\nDate of birth: 14 February 1987\nAddress: Keizersgracht 123, 1015 CJ Amsterdam, Netherlands\nEmail: emma.synthetic@example.test\nTelephone: +31 6 12345678\nBSN: 123456782\nPassport number: NX4R7P21\nDriving licence number: DV-NL-882177\nCustomer number: CUST-882911\nCase number: CASE-NL-7731\nIBAN: NL91 ABNA 0417 1643 00\nBIC/SWIFT: ABNANL2A\nAccount reference: ACC-771882\nCredit card: 4111 1111 1111 1111\nExpiry: 12/30\nCVV: 123\nInvoice number: INV-2026-819\nPayment reference: RF18539007547034\nEmployee ID: EMP-884291\nPayroll number: PAYROLL-7718\nDepartment: Internal Investigations\nProject name: Apollo Lantern\nDiagnosis: type 2 diabetes and hypertension\nMedication: metformin\nDosage: 500 mg twice daily\nAppointment: 18 September 2026 at 09:30\nPatient number: PAT-77921\nMedical record number: MRN-882190\nHealth insurer: Example Health Mutual\nPolicy number: POL-NL-88217731\nIPv4: 192.168.12.4\nIPv6: 2001:db8::8a2e:370:7334\nMAC address: AA:BB:CC:DD:EE:FF\nDevice identifier: DEV-99882\nSession token: session-test-88aa7711\nAPI token: sk-test-123456\nAccess token: Bearer access-test-887711\nPortal: http://case.internal/portal/CASE-NL-7731?email=emma.synthetic%40example.test\nRelationship: Linda de Vries is the mother of Emma de Vries.",
+      "expected_entities": [
+        {"text": "Emma de Vries", "type": "person"},
+        {"text": "14 February 1987", "type": "date_of_birth"},
+        {"text": "Keizersgracht 123, 1015 CJ Amsterdam, Netherlands", "type": "address"},
+        {"text": "emma.synthetic@example.test", "type": "email"},
+        {"text": "+31 6 12345678", "type": "phone"},
+        {"text": "123456782", "type": "bsn"},
+        {"text": "NX4R7P21", "type": "passport_number"},
+        {"text": "DV-NL-882177", "type": "driving_licence_number"},
+        {"text": "CUST-882911", "type": "customer_number"},
+        {"text": "CASE-NL-7731", "type": "case_number"},
+        {"text": "NL91 ABNA 0417 1643 00", "type": "iban"},
+        {"text": "ABNANL2A", "type": "bic_swift"},
+        {"text": "ACC-771882", "type": "bank_account_reference"},
+        {"text": "4111 1111 1111 1111", "type": "credit_card_number"},
+        {"text": "12/30", "type": "card_expiry"},
+        {"text": "123", "type": "card_security_code"},
+        {"text": "INV-2026-819", "type": "invoice_number"},
+        {"text": "RF18539007547034", "type": "payment_reference"},
+        {"text": "EMP-884291", "type": "employee_id"},
+        {"text": "PAYROLL-7718", "type": "payroll_number"},
+        {"text": "PAT-77921", "type": "patient_number"},
+        {"text": "MRN-882190", "type": "medical_record_number"},
+        {"text": "POL-NL-88217731", "type": "policy_number"},
+        {"text": "192.168.12.4", "type": "ipv4"},
+        {"text": "2001:db8::8a2e:370:7334", "type": "ipv6"},
+        {"text": "AA:BB:CC:DD:EE:FF", "type": "mac_address"},
+        {"text": "DEV-99882", "type": "device_identifier"},
+        {"text": "session-test-88aa7711", "type": "session_token"},
+        {"text": "sk-test-123456", "type": "api_token"},
+        {"text": "Bearer access-test-887711", "type": "access_token"}
+      ],
+      "expected_assertions": [],
+      "expected_policy_actions": {
+        "api_token": "block",
+        "access_token": "block",
+        "session_token": "block",
+        "card_security_code": "block"
+      },
+      "sanitized_must_not_contain": [
+        "NX4R7P21",
+        "DV-NL-882177",
+        "CUST-882911",
+        "CASE-NL-7731",
+        "sk-test-123456",
+        "access-test-887711"
+      ],
+      "expected_residual_safe": true,
+      "provider_dispatch": "block"
+    }
+  ]
+}
+

@@ -1,0 +1,17 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "negative-general-special-concepts",
+      "language": "en",
+      "input": "The article discusses Christianity. A union published a report. The hospital treats diabetes. Facial recognition is debated in parliament. The program includes a genetics lecture. The film includes a bisexual character.",
+      "expected_entities": [],
+      "expected_assertions": [],
+      "expected_policy_actions": {},
+      "sanitized_must_not_contain": [],
+      "expected_residual_safe": true,
+      "provider_dispatch": "permit"
+    }
+  ]
+}
+

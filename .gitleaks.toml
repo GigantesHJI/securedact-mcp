@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Versioned synthetic privacy fixtures contain deliberate test canaries"
+paths = [
+  '''tests/privacy_corpus/.*''',
+  '''examples/synthetic-test-prompts\.md''',
+]
+

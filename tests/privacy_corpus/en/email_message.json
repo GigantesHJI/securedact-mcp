@@ -1,0 +1,26 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "en-email-like-invoice",
+      "language": "en",
+      "input": "To: accounts.synthetic@example.test\nSubject: invoice follow-up\nInvoice number: INV-2026-9921\nPlease confirm receipt.",
+      "expected_entities": [
+        {"text": "accounts.synthetic@example.test", "type": "email"},
+        {"text": "INV-2026-9921", "type": "invoice_number"}
+      ],
+      "expected_assertions": [],
+      "expected_policy_actions": {
+        "email": "redact",
+        "invoice_number": "redact"
+      },
+      "sanitized_must_not_contain": [
+        "accounts.synthetic@example.test",
+        "INV-2026-9921"
+      ],
+      "expected_residual_safe": true,
+      "provider_dispatch": "permit"
+    }
+  ]
+}
+

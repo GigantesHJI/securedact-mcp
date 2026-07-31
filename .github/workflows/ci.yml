@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-and-tests:
+    name: Python 3.12 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package and development dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Validate repository boundary
+        run: python scripts/validate_repo.py --require-implementation
+
+      - name: Check formatting
+        run: python -m ruff format --check .
+
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Type check privacy engine, MCP boundary, and scripts
+        run: python -m mypy src/securedact_core src/securedact_mcp scripts
+
+      - name: Run full synthetic test suite
+        run: python -m pytest
+
+      - name: Run model-installation release tests
+        run: >-
+          python -m pytest
+          tests/unit/test_model_registry.py
+          tests/unit/test_model_installer.py
+          tests/unit/test_model_store.py
+          tests/unit/test_cli.py
+          tests/unit/test_managed_runtime.py
+          tests/integration/test_model_setup.py
+
+      - name: Parse Windows bootstrap installer
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/install-securedact-mcp.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
+      - name: Run privacy release tests
+        run: python scripts/run_privacy_tests.py
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  package:
+    name: Build and inspect package
+    runs-on: ubuntu-latest
+    needs: [quality-and-tests, secret-scan]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Check package metadata
+        run: python -m twine check dist/*
+
+      - name: Inspect package contents
+        run: python scripts/validate_release_artifacts.py dist
+
+      - name: Install built wheel
+        run: python -m pip install --force-reinstall --no-deps dist/*.whl
+
+      - name: Smoke-test installed console entry point
+        run: python scripts/smoke_test_entrypoint.py
+
+      - name: Smoke-test installed CLI parser and pinned registry
+        run: |
+          securedact-mcp --help
+          securedact-mcp models list
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: securedact-mcp-distributions
+          path: dist/*
+          if-no-files-found: error

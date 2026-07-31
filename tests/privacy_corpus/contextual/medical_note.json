@@ -1,0 +1,23 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "context-medical-style-note",
+      "language": "en",
+      "input": "CLINICAL NOTE\nEmma has type 2 diabetes. She takes metformin 500 mg twice daily.",
+      "expected_entities": [
+        {"text": "type 2 diabetes", "type": "health_data"},
+        {"text": "metformin", "type": "health_data"}
+      ],
+      "expected_assertions": [
+        {"category": "health_data", "negated": false},
+        {"category": "health_data", "negated": false}
+      ],
+      "expected_policy_actions": {"health_data": "review"},
+      "sanitized_must_not_contain": ["type 2 diabetes", "metformin"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    }
+  ]
+}
+

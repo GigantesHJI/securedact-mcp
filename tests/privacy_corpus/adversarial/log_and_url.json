@@ -1,0 +1,25 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "adversarial-log-sensitive-url",
+      "language": "en",
+      "input": "2026-04-12T09:30:00Z INFO redirect=http://crm.internal/portal/?email=log.synthetic%40example.test&case_id=CASE-NL-8841 status=302",
+      "expected_entities": [
+        {
+          "text": "http://crm.internal/portal/?email=log.synthetic%40example.test&case_id=CASE-NL-8841",
+          "type": "internal_url"
+        }
+      ],
+      "expected_assertions": [],
+      "expected_policy_actions": {"internal_url": "redact"},
+      "sanitized_must_not_contain": [
+        "log.synthetic%40example.test",
+        "CASE-NL-8841"
+      ],
+      "expected_residual_safe": true,
+      "provider_dispatch": "permit"
+    }
+  ]
+}
+

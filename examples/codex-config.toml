@@ -1,0 +1,11 @@
+# Replace <USERNAME> and verify both absolute paths.
+# Run `securedact-mcp install` and `securedact-mcp models verify` first.
+
+[mcp_servers.securedact]
+command = 'C:\Users\<USERNAME>\Desktop\securedact-mcp\.venv\Scripts\python.exe'
+args = ["-m", "securedact_mcp"]
+cwd = 'C:\Users\<USERNAME>\Desktop\securedact-mcp'
+enabled = true
+required = true
+startup_timeout_sec = 30
+tool_timeout_sec = 60

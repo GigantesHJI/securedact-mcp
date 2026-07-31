@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .models import Detection, DetectionSource, EntityType
+
+SOURCE_PRIORITY = {
+    DetectionSource.LABEL: 0,
+    DetectionSource.REGEX: 1,
+    DetectionSource.CONTEXTUAL: 2,
+    DetectionSource.FLAIR: 3,
+}
+
+TYPE_PRIORITY = {
+    EntityType.ADDRESS: 100,
+    EntityType.SPECIAL_CATEGORY_CONTEXT: 100,
+    EntityType.SENSITIVE_URL_PARAMETER: 95,
+    EntityType.INTERNAL_URL: 95,
+    EntityType.PRIVATE_KEY: 95,
+    EntityType.API_TOKEN: 90,
+    EntityType.ACCESS_TOKEN: 90,
+    EntityType.SESSION_TOKEN: 90,
+    EntityType.PASSPORT_NUMBER: 85,
+    EntityType.DRIVING_LICENCE_NUMBER: 85,
+    EntityType.CUSTOMER_NUMBER: 85,
+    EntityType.CASE_NUMBER: 85,
+    EntityType.EMPLOYEE_ID: 85,
+    EntityType.PAYROLL_NUMBER: 85,
+    EntityType.PATIENT_NUMBER: 85,
+    EntityType.MEDICAL_RECORD_NUMBER: 85,
+    EntityType.POLICY_NUMBER: 85,
+    EntityType.INVOICE_NUMBER: 85,
+    EntityType.CREDIT_CARD_NUMBER: 85,
+    EntityType.DATE_OF_BIRTH: 80,
+    EntityType.APPOINTMENT: 80,
+}
+
+
+@dataclass(frozen=True)
+class MergeDecision:
+    start: int
+    end: int
+    entity_type: str
+    detector: str
+    confidence: float
+    precedence: int
+    decision: str
+
+
+def overlaps(left: Detection, right: Detection) -> bool:
+    return left.start < right.end and right.start < left.end
+
+
+def _rank(item: Detection) -> tuple[int, int, int, int, float, int]:
+    # Policy-selected assertion/sentence replacement is an explicit privacy
+    # decision, not a statistical guess. It must cover nested deterministic
+    # findings when the policy calls for the entire assertion to be removed.
+    policy_scope = 0 if item.rule in {"full_sensitive_assertion", "full_sentence"} else 1
+    return (
+        policy_scope,
+        SOURCE_PRIORITY[item.source],
+        -max(item.precedence, TYPE_PRIORITY.get(item.entity_type, 0)),
+        -item.length,
+        -item.confidence,
+        item.start,
+    )
+
+
+def merge_detections(detections: list[Detection]) -> list[Detection]:
+    """Return complete, non-overlapping spans using explicit source/type precedence."""
+
+    ranked = sorted(
+        detections,
+        key=_rank,
+    )
+    selected: list[Detection] = []
+    for candidate in ranked:
+        if any(overlaps(candidate, existing) for existing in selected):
+            continue
+        selected.append(candidate)
+    return sorted(selected, key=lambda item: (item.start, item.end))
+
+
+def debug_merge_detections(
+    detections: list[Detection],
+) -> tuple[list[Detection], list[MergeDecision]]:
+    """Return safe-to-display merge metadata for development tooling.
+
+    Callers may add raw ``Detection.text`` only in an explicitly local development
+    view. This function intentionally excludes it from the reusable decision record.
+    """
+
+    ranked = sorted(
+        detections,
+        key=_rank,
+    )
+    selected: list[Detection] = []
+    decisions: list[MergeDecision] = []
+    for candidate in ranked:
+        accepted = not any(overlaps(candidate, existing) for existing in selected)
+        if accepted:
+            selected.append(candidate)
+        decisions.append(
+            MergeDecision(
+                start=candidate.start,
+                end=candidate.end,
+                entity_type=candidate.entity_type.value,
+                detector=candidate.rule or candidate.source.value,
+                confidence=candidate.confidence,
+                precedence=max(
+                    candidate.precedence,
+                    TYPE_PRIORITY.get(candidate.entity_type, 0),
+                ),
+                decision="selected" if accepted else "discarded_overlap",
+            )
+        )
+    return sorted(selected, key=lambda item: (item.start, item.end)), decisions

@@ -1,0 +1,861 @@
+from __future__ import annotations
+
+import ipaddress
+import re
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from urllib.parse import parse_qsl, unquote, urlsplit
+
+from ..models import Detection, DetectionSource, EntityType
+
+Validator = Callable[[str], bool]
+
+
+IBAN_LENGTHS = {
+    "AL": 28,
+    "AD": 24,
+    "AT": 20,
+    "AZ": 28,
+    "BH": 22,
+    "BE": 16,
+    "BA": 20,
+    "BR": 29,
+    "BG": 22,
+    "CR": 22,
+    "HR": 21,
+    "CY": 28,
+    "CZ": 24,
+    "DK": 18,
+    "DO": 28,
+    "EE": 20,
+    "FO": 18,
+    "FI": 18,
+    "FR": 27,
+    "GE": 22,
+    "DE": 22,
+    "GI": 23,
+    "GR": 27,
+    "GL": 18,
+    "GT": 28,
+    "HU": 28,
+    "IS": 26,
+    "IE": 22,
+    "IL": 23,
+    "IT": 27,
+    "JO": 30,
+    "KZ": 20,
+    "XK": 20,
+    "KW": 30,
+    "LV": 21,
+    "LB": 28,
+    "LI": 21,
+    "LT": 20,
+    "LU": 20,
+    "MK": 19,
+    "MT": 31,
+    "MR": 27,
+    "MU": 30,
+    "MC": 27,
+    "MD": 24,
+    "ME": 22,
+    "NL": 18,
+    "NO": 15,
+    "PK": 24,
+    "PS": 29,
+    "PL": 28,
+    "PT": 25,
+    "QA": 29,
+    "RO": 24,
+    "SM": 27,
+    "SA": 24,
+    "RS": 22,
+    "SK": 24,
+    "SI": 19,
+    "ES": 24,
+    "SE": 24,
+    "CH": 21,
+    "TL": 23,
+    "TN": 24,
+    "TR": 26,
+    "UA": 29,
+    "AE": 23,
+    "GB": 22,
+    "VA": 22,
+}
+
+
+@dataclass(frozen=True)
+class RegexRule:
+    name: str
+    entity_type: EntityType
+    pattern: re.Pattern[str]
+    validator: Validator = lambda _value: True
+    confidence: float = 1.0
+    precedence: int = 50
+
+
+@dataclass(frozen=True)
+class LabelRule:
+    name: str
+    labels: tuple[str, ...]
+    entity_type: EntityType
+    value_pattern: str
+    validator: Validator = lambda _value: True
+    confidence: float = 0.99
+
+    def compile(self) -> re.Pattern[str]:
+        labels = "|".join(re.escape(label) for label in sorted(self.labels, key=len, reverse=True))
+        return re.compile(
+            rf"(?im)(?<![\w])(?P<label>{labels})[^\S\r\n]*(?::|=|#)[^\S\r\n]*(?P<value>{self.value_pattern})",
+            re.IGNORECASE,
+        )
+
+
+def _digits(value: str) -> str:
+    return re.sub(r"\D", "", value)
+
+
+def luhn_valid(value: str) -> bool:
+    digits = _digits(value)
+    if not 13 <= len(digits) <= 19 or len(set(digits)) == 1:
+        return False
+    total = 0
+    parity = len(digits) % 2
+    for index, char in enumerate(digits):
+        number = int(char)
+        if index % 2 == parity:
+            number *= 2
+            if number > 9:
+                number -= 9
+        total += number
+    return total % 10 == 0
+
+
+def iban_valid(value: str) -> bool:
+    compact = re.sub(r"\s", "", value).upper()
+    expected_length = IBAN_LENGTHS.get(compact[:2])
+    if expected_length is None or len(compact) != expected_length:
+        return False
+    if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]+", compact):
+        return False
+    rearranged = compact[4:] + compact[:4]
+    numeric = "".join(str(ord(char) - 55) if char.isalpha() else char for char in rearranged)
+    remainder = 0
+    for char in numeric:
+        remainder = (remainder * 10 + int(char)) % 97
+    return remainder == 1
+
+
+def bsn_valid(value: str) -> bool:
+    digits = _digits(value)
+    if len(digits) != 9 or digits == "000000000":
+        return False
+    weights = (9, 8, 7, 6, 5, 4, 3, 2, -1)
+    return sum(int(char) * weight for char, weight in zip(digits, weights, strict=True)) % 11 == 0
+
+
+def _ip(version: int) -> Validator:
+    def validate(value: str) -> bool:
+        try:
+            return ipaddress.ip_address(value).version == version
+        except ValueError:
+            return False
+
+    return validate
+
+
+def _phone(value: str) -> bool:
+    digits = _digits(value)
+    if not 7 <= len(digits) <= 15:
+        return False
+    return (
+        value.lstrip().startswith("+")
+        or any(char in value for char in "(). ")
+        or value.startswith("0")
+    )
+
+
+def _bic(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?", value.upper()))
+
+
+def _card_expiry(value: str) -> bool:
+    match = re.fullmatch(r"(0[1-9]|1[0-2])/(?:\d{2}|\d{4})", value)
+    return match is not None
+
+
+def _nonempty_identifier(value: str) -> bool:
+    return (
+        3 <= len(value) <= 128
+        and bool(re.search(r"\d", value))
+        and bool(re.fullmatch(r"[A-Z0-9][A-Z0-9._/-]*", value, re.IGNORECASE))
+    )
+
+
+DATE_VALUE = (
+    r"(?:\d{1,2}\s+(?:January|February|March|April|May|June|July|August|"
+    r"September|October|November|December|januari|februari|maart|april|mei|"
+    r"juni|juli|augustus|september|oktober|november|december)\s+\d{4}|"
+    r"\d{1,2}[-/.]\d{1,2}[-/.]\d{4})"
+)
+IDENTIFIER_VALUE = r"[A-Z0-9][A-Z0-9._/-]{2,127}"
+TEXT_FIELD_VALUE = r"[^\r\n;|]{2,160}"
+
+
+LABEL_RULES = (
+    LabelRule("name_label", ("name", "naam"), EntityType.PERSON, TEXT_FIELD_VALUE, confidence=0.95),
+    LabelRule(
+        "date_of_birth_label",
+        ("date of birth", "birth date", "geboortedatum"),
+        EntityType.DATE_OF_BIRTH,
+        DATE_VALUE,
+    ),
+    LabelRule(
+        "address_label",
+        ("address", "adres", "street address"),
+        EntityType.ADDRESS,
+        r"[^\r\n;|]{5,180}",
+    ),
+    LabelRule("email_label", ("email", "e-mail"), EntityType.EMAIL, r"[^\s;|,]+@[^\s;|,]+"),
+    LabelRule(
+        "phone_label",
+        ("telephone", "phone", "telefoon", "mobiel"),
+        EntityType.PHONE,
+        r"\+?\d[\d(). -]{5,}\d",
+        _phone,
+    ),
+    LabelRule("bsn_label", ("BSN", "burgerservicenummer"), EntityType.BSN, r"\d{9}", bsn_valid),
+    LabelRule(
+        "passport_label",
+        ("passport", "passport number", "paspoort", "paspoortnummer"),
+        EntityType.PASSPORT_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "driving_licence_label",
+        (
+            "driving licence",
+            "driving licence number",
+            "driver licence",
+            "driver license",
+            "rijbewijs",
+            "rijbewijsnummer",
+        ),
+        EntityType.DRIVING_LICENCE_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "national_id_label",
+        ("national ID", "ID number", "identiteitsnummer"),
+        EntityType.NATIONAL_ID,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "customer_number_label",
+        ("customer number", "customer ID", "klantnummer", "klant ID"),
+        EntityType.CUSTOMER_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "case_number_label",
+        ("case number", "case ID", "zaaknummer", "dossiernummer"),
+        EntityType.CASE_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "employee_id_label",
+        ("employee ID", "employee number", "medewerker ID", "personeelsnummer"),
+        EntityType.EMPLOYEE_ID,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "payroll_number_label",
+        ("payroll number", "payroll ID", "loonnummer", "salarisnummer"),
+        EntityType.PAYROLL_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "patient_number_label",
+        ("patient number", "patient ID", "patiëntnummer", "patientnummer"),
+        EntityType.PATIENT_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "medical_record_number_label",
+        ("medical record number", "medical record ID", "MRN", "medisch dossiernummer"),
+        EntityType.MEDICAL_RECORD_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "policy_number_label",
+        ("policy number", "insurance policy", "polisnummer"),
+        EntityType.POLICY_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "invoice_number_label",
+        ("invoice number", "invoice ID", "factuurnummer"),
+        EntityType.INVOICE_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "iban_label",
+        ("IBAN",),
+        EntityType.IBAN,
+        r"[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}",
+        iban_valid,
+    ),
+    LabelRule(
+        "bic_swift_label",
+        ("BIC", "SWIFT", "BIC/SWIFT"),
+        EntityType.BIC_SWIFT,
+        r"[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?",
+        _bic,
+    ),
+    LabelRule(
+        "account_reference_label",
+        ("account reference", "bank account reference", "rekeningreferentie"),
+        EntityType.BANK_ACCOUNT_REFERENCE,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "payment_reference_label",
+        ("payment reference", "betalingskenmerk", "betalingsreferentie"),
+        EntityType.PAYMENT_REFERENCE,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "credit_card_label",
+        ("credit card", "card number", "creditcard", "kaartnummer"),
+        EntityType.CREDIT_CARD_NUMBER,
+        r"(?:\d[ -]?){12,18}\d",
+        luhn_valid,
+    ),
+    LabelRule(
+        "card_expiry_label",
+        ("expiry", "expiry date", "card expiry", "valid thru", "vervaldatum"),
+        EntityType.CARD_EXPIRY,
+        r"(?:0[1-9]|1[0-2])/(?:\d{2}|\d{4})",
+        _card_expiry,
+    ),
+    LabelRule(
+        "card_security_code_label",
+        ("CVV", "CVC", "security code", "card security code", "beveiligingscode"),
+        EntityType.CARD_SECURITY_CODE,
+        r"\d{3,4}",
+    ),
+    LabelRule(
+        "department_label",
+        ("department", "internal department", "afdeling"),
+        EntityType.DEPARTMENT,
+        TEXT_FIELD_VALUE,
+        confidence=0.95,
+    ),
+    LabelRule(
+        "project_label",
+        ("project", "project name", "confidential project", "projectnaam"),
+        EntityType.PROJECT_NAME,
+        TEXT_FIELD_VALUE,
+        confidence=0.95,
+    ),
+    LabelRule(
+        "diagnosis_label",
+        ("diagnosis", "diagnose", "condition", "aandoening"),
+        EntityType.MEDICAL_CONDITION,
+        TEXT_FIELD_VALUE,
+        confidence=0.95,
+    ),
+    LabelRule(
+        "medication_label",
+        ("medication", "medicine", "medicatie", "geneesmiddel"),
+        EntityType.MEDICATION,
+        TEXT_FIELD_VALUE,
+        confidence=0.95,
+    ),
+    LabelRule(
+        "dosage_label",
+        ("dosage", "dose", "dosering"),
+        EntityType.DOSAGE,
+        TEXT_FIELD_VALUE,
+        confidence=0.95,
+    ),
+    LabelRule(
+        "health_insurer_label",
+        ("health insurer", "insurer", "zorgverzekeraar"),
+        EntityType.HEALTH_INSURER,
+        TEXT_FIELD_VALUE,
+        confidence=0.95,
+    ),
+    LabelRule(
+        "ipv4_label", ("IPv4", "IPv4 address"), EntityType.IPV4, r"(?:\d{1,3}\.){3}\d{1,3}", _ip(4)
+    ),
+    LabelRule("ipv6_label", ("IPv6", "IPv6 address"), EntityType.IPV6, r"[0-9A-F:.]{2,45}", _ip(6)),
+    LabelRule(
+        "mac_label",
+        ("MAC", "MAC address", "MAC-adres"),
+        EntityType.MAC_ADDRESS,
+        r"(?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}|[0-9A-F]{4}(?:\.[0-9A-F]{4}){2}",
+    ),
+    LabelRule(
+        "device_label",
+        ("device identifier", "device ID", "apparaat-ID"),
+        EntityType.DEVICE_IDENTIFIER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "session_token_label",
+        ("session token", "session ID", "sessietoken", "session key"),
+        EntityType.SESSION_TOKEN,
+        TEXT_FIELD_VALUE,
+    ),
+    LabelRule(
+        "api_token_label",
+        ("API token", "API key", "API-token", "API-sleutel"),
+        EntityType.API_TOKEN,
+        TEXT_FIELD_VALUE,
+    ),
+    LabelRule(
+        "access_token_label",
+        ("access token", "bearer token", "authorization token", "toegangstoken"),
+        EntityType.ACCESS_TOKEN,
+        TEXT_FIELD_VALUE,
+    ),
+    LabelRule(
+        "password_label",
+        ("password", "passphrase", "wachtwoord"),
+        EntityType.PASSWORD,
+        r"\S{4,255}",
+    ),
+    LabelRule(
+        "appointment_label",
+        ("appointment", "appointment date", "afspraak", "afspraakdatum"),
+        EntityType.APPOINTMENT,
+        rf"{DATE_VALUE}(?:\s+(?:at|om)\s+(?:[01]\d|2[0-3]):[0-5]\d)?",
+        confidence=0.98,
+    ),
+)
+
+
+RULES = (
+    RegexRule(
+        "private_key",
+        EntityType.PRIVATE_KEY,
+        re.compile(
+            r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]{1,8192}?-----END [A-Z0-9 ]*PRIVATE KEY-----"
+        ),
+        precedence=95,
+    ),
+    RegexRule(
+        "complete_dutch_address",
+        EntityType.ADDRESS,
+        re.compile(
+            r"(?<!\w)(?:[A-ZÀ-ÖØ-Ý][\wÀ-ÖØ-öø-ÿ'’.-]+(?:\s+|$)){1,5}"
+            r"\d{1,5}[A-Za-z]?(?:[-/]\d+)?\s*,?\s*"
+            r"[1-9]\d{3}\s?[A-Z]{2}\s+"
+            r"[A-ZÀ-ÖØ-Ý][\wÀ-ÖØ-öø-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][\wÀ-ÖØ-öø-ÿ'’.-]+){0,3}"
+            r"(?:\s*,\s*(?:Netherlands|Nederland|Belgium|België|Germany|Deutschland))?",
+            re.UNICODE,
+        ),
+        precedence=90,
+    ),
+    RegexRule(
+        "credit_card",
+        EntityType.CREDIT_CARD_NUMBER,
+        re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"),
+        luhn_valid,
+        precedence=90,
+    ),
+    RegexRule(
+        "iban",
+        EntityType.IBAN,
+        re.compile(
+            r"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}(?![A-Z0-9])",
+            re.IGNORECASE,
+        ),
+        iban_valid,
+        precedence=90,
+    ),
+    RegexRule(
+        "mac_address",
+        EntityType.MAC_ADDRESS,
+        re.compile(
+            r"(?<![0-9A-F])(?:(?:[0-9A-F]{2}[:-]){5}[0-9A-F]{2}|"
+            r"[0-9A-F]{4}(?:\.[0-9A-F]{4}){2})(?![0-9A-F])",
+            re.IGNORECASE,
+        ),
+        precedence=85,
+    ),
+    RegexRule(
+        "dutch_bsn", EntityType.BSN, re.compile(r"(?<!\d)\d{9}(?!\d)"), bsn_valid, precedence=90
+    ),
+    RegexRule(
+        "ipv6",
+        EntityType.IPV6,
+        re.compile(
+            r"(?<![0-9A-F:.])(?:[0-9A-F]{0,4}:){2,7}"
+            r"(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9A-F]{0,4})(?![0-9A-F:.])",
+            re.IGNORECASE,
+        ),
+        _ip(6),
+        precedence=80,
+    ),
+    RegexRule(
+        "ipv4",
+        EntityType.IPV4,
+        re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])"),
+        _ip(4),
+        precedence=80,
+    ),
+    RegexRule(
+        "email",
+        EntityType.EMAIL,
+        re.compile(
+            r"(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}(?![\w.-])",
+            re.IGNORECASE,
+        ),
+        precedence=80,
+    ),
+    RegexRule(
+        "dutch_postcode",
+        EntityType.POSTCODE,
+        re.compile(r"(?<![A-Z0-9])[1-9]\d{3}\s?[A-Z]{2}(?![A-Z0-9])", re.IGNORECASE),
+        precedence=70,
+    ),
+    RegexRule(
+        "general_date",
+        EntityType.DATE,
+        re.compile(DATE_VALUE, re.IGNORECASE),
+        confidence=0.90,
+        precedence=55,
+    ),
+    RegexRule(
+        "time",
+        EntityType.TIME,
+        re.compile(
+            r"(?<![A-Z0-9:])(?:[01]\d|2[0-3]):[0-5]\d(?![A-Z0-9:])",
+            re.IGNORECASE,
+        ),
+        confidence=0.95,
+        precedence=55,
+    ),
+    RegexRule(
+        "phone",
+        EntityType.PHONE,
+        re.compile(r"(?<![\w-])(?:\+?\d[\d(). -]{5,}\d)(?![\w-])"),
+        _phone,
+        precedence=40,
+    ),
+)
+
+
+PREFIX_TYPES: dict[str, EntityType] = {
+    "ACC": EntityType.BANK_ACCOUNT_REFERENCE,
+    "CUST": EntityType.CUSTOMER_NUMBER,
+    "KLANT": EntityType.CUSTOMER_NUMBER,
+    "CASE": EntityType.CASE_NUMBER,
+    "ZAAK": EntityType.CASE_NUMBER,
+    "EMP": EntityType.EMPLOYEE_ID,
+    "PAYROLL": EntityType.PAYROLL_NUMBER,
+    "PAY": EntityType.PAYMENT_REFERENCE,
+    "PAT": EntityType.PATIENT_NUMBER,
+    "MRN": EntityType.MEDICAL_RECORD_NUMBER,
+    "POL": EntityType.POLICY_NUMBER,
+    "INV": EntityType.INVOICE_NUMBER,
+    "DEV": EntityType.DEVICE_IDENTIFIER,
+    "DL": EntityType.DRIVING_LICENCE_NUMBER,
+    "DV": EntityType.DRIVING_LICENCE_NUMBER,
+    "UNION": EntityType.TRADE_UNION_MEMBERSHIP,
+    "GEN": EntityType.GENETIC_DATA,
+    "BIO": EntityType.BIOMETRIC_DATA,
+    "FACE": EntityType.BIOMETRIC_DATA,
+    "IRIS": EntityType.BIOMETRIC_DATA,
+    "VOICE": EntityType.BIOMETRIC_DATA,
+}
+
+SENSITIVE_QUERY_KEYS = frozenset(
+    {
+        "account",
+        "account_id",
+        "account_reference",
+        "api_key",
+        "apikey",
+        "case",
+        "case_id",
+        "customer",
+        "customer_id",
+        "email",
+        "session",
+        "session_id",
+        "token",
+        "access_token",
+        "user",
+        "user_id",
+    }
+)
+
+URL_PATTERN = re.compile(r"\b(?:https?://|www\.)[^\s<>\[\]()]+", re.IGNORECASE)
+PREFIX_PATTERN = re.compile(
+    rf"(?<![A-Z0-9])(?P<prefix>{'|'.join(sorted(PREFIX_TYPES, key=len, reverse=True))})"
+    r"(?:-[A-Z]{2,8})?[-_][A-Z0-9][A-Z0-9_-]{2,}(?![A-Z0-9])",
+    re.IGNORECASE,
+)
+RF_REFERENCE_PATTERN = re.compile(r"(?<![A-Z0-9])RF\d{8,25}(?![A-Z0-9])", re.IGNORECASE)
+COMMON_SECRET_PATTERN = re.compile(
+    r"(?<![A-Z0-9])(?:sk-(?:test|live)-[A-Z0-9_-]{3,}|"
+    r"ghp_[A-Z0-9]{8,}|xox[baprs]-[A-Z0-9-]{8,}|"
+    r"sess(?:ion)?[-_][A-Z0-9_-]{6,})(?![A-Z0-9])",
+    re.IGNORECASE,
+)
+
+
+class RegexDetector:
+    name = "regex"
+    contextual = False
+
+    def __init__(
+        self,
+        rules: tuple[RegexRule, ...] = RULES,
+        *,
+        label_rules: tuple[LabelRule, ...] = LABEL_RULES,
+        prefix_types: dict[str, EntityType] | None = None,
+    ) -> None:
+        self.rules = rules
+        self.label_rules = label_rules
+        self.prefix_types = prefix_types or PREFIX_TYPES
+        self._compiled_label_rules = tuple((rule, rule.compile()) for rule in label_rules)
+
+    def detect(self, text: str) -> list[Detection]:
+        results: list[Detection] = []
+        results.extend(self._detect_labels(text))
+        results.extend(self._detect_prefixes(text))
+        results.extend(self._detect_urls(text))
+        results.extend(self._detect_common_secrets(text))
+        for rule, match in self._matches(text):
+            start, end = match.span()
+            value = match.group(0)
+            if rule.name == "iban":
+                value = self._trim_iban(value)
+                end = start + len(value)
+            if not rule.validator(value):
+                continue
+            results.append(
+                Detection(
+                    start=start,
+                    end=end,
+                    text=value,
+                    entity_type=rule.entity_type,
+                    confidence=rule.confidence,
+                    source=DetectionSource.REGEX,
+                    rule=rule.name,
+                    precedence=rule.precedence,
+                )
+            )
+        return self._deduplicate(results)
+
+    def _detect_labels(self, text: str) -> list[Detection]:
+        candidates: list[tuple[Detection, int]] = []
+        for rule, pattern in self._compiled_label_rules:
+            for match in pattern.finditer(text):
+                start, end = match.span("value")
+                value = match.group("value").strip()
+                leading = len(match.group("value")) - len(match.group("value").lstrip())
+                start += leading
+                end = start + len(value)
+                if not value or not rule.validator(value):
+                    continue
+                candidates.append(
+                    (
+                        Detection(
+                            start=start,
+                            end=end,
+                            text=text[start:end],
+                            entity_type=rule.entity_type,
+                            confidence=rule.confidence,
+                            source=DetectionSource.LABEL,
+                            rule=rule.name,
+                            precedence=100,
+                            rationale_code="labelled_sensitive_field",
+                        ),
+                        len(match.group("label")),
+                    )
+                )
+        # A generic label can be a suffix of a more specific one (for example,
+        # ``address`` in ``MAC address``).  When both capture the same value,
+        # retain only the longest label so the generic rule cannot win later
+        # during overlap resolution.
+        longest_by_span: dict[tuple[int, int], int] = {}
+        for detection, label_length in candidates:
+            key = (detection.start, detection.end)
+            longest_by_span[key] = max(longest_by_span.get(key, 0), label_length)
+        return [
+            detection
+            for detection, label_length in candidates
+            if label_length == longest_by_span[(detection.start, detection.end)]
+        ]
+
+    def _detect_prefixes(self, text: str) -> list[Detection]:
+        output: list[Detection] = []
+        for match in PREFIX_PATTERN.finditer(text):
+            if not _nonempty_identifier(match.group(0)):
+                continue
+            prefix = match.group("prefix").upper()
+            entity_type = self.prefix_types.get(prefix)
+            if entity_type is None:
+                continue
+            output.append(
+                Detection(
+                    start=match.start(),
+                    end=match.end(),
+                    text=match.group(0),
+                    entity_type=entity_type,
+                    confidence=1.0,
+                    source=DetectionSource.REGEX,
+                    rule=f"configured_prefix:{prefix}",
+                    precedence=95,
+                    rationale_code="configured_identifier_prefix",
+                )
+            )
+        for match in RF_REFERENCE_PATTERN.finditer(text):
+            output.append(
+                Detection(
+                    start=match.start(),
+                    end=match.end(),
+                    text=match.group(0),
+                    entity_type=EntityType.PAYMENT_REFERENCE,
+                    confidence=1.0,
+                    source=DetectionSource.REGEX,
+                    rule="rf_payment_reference",
+                    precedence=95,
+                )
+            )
+        return output
+
+    def _detect_common_secrets(self, text: str) -> list[Detection]:
+        output: list[Detection] = []
+        for match in COMMON_SECRET_PATTERN.finditer(text):
+            lowered = match.group(0).lower()
+            entity_type = (
+                EntityType.SESSION_TOKEN
+                if lowered.startswith(("sess", "session"))
+                else EntityType.API_TOKEN
+            )
+            output.append(
+                Detection(
+                    start=match.start(),
+                    end=match.end(),
+                    text=match.group(0),
+                    entity_type=entity_type,
+                    confidence=1.0,
+                    source=DetectionSource.REGEX,
+                    rule="common_secret_prefix",
+                    precedence=100,
+                    rationale_code="secret_prefix",
+                )
+            )
+        return output
+
+    def _detect_urls(self, text: str) -> list[Detection]:
+        output: list[Detection] = []
+        for match in URL_PATTERN.finditer(text):
+            value = match.group(0).rstrip(".,;:!?")
+            end = match.start() + len(value)
+            normalized = value if "://" in value else f"http://{value}"
+            try:
+                parsed = urlsplit(normalized)
+            except ValueError:
+                continue
+            host = (parsed.hostname or "").lower()
+            query_keys = {
+                unquote(key).lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+            }
+            internal = self._internal_host(host) or any(
+                marker in parsed.path.lower()
+                for marker in ("/case-management", "/crm/", "/portal/", "/admin/")
+            )
+            sensitive = bool(query_keys & SENSITIVE_QUERY_KEYS) or parsed.username is not None
+            entity_type = (
+                EntityType.INTERNAL_URL
+                if internal
+                else EntityType.SENSITIVE_URL_PARAMETER
+                if sensitive
+                else EntityType.URL
+            )
+            output.append(
+                Detection(
+                    start=match.start(),
+                    end=end,
+                    text=value,
+                    entity_type=entity_type,
+                    confidence=1.0 if internal or sensitive else 0.95,
+                    source=DetectionSource.REGEX,
+                    rule=("internal_url" if internal else "sensitive_url" if sensitive else "url"),
+                    precedence=95 if internal or sensitive else 60,
+                    rationale_code=(
+                        "internal_url"
+                        if internal
+                        else "sensitive_url_parameter"
+                        if sensitive
+                        else None
+                    ),
+                )
+            )
+        return output
+
+    @staticmethod
+    def _internal_host(host: str) -> bool:
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return True
+        if host.endswith((".local", ".internal", ".localhost")):
+            return True
+        if any(marker in host for marker in ("intranet", "corp", "internal", "portal")):
+            return True
+        try:
+            return ipaddress.ip_address(host).is_private
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _trim_iban(candidate: str) -> str:
+        compact = re.sub(r"\s", "", candidate).upper()
+        target_length = IBAN_LENGTHS.get(compact[:2])
+        if target_length is None:
+            return candidate
+        seen = 0
+        for index, char in enumerate(candidate):
+            if not char.isspace():
+                seen += 1
+            if seen == target_length:
+                return candidate[: index + 1]
+        return candidate
+
+    @staticmethod
+    def _deduplicate(detections: list[Detection]) -> list[Detection]:
+        output: dict[tuple[int, int, EntityType], Detection] = {}
+        for item in detections:
+            key = (item.start, item.end, item.entity_type)
+            current = output.get(key)
+            if current is None or (item.precedence, item.confidence) > (
+                current.precedence,
+                current.confidence,
+            ):
+                output[key] = item
+        return list(output.values())
+
+    def _matches(self, text: str) -> Iterator[tuple[RegexRule, re.Match[str]]]:
+        for rule in self.rules:
+            for match in rule.pattern.finditer(text):
+                yield rule, match

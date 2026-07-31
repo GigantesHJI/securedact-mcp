@@ -1,0 +1,399 @@
+"""Validate the publishable repository boundary without reading ignored user data."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+REQUIRED_FILES = {
+    ".editorconfig",
+    ".env.example",
+    ".gitattributes",
+    ".gitleaks.toml",
+    ".gitignore",
+    ".github/ISSUE_TEMPLATE/bug_report.yml",
+    ".github/ISSUE_TEMPLATE/feature_request.yml",
+    ".github/ISSUE_TEMPLATE/security_issue.md",
+    ".github/pull_request_template.md",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release.yml",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "LICENSE.md",
+    "MANIFEST.in",
+    "README.md",
+    "SECURITY.md",
+    "docs/architecture.md",
+    "docs/codex.md",
+    "docs/cursor.md",
+    "docs/installation.md",
+    "docs/mcp-tools.md",
+    "docs/model-installation.md",
+    "docs/privacy-model.md",
+    "docs/release.md",
+    "docs/testing.md",
+    "docs/threat-model.md",
+    "docs/troubleshooting.md",
+    "docs/windsurf.md",
+    "examples/codex-config.toml",
+    "examples/cursor-mcp.json",
+    "examples/synthetic-test-prompts.md",
+    "examples/windsurf-mcp.json",
+    "pyproject.toml",
+    "requirements-dev.txt",
+    "scripts/run_privacy_tests.py",
+    "scripts/install-securedact-mcp.ps1",
+    "scripts/smoke_test_entrypoint.py",
+    "scripts/validate_release_artifacts.py",
+    "scripts/validate_repo.py",
+}
+
+FORBIDDEN_PATH_PARTS = {
+    "apps/desktop",
+    "securedact_api",
+    "securedact_providers",
+    "src-tauri",
+    "node_modules",
+    "safe-copies",
+    "safe-copy-output",
+    "placeholder-mappings",
+}
+
+FORBIDDEN_SUFFIXES = {
+    ".bin",
+    ".ckpt",
+    ".db",
+    ".egg",
+    ".key",
+    ".log",
+    ".model",
+    ".onnx",
+    ".p12",
+    ".pem",
+    ".pfx",
+    ".pt",
+    ".pth",
+    ".safetensors",
+    ".sqlite",
+    ".sqlite3",
+    ".whl",
+    ".zip",
+}
+
+TEXT_SUFFIXES = {
+    "",
+    ".cfg",
+    ".example",
+    ".ini",
+    ".json",
+    ".md",
+    ".py",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+
+SECRET_PATTERNS = {
+    "AWS access key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    "GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
+    "generic private key": re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
+    "OpenAI-style live key": re.compile(r"\bsk-(?!test-)[A-Za-z0-9_-]{20,}\b"),
+}
+
+EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b", re.IGNORECASE)
+ALLOWED_EMAIL_DOMAINS = {"example.com", "example.test", "securedact.com"}
+MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+WINDOWS_USER_PATH_PATTERN = re.compile(r"C:\\Users\\(?!<USERNAME>\\)[^\\\s]+\\", re.IGNORECASE)
+MAX_FILE_SIZE = 5 * 1024 * 1024
+
+
+def tracked_candidates(root: Path) -> list[Path]:
+    """Return repository files while excluding Git metadata and ignored-style output."""
+    excluded_directories = {
+        ".git",
+        ".hypothesis",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tmp",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "htmlcov",
+        "logs",
+        "models",
+        "model-packs",
+        "tmp",
+        "temp",
+    }
+    return sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and not any(part in excluded_directories for part in path.relative_to(root).parts)
+    )
+
+
+def validate_markdown_links(root: Path, files: list[Path]) -> list[str]:
+    errors: list[str] = []
+    for path in files:
+        if path.suffix.lower() != ".md":
+            continue
+        content = path.read_text(encoding="utf-8")
+        for raw_target in MARKDOWN_LINK_PATTERN.findall(content):
+            target = raw_target.strip().split("#", 1)[0]
+            if not target or "://" in target or target.startswith(("mailto:", "#")):
+                continue
+            resolved = (path.parent / target).resolve()
+            try:
+                resolved.relative_to(root.resolve())
+            except ValueError:
+                errors.append(f"{path.relative_to(root)} links outside the repository: {target}")
+                continue
+            if not resolved.exists():
+                errors.append(f"{path.relative_to(root)} has a broken link: {target}")
+    return errors
+
+
+def validate_repository(root: Path, *, require_implementation: bool = False) -> list[str]:
+    errors: list[str] = []
+    files = tracked_candidates(root)
+    relative_files = {path.relative_to(root).as_posix() for path in files}
+
+    missing = sorted(REQUIRED_FILES - relative_files)
+    errors.extend(f"missing required file: {path}" for path in missing)
+
+    for path in files:
+        relative = path.relative_to(root).as_posix()
+        lowered = relative.lower()
+        if any(part in lowered for part in FORBIDDEN_PATH_PARTS):
+            errors.append(f"forbidden repository path: {relative}")
+        if path.suffix.lower() in FORBIDDEN_SUFFIXES:
+            errors.append(f"forbidden artifact type: {relative}")
+        if path.stat().st_size > MAX_FILE_SIZE:
+            errors.append(f"file exceeds 5 MiB repository limit: {relative}")
+
+        if path.suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            errors.append(f"text-like file is not UTF-8: {relative}")
+            continue
+
+        if WINDOWS_USER_PATH_PATTERN.search(content):
+            errors.append(f"personal Windows path found: {relative}")
+
+        synthetic_fixture = relative.startswith(
+            ("tests/privacy_corpus/", "examples/synthetic-test-prompts.md")
+        )
+        if relative != "scripts/validate_repo.py" and not synthetic_fixture:
+            for name, pattern in SECRET_PATTERNS.items():
+                if pattern.search(content):
+                    errors.append(f"possible {name} found: {relative}")
+
+        for domain in EMAIL_PATTERN.findall(content):
+            if domain.casefold() not in ALLOWED_EMAIL_DOMAINS:
+                errors.append(f"non-example email address found in {relative}: *.{domain}")
+
+    readme_path = root / "README.md"
+    if readme_path.exists():
+        readme = readme_path.read_text(encoding="utf-8")
+        required_statements = (
+            "does not automatically intercept every prompt",
+            "does not redistribute these model weights",
+            "`analyze_text`",
+            "`redact_text`",
+            "`restore_text`",
+            "`create_safe_copy`",
+        )
+        for statement in required_statements:
+            if statement not in readme:
+                errors.append(f"README is missing required statement: {statement}")
+
+    pyproject_path = root / "pyproject.toml"
+    pyproject: dict[str, object] = {}
+    if pyproject_path.exists():
+        with pyproject_path.open("rb") as handle:
+            pyproject = tomllib.load(handle)
+
+    server_path = root / "src" / "securedact_mcp" / "server.py"
+    implementation_present = server_path.exists()
+    if require_implementation and not implementation_present:
+        errors.append(
+            "server implementation is required but src/securedact_mcp/server.py is absent"
+        )
+    if not implementation_present and ("project" in pyproject or "build-system" in pyproject):
+        errors.append("package metadata is present but the MCP implementation is absent")
+    if implementation_present:
+        server_source = server_path.read_text(encoding="utf-8").casefold()
+        if "snapshot_download" in server_source or "model_installer" in server_source:
+            errors.append("MCP runtime must not invoke the model downloader")
+        project = pyproject.get("project")
+        if not isinstance(project, dict):
+            errors.append("implementation is present but [project] metadata is missing")
+        else:
+            scripts = project.get("scripts")
+            if not isinstance(scripts, dict):
+                errors.append("implementation is present but [project.scripts] is missing")
+            elif scripts.get("securedact-mcp") != "securedact_mcp.cli:main":
+                errors.append("securedact-mcp console entry point is missing or incorrect")
+            if project.get("name") != "securedact-mcp":
+                errors.append("project name must be securedact-mcp")
+            dependencies = project.get("dependencies")
+            if not isinstance(dependencies, list):
+                errors.append("runtime dependencies are missing")
+            elif any(
+                forbidden in str(dependency).casefold()
+                for dependency in dependencies
+                for forbidden in ("fastapi", "httpx", "uvicorn")
+            ):
+                errors.append("desktop/API/provider dependency found in runtime metadata")
+            optional_dependencies = project.get("optional-dependencies")
+            ml_dependencies = (
+                optional_dependencies.get("ml") if isinstance(optional_dependencies, dict) else None
+            )
+            if not isinstance(ml_dependencies, list) or not all(
+                any(required in str(dependency).casefold() for dependency in ml_dependencies)
+                for required in ("flair", "huggingface-hub", "torch")
+            ):
+                errors.append("ml extra must include Flair, huggingface-hub, and PyTorch")
+
+        registered_tools = set(
+            re.findall(
+                r"@server\.tool\(\)\s+def\s+([a-z0-9_]+)",
+                server_path.read_text(encoding="utf-8"),
+            )
+        )
+        expected_tools = {
+            "analyze_text",
+            "redact_text",
+            "restore_text",
+            "create_safe_copy",
+        }
+        if registered_tools != expected_tools:
+            errors.append(
+                f"registered MCP tools differ from documented contract: {sorted(registered_tools)}"
+            )
+
+    registry_path = root / "src" / "securedact_mcp" / "model_registry.py"
+    if registry_path.exists():
+        registry = registry_path.read_text(encoding="utf-8")
+        for repository in ("flair/ner-english-large", "flair/ner-dutch-large"):
+            if repository not in registry:
+                errors.append(f"model registry is missing official repository: {repository}")
+        for moving in ('upstream_revision="main"', 'upstream_revision="master"'):
+            if moving in registry:
+                errors.append(f"moving model revision found in registry: {moving}")
+        revisions = re.findall(r'upstream_revision="([^"]+)"', registry)
+        if len(revisions) != 2 or any(
+            not re.fullmatch(r"[0-9a-f]{40}", item) for item in revisions
+        ):
+            errors.append("model registry must contain exactly two immutable commit revisions")
+
+    installer_path = root / "src" / "securedact_mcp" / "model_installer.py"
+    if installer_path.exists():
+        installer = installer_path.read_text(encoding="utf-8").casefold()
+        for forbidden in ("subprocess", "os.system", "popen(", "git clone", "hf download"):
+            if forbidden in installer:
+                errors.append(f"forbidden downloader mechanism in model installer: {forbidden}")
+        for required in (
+            "snapshot_download",
+            "allow_patterns",
+            "token=false",
+            "smoke_test",
+        ):
+            if required not in installer:
+                errors.append(f"model installer is missing security control: {required}")
+
+    cli_path = root / "src" / "securedact_mcp" / "cli.py"
+    if cli_path.exists():
+        cli = cli_path.read_text(encoding="utf-8")
+        lowered_cli = cli.casefold()
+        for required in (
+            "--accept-upstream-terms",
+            "awaiting_consent",
+            'choices=("english", "dutch", "all", "none")',
+        ):
+            if required not in lowered_cli:
+                errors.append(f"guided installer CLI is missing consent control: {required}")
+
+    bootstrap_path = root / "scripts" / "install-securedact-mcp.ps1"
+    if bootstrap_path.exists():
+        bootstrap = bootstrap_path.read_text(encoding="utf-8").casefold()
+        for forbidden in (
+            "executionpolicy",
+            "invoke-webrequest",
+            "irm ",
+            "iex",
+            "curl",
+            "wget",
+            "winget",
+            "git-xet",
+            "git clone",
+            "hf download",
+            "-verb runas",
+        ):
+            if forbidden in bootstrap:
+                errors.append(f"forbidden command in Windows bootstrap: {forbidden}")
+
+    for example in ("examples/cursor-mcp.json", "examples/windsurf-mcp.json"):
+        example_path = root / example
+        if example_path.exists():
+            try:
+                json.loads(example_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as error:
+                errors.append(f"invalid JSON in {example}: {error}")
+
+    codex_example = root / "examples" / "codex-config.toml"
+    if codex_example.exists():
+        with codex_example.open("rb") as handle:
+            tomllib.load(handle)
+
+    errors.extend(validate_markdown_links(root, files))
+    return sorted(set(errors))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path(__file__).resolve().parents[1],
+        help="repository root (defaults to the parent of scripts/)",
+    )
+    parser.add_argument(
+        "--require-implementation",
+        action="store_true",
+        help="fail unless the reviewed server and package metadata are present",
+    )
+    arguments = parser.parse_args()
+
+    errors = validate_repository(
+        arguments.root.resolve(),
+        require_implementation=arguments.require_implementation,
+    )
+    if errors:
+        print("Repository validation failed:", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
+
+    state = (
+        "standalone-server"
+        if (arguments.root / "src" / "securedact_mcp" / "server.py").exists()
+        else "missing-implementation"
+    )
+    print(f"Repository validation passed ({state} state).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,36 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "context-medical-treatment",
+      "language": "en",
+      "input": "Emma has type 2 diabetes. She takes metformin 500 mg twice daily.",
+      "expected_entities": [
+        {"text": "type 2 diabetes", "type": "health_data"},
+        {"text": "metformin", "type": "health_data"}
+      ],
+      "expected_assertions": [
+        {"category": "health_data", "negated": false},
+        {"category": "health_data", "negated": false}
+      ],
+      "expected_policy_actions": {"health_data": "review"},
+      "sanitized_must_not_contain": ["type 2 diabetes", "metformin"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    },
+    {
+      "id": "context-relationship",
+      "language": "en",
+      "input": "Emma is the mother of Sofia.",
+      "expected_entities": [
+        {"text": "the mother of", "type": "relationship"}
+      ],
+      "expected_assertions": [],
+      "expected_policy_actions": {"relationship": "review"},
+      "sanitized_must_not_contain": ["the mother of"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    }
+  ]
+}
+

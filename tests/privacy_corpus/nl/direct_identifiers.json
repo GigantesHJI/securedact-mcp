@@ -1,0 +1,21 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "nl-direct-identifiers",
+      "language": "nl",
+      "input": "Naam: Jan Voorbeeld\nGeboortedatum: 11 maart 1991\nKlantnummer: KLANT-771199",
+      "expected_entities": [
+        {"text": "Jan Voorbeeld", "type": "person"},
+        {"text": "11 maart 1991", "type": "date_of_birth"},
+        {"text": "KLANT-771199", "type": "customer_number"}
+      ],
+      "expected_assertions": [],
+      "expected_policy_actions": {"person": "redact", "date_of_birth": "redact", "customer_number": "redact"},
+      "sanitized_must_not_contain": ["Jan Voorbeeld", "11 maart 1991", "KLANT-771199"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "permit"
+    }
+  ]
+}
+

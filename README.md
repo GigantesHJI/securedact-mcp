@@ -143,6 +143,7 @@ Model lifecycle commands:
 securedact-mcp models list
 securedact-mcp models status
 securedact-mcp models verify
+securedact-mcp models diagnose
 securedact-mcp models path
 securedact-mcp models update english|dutch
 securedact-mcp models remove english|dutch
@@ -181,6 +182,10 @@ Supported environment variables:
 Legacy development overrides remain available for tested local fixtures. Normal
 production setup uses the managed registry and configuration. Hugging Face and
 Transformers are forced into offline, telemetry-disabled mode at runtime.
+
+`models diagnose` safely reports whether configuration was found, enabled
+languages, active model IDs, integrity states, runtime detector readiness, and
+the final failure code. It does not report model paths or exception bodies.
 
 ## Testing with MCP Inspector
 

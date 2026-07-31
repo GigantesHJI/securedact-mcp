@@ -27,6 +27,8 @@ No versioned server release has been published yet.
 - `securedact-mcp models` list, status, verify, path, update, and remove commands.
 - Local conservative English/Dutch runtime routing and an optional Windows
   bootstrap installer.
+- Safe `securedact-mcp models diagnose` output for managed configuration,
+  integrity, detector readiness, and final failure-code inspection.
 
 ### Security
 
@@ -40,3 +42,6 @@ No versioned server release has been published yet.
 - Managed multilingual startup now loads each enabled Flair detector exactly
   once, reports ready only when all children are ready, and returns a stable
   non-sensitive failure code when any enabled model fails to load.
+- Managed model configuration now takes precedence over inherited legacy model
+  variables, and CLI/runtime discovery shares one model-store resolver and
+  active-configuration loader.

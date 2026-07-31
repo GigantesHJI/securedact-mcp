@@ -156,9 +156,9 @@ async def test_missing_required_contextual_model_fails_closed(
         config_path=app_root / "model-config.json",
     )
     monkeypatch.setattr(
-        server_module.ModelStoragePaths,
+        server_module.ModelStore,
         "resolve",
-        classmethod(lambda _cls: paths),
+        classmethod(lambda _cls: server_module.ModelStore(paths)),
     )
     monkeypatch.delenv("SECUREDACT_APP_DATA_DIR", raising=False)
     monkeypatch.setenv("SECUREDACT_REQUIRE_FLAIR", "1")

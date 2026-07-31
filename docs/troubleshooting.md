@@ -36,11 +36,16 @@ testing only, `SECUREDACT_REQUIRE_FLAIR=0` permits reduced coverage; it is not
 recommended for real sensitive data.
 
 If both `models status` and `models verify` succeed but startup still blocks,
-inspect the response's safe `failure_code`. `contextual_model_load_failed`
-means at least one enabled child model failed during the server's in-process
-startup. Securedact keeps all contextual processing blocked; it does not expose
-the model path or underlying exception and does not fall back to regex-only
-operation.
+run `securedact-mcp models diagnose`. It reports the managed configuration,
+active model IDs, verified states, runtime detector states, and final safe
+failure code without revealing model paths or exception bodies.
+
+`contextual_model_load_failed` means at least one enabled child model failed
+during the server's in-process startup. Securedact keeps all contextual
+processing blocked and does not fall back to regex-only operation. A valid
+managed configuration takes precedence over inherited legacy development model
+variables. A fresh MCP host process therefore uses the same managed store as
+the `models status` and `models verify` commands.
 
 ## A model download is declined or interrupted
 

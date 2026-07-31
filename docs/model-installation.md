@@ -118,6 +118,7 @@ language detection is uncertain.
 securedact-mcp models list
 securedact-mcp models status
 securedact-mcp models verify
+securedact-mcp models diagnose
 securedact-mcp models path
 securedact-mcp models update english
 securedact-mcp models update dutch

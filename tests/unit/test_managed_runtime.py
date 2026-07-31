@@ -69,9 +69,9 @@ def _prepare_runtime(
         )
     )
     monkeypatch.setattr(
-        server.ModelStoragePaths,
+        server.ModelStore,
         "resolve",
-        classmethod(lambda _cls: store.paths),
+        classmethod(lambda _cls: store),
     )
     monkeypatch.setenv("SECUREDACT_REQUIRE_FLAIR", "1")
     monkeypatch.delenv("SECUREDACT_MODEL_PATH", raising=False)
@@ -108,6 +108,26 @@ def test_managed_models_are_ready_after_startup_and_load_once(
 
     assert runtime.engine.contextual_ready()
     assert FakeFlairDetector.load_calls == expected
+
+
+@pytest.mark.parametrize(
+    "legacy_variable",
+    ["SECUREDACT_MODEL_PATH", "SECUREDACT_FLAIR_MODEL", "SECUREDACT_MODEL_ID"],
+)
+def test_active_managed_models_take_precedence_over_legacy_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_variable: str,
+) -> None:
+    _prepare_runtime(tmp_path, monkeypatch, ["en", "nl"])
+    monkeypatch.setenv(legacy_variable, "synthetic-stale-value")
+
+    runtime = server.build_runtime()
+    runtime.engine.startup()
+
+    assert runtime.contextual_failure_code is None
+    assert runtime.engine.contextual_ready()
+    assert FakeFlairDetector.constructed == ["english", "dutch"]
 
 
 def test_both_installed_models_route_english_dutch_and_uncertain_text(

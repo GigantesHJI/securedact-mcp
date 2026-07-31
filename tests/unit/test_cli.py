@@ -213,3 +213,4 @@ def test_cli_parser_exposes_required_command_structure() -> None:
     assert parser.parse_args(["models", "update", "english"]).model_command == "update"
     assert parser.parse_args(["models", "remove", "dutch"]).model_command == "remove"
     assert parser.parse_args(["models", "verify"]).model_command == "verify"
+    assert parser.parse_args(["models", "diagnose"]).model_command == "diagnose"

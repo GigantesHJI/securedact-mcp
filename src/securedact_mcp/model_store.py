@@ -187,6 +187,17 @@ class VerifiedModel:
     manifest: ModelInstallationManifest
 
 
+@dataclass(frozen=True, slots=True)
+class ManagedModelState:
+    """One integrity-checked view of the managed model configuration."""
+
+    config_found: bool
+    configuration: ModelConfiguration | None
+    active_models: dict[str, SupportedModel]
+    verified_models: dict[str, VerifiedModel]
+    failed_languages: tuple[str, ...]
+
+
 def _validate_model_root(path: Path, *, cwd: Path | None = None) -> None:
     if path == Path(path.anchor):
         raise ModelPathError("Models may not be installed at a filesystem root")
@@ -270,6 +281,12 @@ class ModelStore:
     def __init__(self, paths: ModelStoragePaths | None = None) -> None:
         self.paths = paths or ModelStoragePaths.resolve()
 
+    @classmethod
+    def resolve(cls) -> ModelStore:
+        """Resolve the single managed store used by setup, diagnostics, and runtime."""
+
+        return cls(ModelStoragePaths.resolve())
+
     def model_path(self, model: SupportedModel) -> Path:
         root = (self.paths.model_root / model.id).resolve()
         if root.parent != self.paths.model_root.resolve():
@@ -309,6 +326,37 @@ class ModelStore:
             )
             self.write_configuration(configuration)
             return configuration
+
+    def load_managed_state(self) -> ManagedModelState:
+        """Load active model IDs and verify their installed snapshots once."""
+
+        config_found = self.paths.config_path.is_file()
+        configuration = self.load_or_recover_configuration()
+        if configuration is None:
+            installed = self.installed_models()
+            if installed:
+                configuration = self.configure_languages(sorted(installed))
+                config_found = True
+
+        active_models: dict[str, SupportedModel] = {}
+        verified_models: dict[str, VerifiedModel] = {}
+        failed_languages: list[str] = []
+        if configuration is not None:
+            for language, model_id in configuration.active_models.items():
+                model = model_for_id(model_id)
+                active_models[language] = model
+                try:
+                    verified_models[language] = self.verify_model(model)
+                except ModelIntegrityError:
+                    failed_languages.append(language)
+
+        return ManagedModelState(
+            config_found=config_found,
+            configuration=configuration,
+            active_models=active_models,
+            verified_models=verified_models,
+            failed_languages=tuple(failed_languages),
+        )
 
     def write_configuration(self, configuration: ModelConfiguration) -> None:
         self.paths.ensure()

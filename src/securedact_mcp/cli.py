@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -22,7 +23,7 @@ from .model_registry import (
 from .model_store import (
     ModelConfigurationError,
     ModelIntegrityError,
-    ModelStoragePaths,
+    ModelPathError,
     ModelStore,
 )
 
@@ -57,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     model_commands.add_parser("list", help="list registry-supported models")
     model_commands.add_parser("status", help="show configured model states")
     model_commands.add_parser("verify", help="verify configured models and local hashes")
+    model_commands.add_parser("diagnose", help="report safe managed-runtime readiness details")
     model_commands.add_parser("path", help="print the managed model directory")
 
     update = model_commands.add_parser("update", help="install the pinned registry revision")
@@ -135,7 +137,7 @@ def run_guided_install(
     store: ModelStore | None = None,
     installer_factory: InstallerFactory = _default_installer_factory,
 ) -> int:
-    model_store = store or ModelStore(ModelStoragePaths.resolve())
+    model_store = store or ModelStore.resolve()
     interactive = language is None
     try:
         selection = _choose_language(input_fn, output) if interactive else language
@@ -202,45 +204,78 @@ def _models_list(output: TextIO) -> int:
 
 def _models_status(store: ModelStore, output: TextIO) -> int:
     try:
-        configuration = store.load_or_recover_configuration()
+        state = store.load_managed_state()
     except ModelConfigurationError as exc:
         print(f"configuration\tcorrupt\t{exc}", file=output)
         return 2
-    enabled = set(configuration.enabled_languages) if configuration else {"en"}
+    enabled = set(state.active_models) if state.configuration else {"en"}
     result = 0
     for model in SUPPORTED_MODELS:
-        try:
-            store.verify_model(model)
-            state = InstallerState.READY
-        except ModelIntegrityError:
-            state = InstallerState.NOT_INSTALLED
+        if model.language in state.active_models:
+            ready = model.language in state.verified_models
+        else:
+            try:
+                store.verify_model(model)
+                ready = True
+            except ModelIntegrityError:
+                ready = False
+        if ready:
+            model_state = InstallerState.READY
+        else:
+            model_state = InstallerState.NOT_INSTALLED
             if model.language in enabled:
                 result = 2
         marker = "enabled" if model.language in enabled else "disabled"
-        print(f"{model.language}\t{model.id}\t{state.value}\t{marker}", file=output)
+        print(f"{model.language}\t{model.id}\t{model_state.value}\t{marker}", file=output)
     return result
 
 
 def _models_verify(store: ModelStore, output: TextIO) -> int:
     try:
-        configuration = store.load_or_recover_configuration()
+        state = store.load_managed_state()
     except ModelConfigurationError as exc:
         print(f"Model verification failed: {exc}", file=output)
         return 2
+    configuration = state.configuration
     if configuration is not None and not configuration.enabled_languages:
         print("No contextual models are enabled; secure policies will fail closed.", file=output)
         return 0
-    languages = configuration.enabled_languages if configuration else ["en"]
+    languages = list(state.active_models) if configuration else ["en"]
     for language in languages:
         model = model_for_language(language)
         try:
-            verified = store.verify_model(model)
+            verified = state.verified_models.get(language)
+            if verified is None:
+                if configuration is not None:
+                    print(f"{model.id}: verification failed", file=output)
+                    return 2
+                verified = store.verify_model(model)
             offline_flair_load_test(verified.entrypoint)
         except (ModelDownloadError, ModelIntegrityError) as exc:
             print(f"{model.id}: verification failed: {exc}", file=output)
             return 2
         print(f"{model.id}: verified", file=output)
     return 0
+
+
+def _models_diagnose(store: ModelStore, output: TextIO) -> int:
+    from .server import runtime_diagnostics
+
+    try:
+        state = store.load_managed_state()
+        details = runtime_diagnostics(store=store, managed_state=state)
+    except ModelConfigurationError:
+        details = {
+            "config_found": store.paths.config_path.is_file(),
+            "enabled_languages": [],
+            "active_model_ids": {},
+            "verified_model_states": {},
+            "runtime_detector_states": [],
+            "contextual_ready": False,
+            "final_failure_code": "contextual_model_configuration_invalid",
+        }
+    print(json.dumps(details, indent=2, sort_keys=True), file=output)
+    return 0 if details["final_failure_code"] is None else 2
 
 
 def _models_update(
@@ -317,13 +352,37 @@ def main(
             output=output,
         )
 
-    store = ModelStore(ModelStoragePaths.resolve())
+    try:
+        store = ModelStore.resolve()
+    except ModelPathError:
+        if arguments.model_command == "diagnose":
+            print(
+                json.dumps(
+                    {
+                        "config_found": False,
+                        "enabled_languages": [],
+                        "active_model_ids": {},
+                        "verified_model_states": {},
+                        "runtime_detector_states": [],
+                        "contextual_ready": False,
+                        "final_failure_code": "contextual_model_storage_invalid",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                file=output,
+            )
+            return 2
+        print("The managed model storage location is not allowed.", file=output)
+        return 2
     if arguments.model_command == "list":
         return _models_list(output)
     if arguments.model_command == "status":
         return _models_status(store, output)
     if arguments.model_command == "verify":
         return _models_verify(store, output)
+    if arguments.model_command == "diagnose":
+        return _models_diagnose(store, output)
     if arguments.model_command == "path":
         print(store.paths.model_root, file=sys.stdout)
         return 0

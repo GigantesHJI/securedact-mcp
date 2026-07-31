@@ -23,10 +23,9 @@ from securedact_core.engine import ReviewRequiredError, SendingBlockedError
 
 from .model_registry import MODELS_BY_LANGUAGE
 from .model_store import (
+    ManagedModelState,
     ModelConfigurationError,
-    ModelIntegrityError,
     ModelPathError,
-    ModelStoragePaths,
     ModelStore,
 )
 
@@ -74,7 +73,11 @@ def _missing_model_message(languages: list[str]) -> str:
     )
 
 
-def build_runtime() -> RuntimeBundle:
+def build_runtime(
+    *,
+    store: ModelStore | None = None,
+    managed_state: ManagedModelState | None = None,
+) -> RuntimeBundle:
     """Build an offline runtime from verified managed models without downloading."""
     require_flair = os.getenv("SECUREDACT_REQUIRE_FLAIR", "1") != "0"
     if not require_flair:
@@ -85,36 +88,35 @@ def build_runtime() -> RuntimeBundle:
             )
         )
 
-    if (
-        os.getenv("SECUREDACT_MODEL_PATH")
-        or os.getenv("SECUREDACT_FLAIR_MODEL")
-        or os.getenv("SECUREDACT_MODEL_ID")
-    ):
-        return RuntimeBundle(_build_legacy_engine())
-
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     try:
-        store = ModelStore(ModelStoragePaths.resolve())
-        os.environ.setdefault("HF_HUB_CACHE", str(store.paths.model_root / ".runtime-cache"))
-        configuration = store.load_or_recover_configuration()
-        if configuration is None:
-            installed = store.installed_models()
-            if installed:
-                configuration = store.configure_languages(sorted(installed))
-            else:
-                missing = ["en"]
-                engine = PrivacyEngine(
-                    [RegexDetector(), ContextualPrivacyDetector()],
-                    require_contextual=True,
-                )
-                return RuntimeBundle(
-                    engine,
-                    _missing_model_message(missing),
-                    "contextual_model_not_installed",
-                )
-        if not configuration.enabled_languages:
+        model_store = store or ModelStore.resolve()
+        os.environ.setdefault("HF_HUB_CACHE", str(model_store.paths.model_root / ".runtime-cache"))
+        state = managed_state or model_store.load_managed_state()
+
+        # A valid managed configuration is authoritative. Legacy development
+        # variables may remain in a parent process, but they must not divert a
+        # fresh MCP server away from active managed models.
+        if not state.active_models and (
+            os.getenv("SECUREDACT_MODEL_PATH")
+            or os.getenv("SECUREDACT_FLAIR_MODEL")
+            or os.getenv("SECUREDACT_MODEL_ID")
+        ):
+            return RuntimeBundle(_build_legacy_engine())
+
+        if state.configuration is None:
+            engine = PrivacyEngine(
+                [RegexDetector(), ContextualPrivacyDetector()],
+                require_contextual=True,
+            )
+            return RuntimeBundle(
+                engine,
+                _missing_model_message(["en"]),
+                "contextual_model_not_installed",
+            )
+        if not state.active_models:
             engine = PrivacyEngine(
                 [RegexDetector(), ContextualPrivacyDetector()],
                 require_contextual=True,
@@ -126,27 +128,23 @@ def build_runtime() -> RuntimeBundle:
             )
 
         detectors: dict[str, FlairDetector] = {}
-        missing_languages: list[str] = []
-        for language in configuration.enabled_languages:
-            model = MODELS_BY_LANGUAGE[language]
-            try:
-                verified = store.verify_model(model)
-            except ModelIntegrityError:
-                missing_languages.append(language)
+        for language in state.active_models:
+            verified = state.verified_models.get(language)
+            if verified is None:
                 continue
             fingerprint = verified.manifest.files[verified.manifest.entrypoint].sha256
             detectors[language] = FlairDetector(
                 verified.entrypoint,
                 model_fingerprint=fingerprint,
             )
-        if missing_languages:
+        if state.failed_languages:
             engine = PrivacyEngine(
                 [RegexDetector(), ContextualPrivacyDetector()],
                 require_contextual=True,
             )
             return RuntimeBundle(
                 engine,
-                _missing_model_message(missing_languages),
+                _missing_model_message(list(state.failed_languages)),
                 "contextual_model_integrity_failed",
             )
         router = LanguageAwareFlairDetector(detectors)
@@ -263,11 +261,14 @@ def _valid_safe_copy_filename(filename: str) -> bool:
     return path.name == filename and path.suffix.lower() in SUPPORTED_SAFE_COPY_SUFFIXES
 
 
-def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
-    runtime = RuntimeBundle(engine) if engine is not None else build_runtime()
+def _start_runtime(
+    runtime: RuntimeBundle,
+    *,
+    load_legacy_model: bool,
+) -> tuple[str | None, str | None]:
     privacy_engine = runtime.engine
     privacy_engine.startup()
-    if engine is None and privacy_engine.model_manager is not None:
+    if load_legacy_model and privacy_engine.model_manager is not None:
         load_configured_model(privacy_engine, privacy_engine.model_manager)
     contextual_error = runtime.contextual_error
     contextual_failure_code = runtime.contextual_failure_code
@@ -281,6 +282,67 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             or privacy_engine.contextual_failure_code()
             or "contextual_model_not_ready"
         )
+    return contextual_error, contextual_failure_code
+
+
+def runtime_diagnostics(
+    *,
+    store: ModelStore | None = None,
+    managed_state: ManagedModelState | None = None,
+) -> dict[str, Any]:
+    """Return non-sensitive managed configuration and runtime readiness details."""
+
+    model_store = store or ModelStore.resolve()
+    state = managed_state or model_store.load_managed_state()
+    runtime = build_runtime(store=model_store, managed_state=state)
+    contextual_error, failure_code = _start_runtime(runtime, load_legacy_model=True)
+
+    detector_states: list[dict[str, Any]] = []
+    for detector in runtime.engine.detectors:
+        safe_state = getattr(detector, "safe_state", None)
+        detector_state = (
+            str(safe_state) if safe_state in {"discovered", "failed", "ready"} else "ready"
+        )
+        details: dict[str, Any] = {
+            "name": detector.name,
+            "contextual": detector.contextual,
+            "state": detector_state,
+        }
+        children = getattr(detector, "detectors", None)
+        if isinstance(children, dict):
+            details["children"] = {
+                language: (
+                    str(child_state)
+                    if (child_state := getattr(child, "safe_state", None))
+                    in {"discovered", "failed", "ready"}
+                    else ("ready" if getattr(child, "ready", False) else "failed")
+                )
+                for language, child in children.items()
+            }
+        detector_states.append(details)
+
+    configuration = state.configuration
+    return {
+        "config_found": state.config_found,
+        "enabled_languages": list(configuration.enabled_languages) if configuration else [],
+        "active_model_ids": dict(configuration.active_models) if configuration else {},
+        "verified_model_states": {
+            model.id: ("ready" if language in state.verified_models else "failed")
+            for language, model in state.active_models.items()
+        },
+        "runtime_detector_states": detector_states,
+        "contextual_ready": runtime.engine.contextual_ready(),
+        "final_failure_code": failure_code if contextual_error is not None else None,
+    }
+
+
+def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
+    runtime = RuntimeBundle(engine) if engine is not None else build_runtime()
+    privacy_engine = runtime.engine
+    contextual_error, contextual_failure_code = _start_runtime(
+        runtime,
+        load_legacy_model=engine is None,
+    )
     server = FastMCP("Securedact", json_response=True)
 
     @server.tool()

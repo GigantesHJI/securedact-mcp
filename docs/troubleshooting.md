@@ -35,6 +35,13 @@ The server never downloads during protocol startup. For synthetic development
 testing only, `SECUREDACT_REQUIRE_FLAIR=0` permits reduced coverage; it is not
 recommended for real sensitive data.
 
+If both `models status` and `models verify` succeed but startup still blocks,
+inspect the response's safe `failure_code`. `contextual_model_load_failed`
+means at least one enabled child model failed during the server's in-process
+startup. Securedact keeps all contextual processing blocked; it does not expose
+the model path or underlying exception and does not fall back to regex-only
+operation.
+
 ## A model download is declined or interrupted
 
 Confirmation defaults to No. A declined or interrupted transfer is marked

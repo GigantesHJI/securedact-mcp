@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Mapping
 
 from ..models import Detection
@@ -79,18 +80,58 @@ class LanguageAwareFlairDetector:
         if not set(detectors).issubset({"en", "nl"}):
             raise ValueError("Unsupported contextual model language")
         self.detectors = dict(detectors)
+        self._load_lock = threading.RLock()
+        self._load_attempted = False
+        self._load_succeeded = False
+        self._failure_code: str | None = None
 
     @property
     def ready(self) -> bool:
-        return all(bool(getattr(detector, "ready", False)) for detector in self.detectors.values())
+        with self._load_lock:
+            return self._load_succeeded and all(
+                bool(getattr(detector, "ready", False)) for detector in self.detectors.values()
+            )
+
+    @property
+    def failure_code(self) -> str | None:
+        with self._load_lock:
+            return self._failure_code
+
+    @property
+    def safe_state(self) -> str:
+        if self.ready:
+            return "ready"
+        return "failed" if self.failure_code else "discovered"
 
     def load(self) -> None:
-        for detector in self.detectors.values():
-            loader = getattr(detector, "load", None)
-            if loader is not None:
-                loader()
+        with self._load_lock:
+            if self._load_succeeded:
+                return
+            if self._load_attempted:
+                raise RuntimeError("One or more contextual models failed to load")
+            self._load_attempted = True
+
+            failed = False
+            for detector in self.detectors.values():
+                loader = getattr(detector, "load", None)
+                if loader is None:
+                    failed = True
+                    continue
+                try:
+                    loader()
+                except Exception:
+                    failed = True
+                    continue
+                if not bool(getattr(detector, "ready", False)):
+                    failed = True
+
+            if failed:
+                self._failure_code = "contextual_model_load_failed"
+                raise RuntimeError("One or more contextual models failed to load")
+            self._load_succeeded = True
 
     def detect(self, text: str) -> list[Detection]:
+        self.load()
         if len(self.detectors) == 1:
             selected = tuple(self.detectors.values())
         else:

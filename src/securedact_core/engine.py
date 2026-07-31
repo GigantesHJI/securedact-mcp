@@ -53,10 +53,12 @@ class PrivacyEngine:
         self.require_contextual = require_contextual
         self.model_manager = model_manager
         self._startup_warnings: list[str] = []
+        self._startup_failure_codes: dict[str, str] = {}
         self._detector_lock = threading.RLock()
 
     def startup(self) -> None:
         self._startup_warnings.clear()
+        self._startup_failure_codes.clear()
         for detector in list(self.detectors):
             loader = getattr(detector, "load", None)
             if loader is None:
@@ -65,6 +67,16 @@ class PrivacyEngine:
                 loader()
             except Exception:
                 self._startup_warnings.append(f"{detector.name} detector unavailable")
+                safe_code = getattr(detector, "failure_code", None)
+                self._startup_failure_codes[detector.name] = (
+                    str(safe_code)
+                    if safe_code
+                    else (
+                        "contextual_detector_startup_failed"
+                        if detector.contextual
+                        else "detector_startup_failed"
+                    )
+                )
 
     def analyze(
         self,
@@ -210,6 +222,21 @@ class PrivacyEngine:
         if not contextual:
             return False
         return all(bool(getattr(detector, "ready", True)) for detector in contextual)
+
+    def contextual_failure_code(self) -> str | None:
+        if not self.require_contextual or self.contextual_ready():
+            return None
+        contextual = [detector for detector in self.detectors if detector.contextual]
+        if not contextual:
+            return "contextual_model_not_configured"
+        for detector in contextual:
+            safe_code = getattr(detector, "failure_code", None)
+            if safe_code:
+                return str(safe_code)
+            startup_code = self._startup_failure_codes.get(detector.name)
+            if startup_code:
+                return startup_code
+        return "contextual_model_not_ready"
 
     def redact(
         self,

@@ -38,6 +38,7 @@ SUPPORTED_SAFE_COPY_SUFFIXES = {".md", ".txt"}
 class RuntimeBundle:
     engine: PrivacyEngine
     contextual_error: str | None = None
+    contextual_failure_code: str | None = None
 
 
 def _build_legacy_engine() -> PrivacyEngine:
@@ -108,7 +109,11 @@ def build_runtime() -> RuntimeBundle:
                     [RegexDetector(), ContextualPrivacyDetector()],
                     require_contextual=True,
                 )
-                return RuntimeBundle(engine, _missing_model_message(missing))
+                return RuntimeBundle(
+                    engine,
+                    _missing_model_message(missing),
+                    "contextual_model_not_installed",
+                )
         if not configuration.enabled_languages:
             engine = PrivacyEngine(
                 [RegexDetector(), ContextualPrivacyDetector()],
@@ -117,6 +122,7 @@ def build_runtime() -> RuntimeBundle:
             return RuntimeBundle(
                 engine,
                 "No contextual model is enabled.\n\nRun:\nsecuredact-mcp install",
+                "contextual_model_not_enabled",
             )
 
         detectors: dict[str, FlairDetector] = {}
@@ -138,7 +144,11 @@ def build_runtime() -> RuntimeBundle:
                 [RegexDetector(), ContextualPrivacyDetector()],
                 require_contextual=True,
             )
-            return RuntimeBundle(engine, _missing_model_message(missing_languages))
+            return RuntimeBundle(
+                engine,
+                _missing_model_message(missing_languages),
+                "contextual_model_integrity_failed",
+            )
         router = LanguageAwareFlairDetector(detectors)
         return RuntimeBundle(
             PrivacyEngine(
@@ -146,12 +156,28 @@ def build_runtime() -> RuntimeBundle:
                 require_contextual=True,
             )
         )
-    except (ModelConfigurationError, ModelPathError) as exc:
+    except ModelConfigurationError:
         engine = PrivacyEngine(
             [RegexDetector(), ContextualPrivacyDetector()],
             require_contextual=True,
         )
-        return RuntimeBundle(engine, str(exc))
+        return RuntimeBundle(
+            engine,
+            "The contextual model configuration could not be validated.\n\n"
+            "Run:\nsecuredact-mcp install",
+            "contextual_model_configuration_invalid",
+        )
+    except ModelPathError:
+        engine = PrivacyEngine(
+            [RegexDetector(), ContextualPrivacyDetector()],
+            require_contextual=True,
+        )
+        return RuntimeBundle(
+            engine,
+            "The contextual model storage location is not allowed.\n\n"
+            "Run:\nsecuredact-mcp models path",
+            "contextual_model_storage_invalid",
+        )
 
 
 def build_default_engine() -> PrivacyEngine:
@@ -220,6 +246,14 @@ def _validate_text(text: str) -> dict[str, str] | None:
     return None
 
 
+def _contextual_block(reason: str, failure_code: str) -> dict[str, str]:
+    return {
+        "status": "blocked",
+        "reason": reason,
+        "failure_code": failure_code,
+    }
+
+
 def _valid_safe_copy_filename(filename: str) -> bool:
     if not filename or filename in {".", ".."}:
         return False
@@ -236,10 +270,16 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
     if engine is None and privacy_engine.model_manager is not None:
         load_configured_model(privacy_engine, privacy_engine.model_manager)
     contextual_error = runtime.contextual_error
+    contextual_failure_code = runtime.contextual_failure_code
     if privacy_engine.require_contextual and not privacy_engine.contextual_ready():
         contextual_error = contextual_error or (
             "The required contextual model could not be loaded.\n\n"
             "Run:\nsecuredact-mcp models verify"
+        )
+        contextual_failure_code = (
+            contextual_failure_code
+            or privacy_engine.contextual_failure_code()
+            or "contextual_model_not_ready"
         )
     server = FastMCP("Securedact", json_response=True)
 
@@ -250,7 +290,10 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         if invalid is not None:
             return invalid
         if contextual_error is not None:
-            return {"status": "blocked", "reason": contextual_error}
+            return _contextual_block(
+                contextual_error,
+                contextual_failure_code or "contextual_model_not_ready",
+            )
         return privacy_engine.analyze(text, policy).model_dump(mode="json")
 
     @server.tool()
@@ -260,10 +303,16 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         if invalid is not None:
             return invalid
         if contextual_error is not None:
-            return {"status": "blocked", "reason": contextual_error}
+            return _contextual_block(
+                contextual_error,
+                contextual_failure_code or "contextual_model_not_ready",
+            )
         analysis = privacy_engine.analyze(text, policy)
         if not analysis.engine_ready:
-            return {"status": "blocked", "reason": "contextual detector unavailable"}
+            return _contextual_block(
+                "The required contextual model is unavailable.",
+                privacy_engine.contextual_failure_code() or "contextual_model_not_ready",
+            )
         try:
             result = privacy_engine.redact(text, policy, analysis=analysis)
         except ReviewRequiredError as exc:

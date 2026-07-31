@@ -37,3 +37,6 @@ No versioned server release has been published yet.
   excluded from version control and release artifacts.
 - Consent, allowlisted-source, immutable-revision, integrity, staging, rollback,
   fail-closed runtime, and no-model-artifact release gates.
+- Managed multilingual startup now loads each enabled Flair detector exactly
+  once, reports ready only when all children are ready, and returns a stable
+  non-sensitive failure code when any enabled model fails to load.

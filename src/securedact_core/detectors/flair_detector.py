@@ -62,6 +62,10 @@ class FlairDetector:
             return "ready"
         return "failed" if self._failed else "discovered"
 
+    @property
+    def failure_code(self) -> str | None:
+        return "contextual_model_load_failed" if self._failed else None
+
     def load(self) -> None:
         if self.loaded:
             return

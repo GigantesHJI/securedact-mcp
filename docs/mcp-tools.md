@@ -177,9 +177,14 @@ Required model unavailable:
 ```json
 {
   "status": "blocked",
-  "reason": "The required English contextual model is not installed.\n\nRun:\nsecuredact-mcp install --language english"
+  "reason": "The required English contextual model is not installed.\n\nRun:\nsecuredact-mcp install --language english",
+  "failure_code": "contextual_model_not_installed"
 }
 ```
+
+Contextual startup failures include a stable, non-sensitive `failure_code` such
+as `contextual_model_load_failed`. The response never includes model paths or
+underlying exception text.
 
 Residual validation failure:
 

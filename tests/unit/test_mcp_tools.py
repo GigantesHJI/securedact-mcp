@@ -173,6 +173,7 @@ async def test_missing_required_contextual_model_fails_closed(
     )
 
     assert result["status"] == "blocked"
+    assert result["failure_code"] == "contextual_model_not_installed"
     assert "required English contextual model is not installed" in result["reason"]
     assert "securedact-mcp install --language english" in result["reason"]
 

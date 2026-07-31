@@ -78,6 +78,7 @@ python -m pip install -e ".[ml]"
 python -m pip install "securedact-mcp[ml]"
 
 securedact-mcp install
+securedact-mcp install --language all --accept-upstream-terms
 securedact-mcp models verify
 securedact-mcp
 ```

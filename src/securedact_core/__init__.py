@@ -37,6 +37,7 @@ from .models import (
     TextSpan,
 )
 from .policies import Policy, PolicyRegistry
+from .production import PRODUCTION_DETERMINISTIC_DETECTORS, build_production_engine
 from .profile_storage import PrivacyConfiguration, PrivacyProfileStore
 from .taxonomy import (
     CATEGORY_DEFINITIONS,
@@ -50,6 +51,7 @@ from .taxonomy import (
 __all__ = [
     "CATEGORY_DEFINITIONS",
     "CRITICAL_TYPES",
+    "PRODUCTION_DETERMINISTIC_DETECTORS",
     "SPECIAL_CATEGORY_TYPES",
     "AnalysisResult",
     "CategoryGroup",
@@ -88,6 +90,7 @@ __all__ = [
     "SensitiveAssertion",
     "Severity",
     "TextSpan",
+    "build_production_engine",
     "category_metadata",
     "evaluate_corpus",
     "load_corpus",

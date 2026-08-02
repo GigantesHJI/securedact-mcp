@@ -57,6 +57,17 @@ If the selected contextual model is missing or corrupt, the tool result fails
 closed and provides the matching `securedact-mcp install --language ...`
 command. Do not add a reduced-coverage override merely to suppress that error.
 
+For an early standalone installation that already has valid English/Dutch
+checkpoints but lacks the managed transformer cache, run:
+
+```powershell
+securedact-mcp models repair all --accept-upstream-terms
+securedact-mcp models verify
+```
+
+Restart Codex afterward so its fresh stdio process uses the repaired managed
+state.
+
 ## Recommended secure workflow
 
 Add durable project guidance requiring the agent to:

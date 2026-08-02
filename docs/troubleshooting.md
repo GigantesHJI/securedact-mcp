@@ -35,8 +35,27 @@ The server never downloads during protocol startup. For synthetic development
 testing only, `SECUREDACT_REQUIRE_FLAIR=0` permits reduced coverage; it is not
 recommended for real sensitive data.
 
+## The server connects but reports `contextual_model_initializing`
+
+This is the expected fail-closed cold-start state. Securedact answers MCP
+initialize first, then validates and deserializes enabled models once after the
+standard initialized notification. Do not resend the same raw input
+automatically: wait until the models are ready and manually submit a new call.
+The blocked request is not queued or retained.
+
+Run the sanitized readiness command in a separate terminal:
+
+```powershell
+securedact-mcp diagnostics runtime
+```
+
+It reports protocol, deterministic-stack, per-language contextual, and full
+engine state without prompts, entity values, exception bodies, or complete
+model paths. Set `SECUREDACT_DEBUG_DIAGNOSTICS=1` only for additional sanitized
+stderr state; stdout remains MCP protocol-only.
+
 If both `models status` and `models verify` succeed but startup still blocks,
-run `securedact-mcp models diagnose`. It reports the managed configuration,
+run `securedact-mcp diagnostics runtime`. It reports the managed configuration,
 active model IDs, verified states, runtime detector states, and final safe
 failure code without revealing model paths or exception bodies.
 
@@ -46,6 +65,20 @@ processing blocked and does not fall back to regex-only operation. A valid
 managed configuration takes precedence over inherited legacy development model
 variables. A fresh MCP host process therefore uses the same managed store as
 the `models status` and `models verify` commands.
+
+If an early standalone installation contains `pytorch_model.bin` but no managed
+`.runtime-cache`, the checkpoint is not self-contained. Do not point Securedact
+at a global Hugging Face cache. Repair only the missing pinned runtime assets:
+
+```powershell
+securedact-mcp models repair all --accept-upstream-terms
+securedact-mcp models verify
+```
+
+Repair first checks each existing checkpoint against its pinned size and SHA-256.
+It then downloads only the shared tokenizer/configuration component, writes a
+component-level manifest, and runs Flair in a fresh offline process. A failed
+repair preserves the checkpoint, prior cache, manifest, and active configuration.
 
 ## A model download is declined or interrupted
 
@@ -63,6 +96,7 @@ Do not bypass verification or point runtime at the checkpoint directly. Run:
 ```powershell
 securedact-mcp models status
 securedact-mcp models verify
+securedact-mcp models repair english --accept-upstream-terms
 securedact-mcp models update english
 ```
 
@@ -84,7 +118,7 @@ securedact-mcp models path
 
 ## Offline use
 
-Internet access is needed only during an approved install or update. Once
+Internet access is needed only during an approved install, repair, or update. Once
 `securedact-mcp models verify` succeeds, runtime loads the managed checkpoint
 locally with offline mode enabled. If an offline machine needs a manual transfer,
 read [Model installation](model-installation.md); manually named folders are not

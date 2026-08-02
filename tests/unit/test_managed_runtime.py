@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 from pathlib import Path
 from typing import ClassVar
 
@@ -8,6 +10,7 @@ import pytest
 
 from securedact_mcp import server
 from securedact_mcp.model_store import ModelConfiguration
+from securedact_mcp.runtime_lifecycle import RuntimeState, lifecycle_from_server
 from tests.unit.model_install_helpers import (
     patch_registered_model,
     store_at,
@@ -85,6 +88,14 @@ def _prepare_runtime(
     return store, english, dutch
 
 
+def _start_runtime(runtime: server.RuntimeBundle):
+    lifecycle = server._runtime_lifecycle(runtime)
+    lifecycle.mark_protocol_ready()
+    lifecycle.start_background()
+    assert lifecycle.wait_until_terminal(2.0)
+    return lifecycle
+
+
 @pytest.mark.parametrize(
     ("languages", "expected"),
     [
@@ -103,11 +114,12 @@ def test_managed_models_are_ready_after_startup_and_load_once(
     runtime = server.build_runtime()
 
     assert not runtime.engine.contextual_ready()
-    runtime.engine.startup()
-    runtime.engine.startup()
+    lifecycle = _start_runtime(runtime)
+    lifecycle.start_background()
 
     assert runtime.engine.contextual_ready()
     assert FakeFlairDetector.load_calls == expected
+    assert lifecycle.snapshot().load_operations == 1
 
 
 @pytest.mark.parametrize(
@@ -123,7 +135,7 @@ def test_active_managed_models_take_precedence_over_legacy_environment(
     monkeypatch.setenv(legacy_variable, "synthetic-stale-value")
 
     runtime = server.build_runtime()
-    runtime.engine.startup()
+    _start_runtime(runtime)
 
     assert runtime.contextual_failure_code is None
     assert runtime.engine.contextual_ready()
@@ -135,7 +147,7 @@ def test_both_installed_models_route_english_dutch_and_uncertain_text(
 ) -> None:
     _prepare_runtime(tmp_path, monkeypatch, ["en", "nl"])
     runtime = server.build_runtime()
-    runtime.engine.startup()
+    _start_runtime(runtime)
 
     assert runtime.engine.contextual_ready()
 
@@ -160,6 +172,9 @@ async def test_verified_managed_models_create_server_without_false_load_block(
     assert "SECUREDACT_MODEL_PATH" not in os.environ
 
     mcp_server = server.create_server()
+    lifecycle = lifecycle_from_server(mcp_server)
+    lifecycle.start_background()
+    assert lifecycle.wait_until_terminal(2.0)
     result = await mcp_server._tool_manager._tools["analyze_text"].run(
         {"text": "Contact alex.example@example.test", "policy": "default"}
     )
@@ -178,6 +193,9 @@ async def test_one_enabled_child_failure_blocks_with_safe_failure_code(
     FakeFlairDetector.fail_languages = {"dutch"}
 
     mcp_server = server.create_server()
+    lifecycle = lifecycle_from_server(mcp_server)
+    lifecycle.start_background()
+    assert lifecycle.wait_until_terminal(2.0)
     result = await mcp_server._tool_manager._tools["analyze_text"].run(
         {"text": "Contact alex.example@example.test", "policy": "default"}
     )
@@ -195,7 +213,7 @@ def test_single_model_is_used_conservatively_for_other_language(
 ) -> None:
     _prepare_runtime(tmp_path, monkeypatch, ["en"])
     runtime = server.build_runtime()
-    runtime.engine.startup()
+    _start_runtime(runtime)
 
     runtime.engine.analyze("Stuur het rapport naar Jan")
 
@@ -209,10 +227,11 @@ def test_corrupt_model_is_never_constructed_or_loaded(
     (store.model_path(english) / "pytorch_model.bin").write_bytes(b"tampered")
 
     runtime = server.build_runtime()
+    lifecycle = _start_runtime(runtime)
 
     assert FakeFlairDetector.constructed == []
-    assert runtime.contextual_error is not None
-    assert "required English contextual model is not installed" in runtime.contextual_error
+    assert lifecycle.snapshot().contextual_state == RuntimeState.FAILED
+    assert lifecycle.snapshot().failure_code == "contextual_model_integrity_failed"
 
 
 @pytest.mark.asyncio
@@ -229,3 +248,52 @@ async def test_minimal_configuration_remains_fail_closed(
 
     assert result["status"] == "blocked"
     assert "No contextual model is enabled" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_tool_call_while_managed_models_are_loading_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_runtime(tmp_path, monkeypatch, ["en", "nl"])
+    release = threading.Event()
+    original_load = FakeFlairDetector.load
+
+    def slow_load(self: FakeFlairDetector) -> None:
+        release.wait(2.0)
+        original_load(self)
+
+    monkeypatch.setattr(FakeFlairDetector, "load", slow_load)
+    mcp_server = server.create_server()
+    lifecycle = lifecycle_from_server(mcp_server)
+
+    calls = await asyncio.gather(
+        *(
+            mcp_server._tool_manager._tools["analyze_text"].run(
+                {"text": f"synthetic request {index}", "policy": "default"}
+            )
+            for index in range(8)
+        )
+    )
+    first = calls[0]
+
+    assert first == {
+        "status": "blocked",
+        "failure_code": "contextual_model_initializing",
+        "reason": (
+            "The required contextual model is still loading. "
+            "Retry the request manually when the model is ready."
+        ),
+    }
+    assert all(item == first for item in calls)
+    assert lifecycle.snapshot().contextual_state == RuntimeState.LOADING
+    assert FakeFlairDetector.calls == []
+
+    release.set()
+    assert lifecycle.wait_until_terminal(2.0)
+    second = await mcp_server._tool_manager._tools["analyze_text"].run(
+        {"text": "Mijn e-mailadres is second@example.com.", "policy": "default"}
+    )
+
+    assert second["engine_ready"] is True
+    assert lifecycle.snapshot().load_operations == 1

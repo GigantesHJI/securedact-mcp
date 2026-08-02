@@ -31,14 +31,17 @@ The repository contains synthetic tests for:
 - deterministic and contextual detection;
 - checksums, spans, merging, policies, replacement, and restoration;
 - all nine GDPR special-category groups in the curated corpus;
-- immutable model registry metadata and repository allowlisting;
+- immutable checkpoint and transformer-dependency registry metadata and
+  repository allowlisting;
 - interactive/non-interactive consent, all four language selections, licensing
   warnings, citation display, and safe reinstall behavior;
 - mocked `snapshot_download` parameters, retries, cancellation, staging cleanup,
-  disk limits, unexpected files, local hashes, offline load tests, activation,
-  and rollback;
+  disk limits, unexpected files, local hashes, isolated offline load tests,
+  dependency repair without checkpoint redownload, activation, and rollback;
 - multilingual runtime routing, corrupt-model rejection, offline behavior, and
   fail-closed readiness;
+- fresh-process proof that an empty cache fails and the same tiny mocked model
+  succeeds only when its managed dependency assets are present;
 - tool startup, registration, malformed requests, and stdout integrity;
 - `analyze_text`, `redact_text`, `restore_text`, and `create_safe_copy`;
 - path traversal, extensions, root confinement, sanitized writes, and
@@ -64,6 +67,30 @@ securedact-mcp models verify
 npx @modelcontextprotocol/inspector .\.venv\Scripts\securedact-mcp.exe
 ```
 
+Command-line regression for the production Dutch person/email case:
+
+```powershell
+npx @modelcontextprotocol/inspector --cli `
+  ".\.venv\Scripts\securedact-mcp.exe" `
+  --method tools/call `
+  --tool-name analyze_text `
+  --tool-arg "text=Mijn naam is Emma de Vries en mijn e-mailadres is emma@example.com." `
+  --connect-timeout 180000 `
+  --format json
+```
+
+The subprocess release test uses the installed console entry point and a slow,
+tiny mock loader. It requires initialize and `tools/list` to complete within two
+seconds before the loader is released, checks the initializing block does not
+invoke inference, then verifies a newly submitted call succeeds and the model
+loaded exactly once. This is host-neutral and does not alter the MCP protocol.
+
+Inspector `--cli` starts a one-shot child process. Its first cold call may
+correctly return `contextual_model_initializing` and then close that process; it
+cannot perform the manual resubmission against the now-closed runtime. Use the
+Web Inspector or another persistent MCP session for the after-readiness person
+and email assertions.
+
 For explicitly reduced synthetic development testing, set
 `SECUREDACT_REQUIRE_FLAIR=0`. In Inspector:
 
@@ -86,6 +113,10 @@ sensitive assertions, overlap, repetition, encoding, adversarial cases, and
 negative controls.
 
 Metrics are measurements on this corpus, not universal guarantees.
+The report records critical deterministic exact-span recall, complete
+replacement rate, residual leakage count, and production-factory parity using
+fixture IDs rather than raw fixture text. Stdio deadline compliance is measured
+by the separate real-process test because it cannot be inferred in-process.
 
 ## Release gate
 

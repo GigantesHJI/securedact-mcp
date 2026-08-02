@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 
 from .detectors import ContextualPrivacyDetector, RegexDetector
 from .engine import PrivacyEngine
-from .models import Detection, EntityType
+from .models import Detection, EntityType, Severity
+from .production import build_production_engine
+from .taxonomy import CATEGORY_DEFINITIONS
 
 
 class ExpectedEntity(BaseModel):
@@ -63,6 +65,11 @@ class EvaluationReport(BaseModel):
     stage_metrics: dict[str, dict[str, CategoryMetric]]
     assertion_metrics: AssertionMetrics
     classification_confusion_matrix: dict[str, dict[str, int]]
+    critical_deterministic_span_recall: float = 1.0
+    full_span_replacement_rate: float = 1.0
+    residual_leakage_count: int = 0
+    production_runtime_parity: bool = True
+    stdio_startup_deadline_compliance: bool | None = None
     failed_fixture_ids: list[str] = Field(default_factory=list)
 
 
@@ -119,7 +126,7 @@ def evaluate_corpus(
     engine: PrivacyEngine | None = None,
 ) -> EvaluationReport:
     fixtures = load_corpus(root)
-    engine = engine or PrivacyEngine([RegexDetector(), ContextualPrivacyDetector()])
+    engine = engine or build_production_engine(require_contextual=False)
     regex = RegexDetector()
     contextual = ContextualPrivacyDetector()
     expected_all: Counter[tuple[str, EntityType]] = Counter()
@@ -144,6 +151,11 @@ def evaluate_corpus(
     negative_assertion_false_positives = 0
     language_counts: Counter[str] = Counter()
     category_counts: Counter[str] = Counter()
+    deterministic_expected: Counter[tuple[str, EntityType]] = Counter()
+    deterministic_actual: Counter[tuple[str, EntityType]] = Counter()
+    replacement_total = 0
+    replacement_complete = 0
+    residual_leakage_count = 0
 
     for fixture in fixtures:
         language_counts[fixture.language] += 1
@@ -151,6 +163,14 @@ def evaluate_corpus(
         expected_all.update(expected)
         category_counts.update(item.type.value for item in fixture.expected_entities)
         regex_findings = regex.detect(fixture.input)
+        deterministic_expected.update(
+            (item.text, item.type)
+            for item in fixture.expected_entities
+            if CATEGORY_DEFINITIONS[item.type].deterministic_detection
+            and CATEGORY_DEFINITIONS[item.type].severity == Severity.CRITICAL
+            and not CATEGORY_DEFINITIONS[item.type].contextual_detection
+        )
+        deterministic_actual.update(_counter(regex_findings))
         contextual_findings = contextual.detect(fixture.input)
         merged_analysis = engine.analyze(fixture.input, "gdpr_strict")
         merged_findings = merged_analysis.entities
@@ -222,11 +242,17 @@ def evaluate_corpus(
         if audit.residual_scan.safe_to_send != fixture.expected_residual_safe:
             failed_ids.add(fixture.id)
         for forbidden in fixture.sanitized_must_not_contain:
+            replacement_total += 1
             if forbidden in audit.sanitized_text:
+                residual_leakage_count += 1
                 failed_ids.add(fixture.id)
                 for expected_item in fixture.expected_entities:
                     if expected_item.text == forbidden:
                         partial_failures["merged"][expected_item.type] += 1
+            else:
+                replacement_complete += 1
+        if not audit.residual_scan.safe_to_send:
+            residual_leakage_count += max(1, audit.residual_scan.critical_residual_count)
 
     assertion_tp = sum((expected_assertions & actual_assertions).values())
     assertion_fp = sum((actual_assertions - expected_assertions).values())
@@ -246,6 +272,8 @@ def evaluate_corpus(
         )
         for stage, actual in stage_actual.items()
     }
+    deterministic_tp = sum((deterministic_expected & deterministic_actual).values())
+    deterministic_total = sum(deterministic_expected.values())
     return EvaluationReport(
         corpus_version=1,
         fixture_count=len(fixtures),
@@ -267,5 +295,13 @@ def evaluate_corpus(
         classification_confusion_matrix={
             expected: dict(values) for expected, values in confusion.items()
         },
+        critical_deterministic_span_recall=(
+            deterministic_tp / deterministic_total if deterministic_total else 1.0
+        ),
+        full_span_replacement_rate=(
+            replacement_complete / replacement_total if replacement_total else 1.0
+        ),
+        residual_leakage_count=residual_leakage_count,
+        production_runtime_parity=engine.deterministic_detectors_ready(),
         failed_fixture_ids=sorted(failed_ids),
     )

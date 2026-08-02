@@ -52,6 +52,8 @@ jobs:
           tests/unit/test_cli.py
           tests/unit/test_managed_runtime.py
           tests/integration/test_model_setup.py
+          tests/integration/test_offline_model_verifier.py
+          tests/integration/test_managed_stdio_subprocess.py
 
       - name: Parse Windows bootstrap installer
         if: runner.os == 'Windows'

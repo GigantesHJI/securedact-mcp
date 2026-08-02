@@ -82,9 +82,14 @@ def inspect_wheel(path: Path) -> list[str]:
         "securedact_mcp/model_installer.py",
         "securedact_mcp/model_registry.py",
         "securedact_mcp/model_store.py",
+        "securedact_mcp/model_verifier.py",
+        "securedact_mcp/model_verifier_client.py",
+        "securedact_mcp/runtime_environment.py",
+        "securedact_mcp/runtime_lifecycle.py",
         "securedact_mcp/server.py",
         "securedact_mcp/__main__.py",
         "securedact_core/engine.py",
+        "securedact_core/production.py",
         "securedact_core/detectors/lexicons/special_categories.v1.json",
     }
     for required in required_suffixes:

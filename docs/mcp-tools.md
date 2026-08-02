@@ -186,6 +186,21 @@ Contextual startup failures include a stable, non-sensitive `failure_code` such
 as `contextual_model_load_failed`. The response never includes model paths or
 underlying exception text.
 
+Required models still loading:
+
+```json
+{
+  "status": "blocked",
+  "failure_code": "contextual_model_initializing",
+  "reason": "The required contextual model is still loading. Retry the request manually when the model is ready."
+}
+```
+
+This response is final for that call. Securedact does not queue, persist, defer,
+or automatically retry its input. Submit a new call only after the runtime is
+ready. Protocol readiness, deterministic-detector readiness, contextual loading,
+and full-engine readiness are separate states.
+
 Residual validation failure:
 
 ```json
@@ -206,6 +221,24 @@ Residual validation failure:
 - unavailable required contextual model.
 
 Only `status: "ok"` includes approved `sanitized_text`.
+
+## Deterministic email scope
+
+Email detection is local and independent of Flair. The practical ASCII mailbox
+subset supports alphanumeric local parts, dots between non-empty segments,
+underscores, hyphens, plus tags, percent signs and apostrophes; domains support
+valid hyphenated labels, subdomains, mixed case, and alphabetic TLDs of 2-63
+characters. Surrounding quotes, brackets, parentheses, commas, periods, and
+semicolons are excluded from the span. Consecutive dots, incomplete domains,
+URL paths/query fragments, doubled `@`, and invalid domain labels are rejected
+without returning a partial suffix.
+
+Merge precedence is explicit: policy-selected full assertions first, then
+label-aware deterministic findings, validated regex findings, deterministic
+contextual rules, and finally Flair. Higher-priority overlapping spans win;
+non-overlapping spans always survive. Exact duplicates yield one entity and one
+stable placeholder. A URL with user information is classified as the complete
+sensitive URL rather than split into an email.
 
 ### Privacy behavior
 

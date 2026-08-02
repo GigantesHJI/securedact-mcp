@@ -53,10 +53,11 @@ Implemented properties:
 - caller-supplied mappings with no server-side persistence;
 - no telemetry;
 - no shell execution or unrestricted filesystem access.
-- consent-based model setup restricted to two official Hugging Face repository
-  IDs and immutable registry revisions;
-- exact model size/hash validation, local manifests, offline load testing,
-  staging, atomic activation, and failure cleanup.
+- consent-based model setup restricted to three official Hugging Face repository
+  IDs (two checkpoints and one shared transformer dependency) and immutable
+  registry revisions;
+- exact per-component size/hash validation, local manifests, isolated offline
+  load testing, staging, atomic activation, and failure cleanup.
 
 Implemented properties are covered by the synthetic test suite. They remain
 subject to the limitations in this policy and do not constitute a universal
@@ -82,6 +83,14 @@ For local `stdio`:
 - no prompts, detected PII, placeholder mappings, API keys, safe-copy content,
   or AI responses may be logged;
 - errors must use stable codes and sanitized descriptions.
+
+Protocol initialization is not a privacy-ready signal. The server completes the
+standard handshake before checkpoint deserialization, then starts one
+synchronized background load after `notifications/initialized`. While any
+required language is validating or loading, privacy-dependent calls return the
+stable `contextual_model_initializing` block. The input is not queued, persisted,
+or replayed. A load, manifest, dependency, integrity, or storage failure retains
+its specific safe failure code and never enables regex-only fallback.
 
 CI and release tests must include sensitive canaries and stdout-capture checks.
 
@@ -122,6 +131,12 @@ If a policy requires a local statistical model and that model is absent,
 incompatible, or fails integrity validation, approval must fail closed. A weaker
 fallback must never be selected silently.
 
+Full readiness also requires the production deterministic detector invariant:
+the validated regex detector and contextual rule detector must both be present.
+An incomplete stack returns `privacy_detector_stack_incomplete`, even if Flair
+loaded successfully. This prevents a runtime-construction regression from
+silently dropping canonical email and identifier coverage.
+
 The MCP server does not download during startup. The separate human-facing setup
 command downloads only after consent. With both English and Dutch installed,
 language selection is local and uncertain input is handled conservatively rather
@@ -141,6 +156,9 @@ than skipping contextual analysis.
   checkpoint is benign.
 - Keep Hugging Face credentials out of setup output. Public supported models are
   fetched without requesting or passing an authentication token.
+- Do not accept successful loading through an ambient Hugging Face cache as
+  installation proof. The verifier starts a clean child process, disables user
+  site imports, and points all cache variables at Securedact-managed storage.
 - Pin GitHub Actions to reviewed revisions for production release.
 - Scan commits and release artifacts for secrets and unexpected files.
 - Do not commit or publish model checkpoints, logs, mappings, databases, safe
@@ -163,6 +181,13 @@ removed and prior active configuration remains unchanged.
 
 If the active configuration is corrupt, Securedact reconstructs it only from
 verified installed models. Otherwise it fails closed and gives repair guidance.
+
+Both supported checkpoints require the pinned tokenizer/configuration files from
+`FacebookAI/xlm-roberta-large`. These files live in a shared managed cache and
+are recorded individually in each dependent model manifest. Repair validates an
+existing checkpoint before downloading only missing dependencies. Component and
+manifest activation is rollback-safe; one language cannot remove a shared
+component still required by the other.
 
 ## Denial of service
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -77,13 +79,17 @@ class FlairDetector:
             if self._on_loading:
                 self._on_loading()
             try:
-                from flair.data import Sentence  # type: ignore[import-not-found]
-                from flair.models.sequence_tagger_model import (  # type: ignore[import-not-found]
-                    SequenceTagger,
-                )
+                # Flair/Transformers can emit banners while importing/loading.
+                # MCP reserves stdout exclusively for protocol frames, and raw
+                # dependency exceptions must not reach stderr diagnostics.
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    from flair.data import Sentence
+                    from flair.models.sequence_tagger_model import (
+                        SequenceTagger,
+                    )
 
-                self._tagger = SequenceTagger.load(self.model_path)
-                self._sentence_type = Sentence
+                    self._tagger = SequenceTagger.load(self.model_path)
+                    self._sentence_type = Sentence
             except Exception as exc:
                 self._failed = True
                 if self._on_failure:

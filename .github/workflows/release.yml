@@ -38,7 +38,7 @@ jobs:
         run: |
           python -m pytest
           python scripts/run_privacy_tests.py
-          python -m pytest tests/unit/test_model_registry.py tests/unit/test_model_installer.py tests/unit/test_model_store.py tests/unit/test_cli.py tests/unit/test_managed_runtime.py tests/integration/test_model_setup.py
+          python -m pytest tests/unit/test_model_registry.py tests/unit/test_model_installer.py tests/unit/test_model_store.py tests/unit/test_cli.py tests/unit/test_managed_runtime.py tests/integration/test_model_setup.py tests/integration/test_offline_model_verifier.py tests/integration/test_managed_stdio_subprocess.py
 
       - name: Build and verify distributions
         run: |

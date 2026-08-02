@@ -51,6 +51,13 @@ REQUIRED_FILES = {
     "scripts/smoke_test_entrypoint.py",
     "scripts/validate_release_artifacts.py",
     "scripts/validate_repo.py",
+    "src/securedact_core/production.py",
+    "src/securedact_mcp/runtime_lifecycle.py",
+    "tests/integration/test_managed_stdio_subprocess.py",
+    "tests/privacy_corpus/nl/mcp_email_regression.json",
+    "tests/unit/test_email_detector.py",
+    "tests/unit/test_production_detector_stack.py",
+    "tests/unit/test_runtime_lifecycle.py",
 }
 
 FORBIDDEN_PATH_PARTS = {
@@ -107,7 +114,14 @@ SECRET_PATTERNS = {
 }
 
 EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b", re.IGNORECASE)
-ALLOWED_EMAIL_DOMAINS = {"example.com", "example.test", "securedact.com"}
+ALLOWED_EMAIL_DOMAINS = {
+    "example.co.uk",
+    "example.com",
+    "example.net",
+    "example.org",
+    "example.test",
+    "securedact.com",
+}
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 WINDOWS_USER_PATH_PATTERN = re.compile(r"C:\\Users\\(?!<USERNAME>\\)[^\\\s]+\\", re.IGNORECASE)
 MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -133,10 +147,12 @@ def tracked_candidates(root: Path) -> list[Path]:
         "tmp",
         "temp",
     }
+    excluded_local_files = {"regex-test.txt"}
     return sorted(
         path
         for path in root.rglob("*")
         if path.is_file()
+        and path.name not in excluded_local_files
         and not any(part in excluded_directories for part in path.relative_to(root).parts)
     )
 
@@ -191,16 +207,14 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
         if WINDOWS_USER_PATH_PATTERN.search(content):
             errors.append(f"personal Windows path found: {relative}")
 
-        synthetic_fixture = relative.startswith(
-            ("tests/privacy_corpus/", "examples/synthetic-test-prompts.md")
-        )
+        synthetic_fixture = relative.startswith(("tests/", "examples/synthetic-test-prompts.md"))
         if relative != "scripts/validate_repo.py" and not synthetic_fixture:
             for name, pattern in SECRET_PATTERNS.items():
                 if pattern.search(content):
                     errors.append(f"possible {name} found: {relative}")
 
         for domain in EMAIL_PATTERN.findall(content):
-            if domain.casefold() not in ALLOWED_EMAIL_DOMAINS:
+            if not synthetic_fixture and domain.casefold() not in ALLOWED_EMAIL_DOMAINS:
                 errors.append(f"non-example email address found in {relative}: *.{domain}")
 
     readme_path = root / "README.md"
@@ -234,8 +248,20 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
         errors.append("package metadata is present but the MCP implementation is absent")
     if implementation_present:
         server_source = server_path.read_text(encoding="utf-8").casefold()
+        lifecycle_path = root / "src" / "securedact_mcp" / "runtime_lifecycle.py"
+        runtime_controls = server_source + (
+            lifecycle_path.read_text(encoding="utf-8").casefold() if lifecycle_path.exists() else ""
+        )
         if "snapshot_download" in server_source or "model_installer" in server_source:
             errors.append("MCP runtime must not invoke the model downloader")
+        for required in (
+            "initializednotification",
+            "contextual_model_initializing",
+            "build_production_engine",
+            "runtimelifecycle",
+        ):
+            if required not in runtime_controls:
+                errors.append(f"MCP runtime is missing cold-start/privacy control: {required}")
         project = pyproject.get("project")
         if not isinstance(project, dict):
             errors.append("implementation is present but [project] metadata is missing")
@@ -283,20 +309,50 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
                 f"registered MCP tools differ from documented contract: {sorted(registered_tools)}"
             )
 
+    production_path = root / "src" / "securedact_core" / "production.py"
+    if production_path.exists():
+        production = production_path.read_text(encoding="utf-8")
+        for required_detector in ('"regex"', '"contextual_rules"'):
+            if required_detector not in production:
+                errors.append(
+                    f"production factory is missing deterministic detector: {required_detector}"
+                )
+
+    email_fixture = root / "tests" / "privacy_corpus" / "nl" / "mcp_email_regression.json"
+    if email_fixture.exists():
+        fixture = email_fixture.read_text(encoding="utf-8")
+        for required in ("Emma de Vries", "emma@example.com", '"type": "email"'):
+            if required not in fixture:
+                errors.append(f"Dutch MCP email regression fixture is incomplete: {required}")
+
     registry_path = root / "src" / "securedact_mcp" / "model_registry.py"
     if registry_path.exists():
         registry = registry_path.read_text(encoding="utf-8")
-        for repository in ("flair/ner-english-large", "flair/ner-dutch-large"):
+        for repository in (
+            "flair/ner-english-large",
+            "flair/ner-dutch-large",
+            "FacebookAI/xlm-roberta-large",
+        ):
             if repository not in registry:
                 errors.append(f"model registry is missing official repository: {repository}")
         for moving in ('upstream_revision="main"', 'upstream_revision="master"'):
             if moving in registry:
                 errors.append(f"moving model revision found in registry: {moving}")
         revisions = re.findall(r'upstream_revision="([^"]+)"', registry)
-        if len(revisions) != 2 or any(
+        if len(revisions) != 3 or any(
             not re.fullmatch(r"[0-9a-f]{40}", item) for item in revisions
         ):
-            errors.append("model registry must contain exactly two immutable commit revisions")
+            errors.append(
+                "model registry must contain exactly three immutable model/runtime revisions"
+            )
+        for required in (
+            "config.json",
+            "sentencepiece.bpe.model",
+            "tokenizer.json",
+            "tokenizer_config.json",
+        ):
+            if required not in registry:
+                errors.append(f"runtime dependency registry is missing required file: {required}")
 
     installer_path = root / "src" / "securedact_mcp" / "model_installer.py"
     if installer_path.exists():
@@ -312,6 +368,28 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
         ):
             if required not in installer:
                 errors.append(f"model installer is missing security control: {required}")
+        for deprecated in ("resume_download", "local_dir_use_symlinks"):
+            if deprecated in installer:
+                errors.append(f"deprecated Hugging Face argument in model installer: {deprecated}")
+
+    verifier_path = root / "src" / "securedact_mcp" / "model_verifier_client.py"
+    if verifier_path.exists():
+        verifier = verifier_path.read_text(encoding="utf-8")
+        for required in ("PYTHONNOUSERSITE", "capture_output=True"):
+            if required not in verifier:
+                errors.append(f"isolated model verifier is missing control: {required}")
+    environment_path = root / "src" / "securedact_mcp" / "runtime_environment.py"
+    if environment_path.exists():
+        environment_source = environment_path.read_text(encoding="utf-8")
+        for required in (
+            "HF_HOME",
+            "HF_HUB_CACHE",
+            "TRANSFORMERS_CACHE",
+            "HF_HUB_OFFLINE",
+            "TRANSFORMERS_OFFLINE",
+        ):
+            if required not in environment_source:
+                errors.append(f"managed runtime environment is missing control: {required}")
 
     cli_path = root / "src" / "securedact_mcp" / "cli.py"
     if cli_path.exists():

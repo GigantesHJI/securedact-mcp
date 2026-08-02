@@ -19,6 +19,7 @@ from .model_registry import (
     SupportedModel,
     model_for_language,
     models_for_selection,
+    runtime_components_for_model,
 )
 from .model_store import (
     ModelConfigurationError,
@@ -65,9 +66,22 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("language", choices=("english", "dutch"))
     update.add_argument("--accept-upstream-terms", action="store_true")
 
+    repair = model_commands.add_parser(
+        "repair",
+        help="repair pinned runtime dependencies without redownloading valid checkpoints",
+    )
+    repair.add_argument("language", choices=("english", "dutch", "all"))
+    repair.add_argument("--accept-upstream-terms", action="store_true")
+
     remove = model_commands.add_parser("remove", help="remove one managed model")
     remove.add_argument("language", choices=("english", "dutch"))
     remove.add_argument("--yes", action="store_true", help="confirm removal non-interactively")
+
+    diagnostics = commands.add_parser(
+        "diagnostics", help="report sanitized production-runtime readiness"
+    )
+    diagnostic_commands = diagnostics.add_subparsers(dest="diagnostic_command", required=True)
+    diagnostic_commands.add_parser("runtime", help="inspect the production detector lifecycle")
     return parser
 
 
@@ -93,6 +107,21 @@ def _show_model_terms(model: SupportedModel, target: Path, output: TextIO) -> No
     print(file=output)
     print("Citation:", file=output)
     print(model.citation or "No citation supplied by the upstream model card.", file=output)
+    for component in runtime_components_for_model(model):
+        print(file=output)
+        print(f"Required runtime component: {component.display_name}", file=output)
+        print(f"Official source: {component.official_url}", file=output)
+        print(f"Revision: {component.upstream_revision}", file=output)
+        print(
+            f"Approximate component download: {_format_bytes(component.approximate_size_bytes)}",
+            file=output,
+        )
+        print(
+            f"License: {component.license_identifier or 'not clearly specified'}",
+            file=output,
+        )
+        if component.license_note:
+            print(component.license_note, file=output)
 
 
 def _choose_language(input_fn: InputFunction, output: TextIO) -> str:
@@ -212,12 +241,21 @@ def _models_status(store: ModelStore, output: TextIO) -> int:
     result = 0
     for model in SUPPORTED_MODELS:
         if model.language in state.active_models:
-            ready = model.language in state.verified_models
+            verified = state.verified_models.get(model.language)
         else:
             try:
-                store.verify_model(model)
-                ready = True
+                verified = store.verify_model(model)
             except ModelIntegrityError:
+                verified = None
+        ready = False
+        if verified is not None:
+            try:
+                offline_flair_load_test(
+                    verified.entrypoint,
+                    store.paths.runtime_cache_root,
+                )
+                ready = True
+            except ModelDownloadError:
                 ready = False
         if ready:
             model_state = InstallerState.READY
@@ -250,7 +288,7 @@ def _models_verify(store: ModelStore, output: TextIO) -> int:
                     print(f"{model.id}: verification failed", file=output)
                     return 2
                 verified = store.verify_model(model)
-            offline_flair_load_test(verified.entrypoint)
+            offline_flair_load_test(verified.entrypoint, store.paths.runtime_cache_root)
         except (ModelDownloadError, ModelIntegrityError) as exc:
             print(f"{model.id}: verification failed: {exc}", file=output)
             return 2
@@ -271,8 +309,16 @@ def _models_diagnose(store: ModelStore, output: TextIO) -> int:
             "active_model_ids": {},
             "verified_model_states": {},
             "runtime_detector_states": [],
+            "protocol_ready": False,
+            "deterministic_detectors_ready": False,
+            "regex_detector": "unknown",
+            "email_rule": "unknown",
+            "contextual_state": "failed",
+            "language_states": {},
             "contextual_ready": False,
-            "final_failure_code": "contextual_model_configuration_invalid",
+            "full_engine_ready": False,
+            "final_failure_code": "contextual_model_manifest_invalid",
+            "runtime_failure_code": "contextual_model_manifest_invalid",
         }
     print(json.dumps(details, indent=2, sort_keys=True), file=output)
     return 0 if details["final_failure_code"] is None else 2
@@ -306,6 +352,41 @@ def _models_update(
         store.configure_languages(sorted(enabled))
     except (ModelDownloadError, ModelIntegrityError, ModelConfigurationError) as exc:
         print(f"Model update failed safely: {exc}", file=output)
+        return 2
+    return 0
+
+
+def _models_repair(
+    language: str,
+    *,
+    accepted: bool,
+    input_fn: InputFunction,
+    output: TextIO,
+    store: ModelStore,
+    installer_factory: InstallerFactory,
+) -> int:
+    selected = models_for_selection(language)
+    if not accepted:
+        for model in selected:
+            _show_model_terms(model, store.model_path(model), output)
+        print(
+            f"[{InstallerState.AWAITING_CONSENT.value}] runtime dependencies: "
+            "awaiting explicit download consent",
+            file=output,
+        )
+        if not _confirm("Download and repair pinned runtime dependencies now? [y/N] ", input_fn):
+            print("Model repair cancelled; existing checkpoints were not changed.", file=output)
+            return 2
+    installer = installer_factory(store, _progress_printer(output))
+    try:
+        for model in selected:
+            installer.repair(model)
+        configuration = store.read_configuration()
+        enabled = set(configuration.enabled_languages if configuration else [])
+        enabled.update(model.language for model in selected)
+        store.configure_languages(sorted(enabled))
+    except (ModelDownloadError, ModelIntegrityError, ModelConfigurationError) as exc:
+        print(f"Model repair failed safely: {exc}", file=output)
         return 2
     return 0
 
@@ -352,10 +433,12 @@ def main(
             output=output,
         )
 
+    diagnose_runtime = arguments.command == "diagnostics"
+
     try:
         store = ModelStore.resolve()
     except ModelPathError:
-        if arguments.model_command == "diagnose":
+        if diagnose_runtime or getattr(arguments, "model_command", None) == "diagnose":
             print(
                 json.dumps(
                     {
@@ -364,8 +447,16 @@ def main(
                         "active_model_ids": {},
                         "verified_model_states": {},
                         "runtime_detector_states": [],
+                        "protocol_ready": False,
+                        "deterministic_detectors_ready": False,
+                        "regex_detector": "unknown",
+                        "email_rule": "unknown",
+                        "contextual_state": "failed",
+                        "language_states": {},
                         "contextual_ready": False,
+                        "full_engine_ready": False,
                         "final_failure_code": "contextual_model_storage_invalid",
+                        "runtime_failure_code": "contextual_model_storage_invalid",
                     },
                     indent=2,
                     sort_keys=True,
@@ -375,6 +466,8 @@ def main(
             return 2
         print("The managed model storage location is not allowed.", file=output)
         return 2
+    if diagnose_runtime:
+        return _models_diagnose(store, output)
     if arguments.model_command == "list":
         return _models_list(output)
     if arguments.model_command == "status":
@@ -388,6 +481,15 @@ def main(
         return 0
     if arguments.model_command == "update":
         return _models_update(
+            arguments.language,
+            accepted=arguments.accept_upstream_terms,
+            input_fn=input_fn,
+            output=output,
+            store=store,
+            installer_factory=_default_installer_factory,
+        )
+    if arguments.model_command == "repair":
+        return _models_repair(
             arguments.language,
             accepted=arguments.accept_upstream_terms,
             input_fn=input_fn,

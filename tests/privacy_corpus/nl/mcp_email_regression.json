@@ -1,0 +1,19 @@
+{
+  "corpus_version": 1,
+  "fixtures": [
+    {
+      "id": "nl-mcp-person-email-regression",
+      "language": "nl",
+      "input": "Mijn naam is Emma de Vries en mijn e-mailadres is emma@example.com.",
+      "expected_entities": [
+        {"text": "Emma de Vries", "type": "person"},
+        {"text": "emma@example.com", "type": "email"}
+      ],
+      "expected_assertions": [],
+      "expected_policy_actions": {"person": "redact", "email": "redact"},
+      "sanitized_must_not_contain": ["Emma de Vries", "emma@example.com"],
+      "expected_residual_safe": true,
+      "provider_dispatch": "review"
+    }
+  ]
+}

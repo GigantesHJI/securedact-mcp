@@ -63,6 +63,7 @@ def _install_fake_flair_modules(
 
 def test_flair_detector_load_is_idempotent_and_ready_after_success(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     class FakeSequenceTagger:
         calls = 0
@@ -70,6 +71,8 @@ def test_flair_detector_load_is_idempotent_and_ready_after_success(
         @classmethod
         def load(cls, _path: str) -> FakeTagger:
             cls.calls += 1
+            print("third-party model banner")
+            print("third-party model diagnostic", file=sys.stderr)
             return FakeTagger()
 
     _install_fake_flair_modules(monkeypatch, FakeSequenceTagger)
@@ -81,6 +84,9 @@ def test_flair_detector_load_is_idempotent_and_ready_after_success(
     assert detector.ready
     assert detector.failure_code is None
     assert FakeSequenceTagger.calls == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_flair_detector_load_failure_exposes_only_safe_state(

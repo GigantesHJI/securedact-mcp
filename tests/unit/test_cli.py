@@ -214,3 +214,8 @@ def test_cli_parser_exposes_required_command_structure() -> None:
     assert parser.parse_args(["models", "remove", "dutch"]).model_command == "remove"
     assert parser.parse_args(["models", "verify"]).model_command == "verify"
     assert parser.parse_args(["models", "diagnose"]).model_command == "diagnose"
+    assert parser.parse_args(["diagnostics", "runtime"]).diagnostic_command == "runtime"
+    repair = parser.parse_args(["models", "repair", "all", "--accept-upstream-terms"])
+    assert repair.model_command == "repair"
+    assert repair.language == "all"
+    assert repair.accept_upstream_terms is True

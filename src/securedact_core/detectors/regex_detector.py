@@ -184,6 +184,37 @@ def _card_expiry(value: str) -> bool:
     return match is not None
 
 
+# Practical ASCII mailbox subset used for privacy detection. It deliberately
+# covers common dots, underscores, hyphens, plus tags and percent/apostrophe
+# forms while excluding assignment/query delimiters that commonly surround a
+# labelled field or URL.
+EMAIL_ATOM = r"[A-Z0-9_%+'-]"
+EMAIL_LOCAL = rf"{EMAIL_ATOM}+(?:\.{EMAIL_ATOM}+)*"
+EMAIL_DOMAIN_LABEL = r"[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?"
+EMAIL_VALUE = rf"{EMAIL_LOCAL}@(?:{EMAIL_DOMAIN_LABEL}\.)+[A-Z]{{2,63}}"
+EMAIL_PATTERN = re.compile(
+    rf"(?<![\w.%+'@-])"
+    rf"(?=[^@\s]{{1,64}}@){EMAIL_VALUE}"
+    rf"(?![\w-]|[/\\?&#=:]|\.(?:[\w-]|\.))",
+    re.IGNORECASE,
+)
+
+
+def _email(value: str) -> bool:
+    if len(value) > 254 or value.count("@") != 1:
+        return False
+    local, domain = value.rsplit("@", 1)
+    if not 1 <= len(local) <= 64 or local.startswith(".") or local.endswith("."):
+        return False
+    if ".." in local or ".." in domain or len(domain) > 253:
+        return False
+    labels = domain.split(".")
+    return all(
+        label and len(label) <= 63 and not label.startswith("-") and not label.endswith("-")
+        for label in labels
+    )
+
+
 def _nonempty_identifier(value: str) -> bool:
     return (
         3 <= len(value) <= 128
@@ -216,7 +247,13 @@ LABEL_RULES = (
         EntityType.ADDRESS,
         r"[^\r\n;|]{5,180}",
     ),
-    LabelRule("email_label", ("email", "e-mail"), EntityType.EMAIL, r"[^\s;|,]+@[^\s;|,]+"),
+    LabelRule(
+        "email_label",
+        ("email", "e-mail", "e-mailadres"),
+        EntityType.EMAIL,
+        EMAIL_VALUE,
+        _email,
+    ),
     LabelRule(
         "phone_label",
         ("telephone", "phone", "telefoon", "mobiel"),
@@ -523,10 +560,8 @@ RULES = (
     RegexRule(
         "email",
         EntityType.EMAIL,
-        re.compile(
-            r"(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}(?![\w.-])",
-            re.IGNORECASE,
-        ),
+        EMAIL_PATTERN,
+        _email,
         precedence=80,
     ),
     RegexRule(

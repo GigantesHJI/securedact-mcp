@@ -14,7 +14,10 @@ from typing import Any, Protocol
 from .model_registry import (
     MODELS_BY_ID,
     OFFICIAL_HF_ENDPOINT,
+    RUNTIME_COMPONENTS_BY_ID,
     SupportedModel,
+    SupportedRuntimeComponent,
+    runtime_components_for_model,
 )
 from .model_store import (
     FORBIDDEN_EXECUTABLE_SUFFIXES,
@@ -24,6 +27,7 @@ from .model_store import (
     VerifiedModel,
     is_unsafe_link,
 )
+from .model_verifier_client import OfflineModelLoadError, isolated_offline_flair_load_test
 
 MAX_MODEL_FILES = 16
 MAX_MODEL_BYTES = 3 * 1024 * 1024 * 1024
@@ -70,7 +74,7 @@ class SnapshotDownload(Protocol):
 
 ProgressCallback = Callable[[InstallationProgress], None]
 CancelCheck = Callable[[], bool]
-SmokeTest = Callable[[Path], None]
+SmokeTest = Callable[[Path, Path], None]
 
 
 def _default_snapshot_download(**kwargs: Any) -> str:
@@ -83,7 +87,7 @@ def _default_snapshot_download(**kwargs: Any) -> str:
     os.environ.update(download_variables)
     try:
         try:
-            from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
+            from huggingface_hub import snapshot_download
         except ImportError as exc:
             raise ModelDownloadError(
                 'Model installation requires `python -m pip install "securedact-mcp[ml]"`.'
@@ -97,37 +101,13 @@ def _default_snapshot_download(**kwargs: Any) -> str:
                 os.environ[name] = previous
 
 
-def offline_flair_load_test(entrypoint: Path) -> None:
-    offline_variables = {
-        "HF_HUB_OFFLINE": "1",
-        "TRANSFORMERS_OFFLINE": "1",
-        "HF_HUB_DISABLE_TELEMETRY": "1",
-    }
-    previous_values = {name: os.environ.get(name) for name in offline_variables}
-    os.environ.update(offline_variables)
+def offline_flair_load_test(entrypoint: Path, cache_root: Path) -> None:
     try:
-        try:
-            from flair.models.sequence_tagger_model import (  # type: ignore[import-not-found]
-                SequenceTagger,
-            )
-        except ImportError as exc:
-            raise ModelDownloadError(
-                'Model validation requires `python -m pip install "securedact-mcp[ml]"`.'
-            ) from exc
-        try:
-            SequenceTagger.load(entrypoint)
-        except Exception as exc:
-            raise ModelDownloadError(
-                "The downloaded Flair model failed its local load test"
-            ) from exc
-    finally:
-        # A multi-model installation still needs network access for the next
-        # approved snapshot. Runtime loading independently enforces offline mode.
-        for name, previous in previous_values.items():
-            if previous is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = previous
+        isolated_offline_flair_load_test(entrypoint, cache_root)
+    except OfflineModelLoadError as exc:
+        raise ModelDownloadError(
+            "The downloaded Flair model failed its isolated offline load test"
+        ) from exc
 
 
 def _hash_file(path: Path) -> str:
@@ -169,9 +149,17 @@ class ModelInstaller:
     def _validate_registry_entry(self, model: SupportedModel) -> None:
         if MODELS_BY_ID.get(model.id) != model:
             raise ModelDownloadError("The requested model is not in the Securedact allowlist")
-        if len(model.required_files) > MAX_MODEL_FILES:
+        components = runtime_components_for_model(model)
+        if any(RUNTIME_COMPONENTS_BY_ID.get(item.id) != item for item in components):
+            raise ModelDownloadError("A required runtime component is not in the allowlist")
+        if (
+            len(model.required_files) + sum(len(item.required_files) for item in components)
+            > MAX_MODEL_FILES
+        ):
             raise ModelDownloadError("The model exceeds the supported file-count limit")
-        total_size = sum(model.expected_sizes.values())
+        total_size = sum(model.expected_sizes.values()) + sum(
+            sum(item.expected_sizes.values()) for item in components
+        )
         if total_size <= 0 or total_size > MAX_MODEL_BYTES:
             raise ModelDownloadError("The model exceeds the supported download-size limit")
 
@@ -182,22 +170,37 @@ class ModelInstaller:
         if free < required_bytes + reserve:
             raise ModelDownloadError("Insufficient free disk space for safe model installation")
 
-    def _download(self, model: SupportedModel, destination: Path) -> Path:
+    def _download(
+        self,
+        model: SupportedModel,
+        *,
+        repo_id: str,
+        revision: str,
+        required_files: tuple[str, ...],
+        destination: Path,
+    ) -> Path:
+        allowed_sources = {
+            (model.upstream_repo, model.upstream_revision),
+            *(
+                (component.upstream_repo, component.upstream_revision)
+                for component in runtime_components_for_model(model)
+            ),
+        }
+        if (repo_id, revision) not in allowed_sources:
+            raise ModelDownloadError("The requested Hugging Face source is not allowlisted")
         last_error: Exception | None = None
         for attempt in range(1, self.attempts + 1):
             self._check_cancelled(model)
             try:
                 result = self.snapshot_download(
-                    repo_id=model.upstream_repo,
-                    revision=model.upstream_revision,
-                    allow_patterns=list(model.required_files),
+                    repo_id=repo_id,
+                    revision=revision,
+                    allow_patterns=list(required_files),
                     local_dir=str(destination),
                     endpoint=OFFICIAL_HF_ENDPOINT,
                     token=False,
                     local_files_only=False,
                     force_download=False,
-                    resume_download=True,
-                    local_dir_use_symlinks=False,
                     etag_timeout=15,
                     max_workers=4,
                     library_name="securedact-mcp",
@@ -264,13 +267,119 @@ class ModelInstaller:
             records[relative] = InstalledFile(size=size, sha256=digest)
         return records
 
-    def _activate(self, model: SupportedModel, payload: Path) -> VerifiedModel:
+    def _materialize_runtime_component(
+        self,
+        component: SupportedRuntimeComponent,
+        snapshot_root: Path,
+        cache_root: Path,
+    ) -> dict[str, InstalledFile]:
+        allowed = set(component.required_files)
+        discovered_files = 0
+        discovered_bytes = 0
+        for discovered in snapshot_root.rglob("*"):
+            relative = discovered.relative_to(snapshot_root).as_posix()
+            if is_unsafe_link(discovered):
+                raise ModelIntegrityError("The runtime snapshot contains a linked path")
+            if discovered.is_dir():
+                continue
+            discovered_files += 1
+            discovered_bytes += discovered.stat().st_size
+            if discovered_files > MAX_MODEL_FILES:
+                raise ModelIntegrityError("The runtime snapshot exceeds the file-count limit")
+            if discovered_bytes > MAX_DOWNLOAD_METADATA_BYTES * 2:
+                raise ModelIntegrityError("The runtime snapshot exceeds the size limit")
+            if discovered.suffix.casefold() in FORBIDDEN_EXECUTABLE_SUFFIXES:
+                raise ModelIntegrityError("The runtime snapshot contains an executable file")
+            if relative not in allowed and not relative.startswith(".cache/huggingface/"):
+                raise ModelIntegrityError("The runtime snapshot contains an unexpected file")
+
+        repository_root = cache_root / "hub" / component.cache_repository_name
+        snapshot_target = repository_root / "snapshots" / component.upstream_revision
+        refs_target = repository_root / "refs"
+        snapshot_target.mkdir(parents=True, exist_ok=False)
+        refs_target.mkdir(parents=True, exist_ok=False)
+        for relative in component.required_files:
+            candidate = snapshot_root / relative
+            if is_unsafe_link(candidate):
+                raise ModelIntegrityError("The runtime snapshot contains an unsafe file")
+            source = candidate.resolve(strict=True)
+            source.relative_to(snapshot_root.resolve())
+            target = snapshot_target / relative
+            os.replace(source, target)
+            size = target.stat().st_size
+            digest = _hash_file(target)
+            if size != component.expected_sizes[relative]:
+                raise ModelIntegrityError("A runtime component size differs from pinned metadata")
+            if digest != component.expected_hashes[relative]:
+                raise ModelIntegrityError("A runtime component hash differs from pinned metadata")
+        (refs_target / "main").write_text(
+            component.upstream_revision,
+            encoding="ascii",
+            newline="",
+        )
+        return self.store.runtime_component_records(component, cache_root=cache_root)
+
+    def _prepare_runtime_components(
+        self,
+        model: SupportedModel,
+        staging: Path,
+    ) -> tuple[dict[str, InstalledFile], list[tuple[SupportedRuntimeComponent, Path]], Path]:
+        records: dict[str, InstalledFile] = {}
+        staged: list[tuple[SupportedRuntimeComponent, Path]] = []
+        staged_cache = staging / "runtime-cache"
+        smoke_cache = self.store.paths.runtime_cache_root
+        for component in runtime_components_for_model(model):
+            try:
+                component_records = self.store.runtime_component_records(component)
+            except ModelIntegrityError:
+                download_root = staging / f"download-{component.id}"
+                snapshot = self._download(
+                    model,
+                    repo_id=component.upstream_repo,
+                    revision=component.upstream_revision,
+                    required_files=component.required_files,
+                    destination=download_root,
+                )
+                component_records = self._materialize_runtime_component(
+                    component,
+                    snapshot,
+                    staged_cache,
+                )
+                shutil.rmtree(download_root, ignore_errors=True)
+                staged.append(
+                    (
+                        component,
+                        staged_cache / "hub" / component.cache_repository_name,
+                    )
+                )
+                smoke_cache = staged_cache
+            records.update(component_records)
+        return records, staged, smoke_cache
+
+    def _activate(
+        self,
+        model: SupportedModel,
+        payload: Path,
+        staged_components: list[tuple[SupportedRuntimeComponent, Path]],
+    ) -> VerifiedModel:
         final = self.store.model_path(model)
         backup: Path | None = None
+        component_backups: list[tuple[Path, Path | None]] = []
         if final.exists():
             backup = self.store.paths.rollback_root / f"{model.id}-{secrets.token_hex(8)}"
             os.replace(final, backup)
         try:
+            for component, staged_root in staged_components:
+                component_final = self.store.runtime_component_root(component)
+                component_final.parent.mkdir(parents=True, exist_ok=True)
+                component_backup: Path | None = None
+                if component_final.exists():
+                    component_backup = (
+                        self.store.paths.rollback_root / f"{component.id}-{secrets.token_hex(8)}"
+                    )
+                    os.replace(component_final, component_backup)
+                component_backups.append((component_final, component_backup))
+                os.replace(staged_root, component_final)
             os.replace(payload, final)
             verified = self.store.verify_model(model)
         except Exception:
@@ -278,10 +387,139 @@ class ModelInstaller:
                 shutil.rmtree(final, ignore_errors=True)
             if backup is not None and backup.exists():
                 os.replace(backup, final)
+            for component_final, component_backup in reversed(component_backups):
+                if component_final.exists():
+                    shutil.rmtree(component_final, ignore_errors=True)
+                if component_backup is not None and component_backup.exists():
+                    os.replace(component_backup, component_final)
             raise
         if backup is not None:
             shutil.rmtree(backup, ignore_errors=True)
+        for _component_final, component_backup in component_backups:
+            if component_backup is not None:
+                shutil.rmtree(component_backup, ignore_errors=True)
         return verified
+
+    def _activate_repair(
+        self,
+        model: SupportedModel,
+        manifest_records: dict[str, InstalledFile],
+        runtime_records: dict[str, InstalledFile],
+        staged_components: list[tuple[SupportedRuntimeComponent, Path]],
+    ) -> VerifiedModel:
+        root = self.store.model_path(model)
+        manifest_path = root / "manifest.json"
+        original_manifest = manifest_path.read_bytes() if manifest_path.is_file() else None
+        component_backups: list[tuple[Path, Path | None]] = []
+        try:
+            for component, staged_root in staged_components:
+                final = self.store.runtime_component_root(component)
+                final.parent.mkdir(parents=True, exist_ok=True)
+                backup: Path | None = None
+                if final.exists():
+                    backup = (
+                        self.store.paths.rollback_root / f"{component.id}-{secrets.token_hex(8)}"
+                    )
+                    os.replace(final, backup)
+                component_backups.append((final, backup))
+                os.replace(staged_root, final)
+            manifest = self.store.manifest_for_files(
+                model,
+                manifest_records,
+                runtime_records,
+            )
+            self.store.write_manifest(root, manifest)
+            verified = self.store.verify_model(model)
+        except Exception:
+            if original_manifest is None:
+                manifest_path.unlink(missing_ok=True)
+            else:
+                restore = root / ".manifest.restore.tmp"
+                restore.write_bytes(original_manifest)
+                os.replace(restore, manifest_path)
+            for final, backup in reversed(component_backups):
+                if final.exists():
+                    shutil.rmtree(final, ignore_errors=True)
+                if backup is not None and backup.exists():
+                    os.replace(backup, final)
+            raise
+        for _final, backup in component_backups:
+            if backup is not None:
+                shutil.rmtree(backup, ignore_errors=True)
+        return verified
+
+    def repair(self, model: SupportedModel) -> ModelInstallationResult:
+        """Add missing pinned runtime assets without redownloading a valid checkpoint."""
+
+        self._validate_registry_entry(model)
+        try:
+            installed = self.store.verify_model(model)
+        except ModelIntegrityError:
+            installed = None
+        if installed is not None:
+            self._emit(InstallerState.TESTING, model, "Testing existing model compatibility")
+            self.smoke_test(installed.entrypoint, self.store.paths.runtime_cache_root)
+            self._emit(InstallerState.READY, model, "Existing verified model is ready")
+            return ModelInstallationResult(
+                state=InstallerState.READY,
+                model=installed,
+                already_installed=True,
+            )
+
+        primary_records = self.store.primary_checkpoint_records(model)
+        runtime_bytes = sum(
+            sum(component.expected_sizes.values())
+            for component in runtime_components_for_model(model)
+        )
+        self._ensure_disk_space(runtime_bytes)
+        staging = self.store.paths.staging_root / f"repair-{secrets.token_hex(16)}"
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            self._emit(
+                InstallerState.DOWNLOADING,
+                model,
+                "Downloading missing pinned runtime dependencies from official Hugging Face",
+            )
+            runtime_records, staged_components, smoke_cache = self._prepare_runtime_components(
+                model, staging
+            )
+            self._emit(
+                InstallerState.VALIDATING,
+                model,
+                "Validating checkpoint and runtime dependency hashes",
+            )
+            self._emit(
+                InstallerState.TESTING,
+                model,
+                "Running isolated offline Flair model-load test",
+            )
+            self.smoke_test(
+                self.store.model_path(model) / model.required_files[0],
+                smoke_cache,
+            )
+            verified = self._activate_repair(
+                model,
+                primary_records,
+                runtime_records,
+                staged_components,
+            )
+            self._emit(InstallerState.READY, model, "Model dependencies repaired and verified")
+            return ModelInstallationResult(state=InstallerState.READY, model=verified)
+        except KeyboardInterrupt as exc:
+            self._emit(InstallerState.CANCELLED, model, "Model repair was cancelled safely")
+            raise ModelDownloadError("Model repair was cancelled safely") from exc
+        except ModelIntegrityError:
+            self._emit(
+                InstallerState.CORRUPT,
+                model,
+                "Existing or downloaded model components failed integrity validation",
+            )
+            raise
+        except Exception:
+            self._emit(InstallerState.FAILED, model, "Model dependency repair failed safely")
+            raise
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def install(self, model: SupportedModel) -> ModelInstallationResult:
         self._validate_registry_entry(model)
@@ -292,7 +530,7 @@ class ModelInstaller:
         if installed is not None:
             self._emit(InstallerState.TESTING, model, "Testing existing model compatibility")
             try:
-                self.smoke_test(installed.entrypoint)
+                self.smoke_test(installed.entrypoint, self.store.paths.runtime_cache_root)
             except ModelDownloadError:
                 self._emit(
                     InstallerState.INCOMPATIBLE,
@@ -307,7 +545,17 @@ class ModelInstaller:
                 already_installed=True,
             )
 
-        required_bytes = sum(model.expected_sizes.values())
+        try:
+            self.store.primary_checkpoint_records(model)
+        except ModelIntegrityError:
+            pass
+        else:
+            return self.repair(model)
+
+        required_bytes = sum(model.expected_sizes.values()) + sum(
+            sum(component.expected_sizes.values())
+            for component in runtime_components_for_model(model)
+        )
         self._ensure_disk_space(required_bytes)
         staging = self.store.paths.staging_root / f"install-{secrets.token_hex(16)}"
         download_root = staging / "download"
@@ -316,17 +564,26 @@ class ModelInstaller:
         try:
             self._check_cancelled(model)
             self._emit(InstallerState.DOWNLOADING, model, "Downloading from official Hugging Face")
-            snapshot_root = self._download(model, download_root)
+            snapshot_root = self._download(
+                model,
+                repo_id=model.upstream_repo,
+                revision=model.upstream_revision,
+                required_files=model.required_files,
+                destination=download_root,
+            )
             self._check_cancelled(model)
             self._emit(InstallerState.VALIDATING, model, "Validating pinned files and hashes")
             records = self._materialize(model, snapshot_root, payload)
             shutil.rmtree(download_root, ignore_errors=True)
-            manifest = self.store.manifest_for_files(model, records)
+            runtime_records, staged_components, smoke_cache = self._prepare_runtime_components(
+                model, staging
+            )
+            manifest = self.store.manifest_for_files(model, records, runtime_records)
             self.store.write_manifest(payload, manifest)
             self._check_cancelled(model)
             self._emit(InstallerState.TESTING, model, "Running offline Flair model-load test")
-            self.smoke_test(payload / manifest.entrypoint)
-            verified = self._activate(model, payload)
+            self.smoke_test(payload / manifest.entrypoint, smoke_cache)
+            verified = self._activate(model, payload, staged_components)
             self._emit(InstallerState.READY, model, "Model installed and verified")
             return ModelInstallationResult(state=InstallerState.READY, model=verified)
         except KeyboardInterrupt as exc:

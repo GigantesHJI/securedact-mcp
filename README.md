@@ -74,19 +74,18 @@ Python 3.12 is required.
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[ml]"
 python -m pip install "securedact-mcp[ml]"
 
 securedact-mcp install
-securedact-mcp install --language all --accept-upstream-terms
 securedact-mcp models verify
 securedact-mcp
 ```
 
 `securedact-mcp install` offers English, Dutch, both, or no contextual model and
 downloads an approved selection directly from the official Hugging Face
-repository. Every large third-party download requires explicit consent and is
-verified before atomic activation.
+repository. It also fetches the pinned XLM-RoBERTa tokenizer/configuration files
+that the Flair checkpoints require. Every third-party download requires explicit
+consent and is verified before atomic activation.
 
 The final command starts a `stdio` server. It may appear idle while waiting for
 Codex or another MCP host; it is not a chat UI and never downloads at startup.
@@ -100,13 +99,16 @@ setup as one guided local flow.
 - Python `>=3.12,<3.13`
 - Runtime: MCP Python SDK, Pydantic v2, and Cryptography
 - Production model setup: Flair, PyTorch, and `huggingface_hub` via `ml`
-- Approximately 2.4 GiB free per selected model, plus staging reserve
+- Approximately 2.4 GiB free per selected model, plus staging reserve; English
+  and Dutch share a 13.51 MiB transformer runtime component
 - A local, integrity-validated Flair model for secure contextual operation
 
 No model checkpoint is included in this repository or any Python distribution.
 Securedact does not redistribute these model weights. During installation, the
 selected model is downloaded directly from its official Hugging Face repository
-to the user's local Securedact data directory.
+to the user's local Securedact data directory. Required tokenizer and
+configuration files are likewise downloaded from the pinned official
+`FacebookAI/xlm-roberta-large` repository; none of these artifacts are packaged.
 
 ## Installation
 
@@ -144,13 +146,24 @@ securedact-mcp models list
 securedact-mcp models status
 securedact-mcp models verify
 securedact-mcp models diagnose
+securedact-mcp diagnostics runtime
 securedact-mcp models path
 securedact-mcp models update english|dutch
+securedact-mcp models repair english|dutch|all --accept-upstream-terms
 securedact-mcp models remove english|dutch
 ```
 
 Updates install only the immutable revision in the Securedact registry; they do
 not follow an upstream `main` branch or arbitrary latest version.
+
+Installations made by early `0.1.0` development builds may contain a valid Flair
+checkpoint but omit its transformer runtime files. Repair those installations
+without redownloading the checkpoint:
+
+```powershell
+securedact-mcp models repair all --accept-upstream-terms
+securedact-mcp models verify
+```
 
 ## Running locally
 
@@ -169,6 +182,14 @@ python -m securedact_mcp
 The initial transport is local `stdio`. Standard output is reserved for MCP
 protocol messages. Do not wrap the process with scripts that print to stdout.
 
+The server completes the MCP initialize handshake before it starts checkpoint
+deserialization. After the host sends the standard `notifications/initialized`
+message, Securedact validates and loads every enabled contextual model once in a
+synchronized background lifecycle. `tools/list` remains available. Until all
+required languages are ready, privacy-dependent tool calls fail closed with
+`contextual_model_initializing`; their input is neither queued nor retried and
+must be submitted again by the host or user.
+
 Supported environment variables:
 
 | Variable | Meaning |
@@ -180,12 +201,17 @@ Supported environment variables:
 | `SECUREDACT_MAX_TEXT_CHARS` | Input limit, clamped to `1..1,000,000` |
 
 Legacy development overrides remain available for tested local fixtures. Normal
-production setup uses the managed registry and configuration. Hugging Face and
-Transformers are forced into offline, telemetry-disabled mode at runtime.
+production setup uses the managed registry and configuration. Setup, verification,
+diagnostics, and MCP startup share the same Securedact-owned cache resolver.
+`HF_HOME`, `HF_HUB_CACHE`, and `TRANSFORMERS_CACHE` point at that managed cache;
+Hugging Face and Transformers are forced into offline, telemetry-disabled mode
+before Flair imports.
 
-`models diagnose` safely reports whether configuration was found, enabled
+`diagnostics runtime` (and the retained `models diagnose` alias) safely reports
+whether configuration was found, enabled
 languages, active model IDs, integrity states, runtime detector readiness, and
-the final failure code. It does not report model paths or exception bodies.
+the final failure code. It also confirms the production regex detector and email
+rule are enabled. It does not report model paths or exception bodies.
 
 ## Testing with MCP Inspector
 
@@ -194,6 +220,30 @@ After a guided model installation:
 ```powershell
 npx @modelcontextprotocol/inspector .\.venv\Scripts\securedact-mcp.exe
 ```
+
+Exact command-line regression:
+
+```powershell
+npx @modelcontextprotocol/inspector --cli `
+  ".\.venv\Scripts\securedact-mcp.exe" `
+  --method tools/call `
+  --tool-name analyze_text `
+  --tool-arg "text=Mijn naam is Emma de Vries en mijn e-mailadres is emma@example.com." `
+  --connect-timeout 180000 `
+  --format json
+```
+
+The long CLI timeout remains useful for a first inference, but the initialize
+handshake itself no longer waits for model loading. Inspector Web may enforce a
+short fixed connection deadline. If a call reports
+`contextual_model_initializing`, wait for readiness and manually submit a new
+call; Securedact never retains the blocked input.
+
+Inspector `--cli` is a one-shot launcher: it closes the child server after the
+response. A cold CLI invocation can therefore validate the fast handshake and
+initializing block, but it cannot resubmit to that same resident model process.
+Use Inspector Web or another persistent MCP host to wait and submit the exact
+analysis again after readiness.
 
 Use only synthetic input. Verify the four registered tools, invalid parameters,
 review and block outcomes, and sanitized output. See
@@ -273,9 +323,11 @@ Additional fixtures are in
 ## Security model
 
 - Local `stdio`; no listener or provider client.
-- Consent-based direct downloads from two allowlisted official repositories.
-- Immutable revisions, pinned sizes/hashes, local manifests, offline load tests,
-  atomic activation, and rollback-safe failures.
+- Consent-based direct downloads from three registry-allowlisted official
+  repositories: two Flair checkpoints and one shared transformer dependency.
+- Immutable revisions, pinned sizes/hashes, component-level local manifests,
+  isolated fresh-process offline load tests, atomic activation, and rollback-safe
+  failures.
 - Offline model loading with telemetry disabled.
 - Default fail-closed model requirement.
 - Explicit policy outcomes.

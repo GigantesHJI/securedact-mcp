@@ -56,6 +56,22 @@ def test_special_category_release_thresholds_are_explicitly_met() -> None:
     assert metrics.general_discussion_false_positive_rate <= 0.05
 
 
+def test_release_metrics_cover_deterministic_spans_replacement_and_runtime_parity() -> None:
+    report = evaluate_corpus(CORPUS)
+    email = report.stage_metrics["deterministic"][EntityType.EMAIL.value]
+
+    assert email.recall == 1.0
+    assert email.exact_span_accuracy == 1.0
+    assert email.partial_span_failures == 0
+    assert report.critical_deterministic_span_recall == 1.0
+    assert report.full_span_replacement_rate == 1.0
+    assert report.residual_leakage_count == 0
+    assert report.production_runtime_parity is True
+    # The real stdio deadline is measured by the subprocess release test, not
+    # inferred from the in-process corpus evaluator.
+    assert report.stdio_startup_deadline_compliance is None
+
+
 def test_corpus_contains_only_versioned_complete_fixture_contracts() -> None:
     fixtures = load_corpus(CORPUS)
     assert len({fixture.id for fixture in fixtures}) == len(fixtures)

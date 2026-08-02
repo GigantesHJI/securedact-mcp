@@ -21,6 +21,15 @@ NAME_PATTERN = re.compile(
     r"(?:\s+(?:(?:de|den|der|van|von|al|el)\s+)?"
     r"[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ'’.-]+){0,3}\b"
 )
+SELF_NAME_WORD = (
+    r"[A-Z\u00C0-\u00D6\u00D8-\u00DE]"
+    r"[a-z\u00E0-\u00F6\u00F8-\u00FF'\u2019.-]+"
+)
+SELF_NAME_PATTERN = re.compile(
+    r"(?i:\b(?:my name is|mijn naam is)\s+)"
+    rf"(?P<name>{SELF_NAME_WORD}(?:\s+(?:(?:de|den|der|van|von|al|el)\s+)?"
+    rf"{SELF_NAME_WORD}){{0,3}})\b"
+)
 PRONOUN_PATTERN = re.compile(
     r"\b(?:she|he|her|his|they|their|the patient|patient|zij|ze|hij|haar|zijn|de patiënt)\b",
     re.IGNORECASE,
@@ -117,6 +126,21 @@ class ContextualPrivacyDetector:
         assertions: list[SensitiveAssertion] = []
         known_people: list[Detection] = []
         relationship_person_ids: set[str] = set()
+
+        for match in SELF_NAME_PATTERN.finditer(text):
+            start, end = match.span("name")
+            detections.append(
+                Detection(
+                    start=start,
+                    end=end,
+                    text=text[start:end],
+                    entity_type=EntityType.PERSON,
+                    confidence=1.0,
+                    source=DetectionSource.CONTEXTUAL,
+                    rule="self_identified_person",
+                    precedence=70,
+                )
+            )
 
         for match in NAME_PATTERN.finditer(text):
             if self._looks_like_non_person(match.group(0)):

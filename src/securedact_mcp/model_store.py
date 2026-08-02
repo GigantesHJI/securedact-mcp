@@ -17,11 +17,14 @@ from .model_registry import (
     IMMUTABLE_REVISION_PATTERN,
     MODELS_BY_LANGUAGE,
     SupportedModel,
+    SupportedRuntimeComponent,
     model_for_id,
+    runtime_components_for_model,
 )
 
 CONFIG_SCHEMA_VERSION = 1
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
+LEGACY_MANIFEST_SCHEMA_VERSION = 1
 MAX_LOCAL_MANIFEST_BYTES = 1_000_000
 FORBIDDEN_MODEL_PATH_PARTS = {".venv", "venv", "site-packages", "downloads"}
 FORBIDDEN_EXECUTABLE_SUFFIXES = {
@@ -50,6 +53,14 @@ class ModelPathError(ModelStorageError):
 class ModelIntegrityError(ModelStorageError):
     """An installed model does not match its pinned registry entry."""
 
+    def __init__(
+        self,
+        message: str,
+        failure_code: str = "contextual_model_integrity_failed",
+    ) -> None:
+        super().__init__(message)
+        self.failure_code = failure_code
+
 
 class ModelConfigurationError(ModelStorageError):
     """The language/model configuration is invalid and cannot be recovered."""
@@ -60,6 +71,11 @@ class InstalledFile(BaseModel):
 
     size: int = Field(ge=1)
     sha256: str
+    component_id: str | None = None
+    upstream_repo: str | None = None
+    upstream_revision: str | None = None
+    storage: str | None = None
+    relative_path: str | None = None
 
     @field_validator("sha256")
     @classmethod
@@ -87,7 +103,10 @@ class ModelInstallationManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_manifest(self) -> Self:
-        if self.schema_version != MANIFEST_SCHEMA_VERSION:
+        if self.schema_version not in {
+            LEGACY_MANIFEST_SCHEMA_VERSION,
+            MANIFEST_SCHEMA_VERSION,
+        }:
             raise ValueError("unsupported model installation manifest schema")
         if not IMMUTABLE_REVISION_PATTERN.fullmatch(self.upstream_revision):
             raise ValueError("upstream revision must be an immutable commit")
@@ -95,6 +114,18 @@ class ModelInstallationManifest(BaseModel):
             raise ValueError("installed_at must include a timezone")
         if self.entrypoint not in self.files:
             raise ValueError("entrypoint must be present in files")
+        if self.schema_version == MANIFEST_SCHEMA_VERSION:
+            for record in self.files.values():
+                if (
+                    record.component_id is None
+                    or record.upstream_repo is None
+                    or record.upstream_revision is None
+                    or record.storage not in {"model", "runtime_cache"}
+                    or record.relative_path is None
+                ):
+                    raise ValueError("versioned file provenance is incomplete")
+                if not IMMUTABLE_REVISION_PATTERN.fullmatch(record.upstream_revision):
+                    raise ValueError("file revision must be an immutable commit")
         return self
 
 
@@ -127,6 +158,10 @@ class ModelStoragePaths:
     staging_root: Path
     rollback_root: Path
     config_path: Path
+
+    @property
+    def runtime_cache_root(self) -> Path:
+        return self.model_root / ".runtime-cache"
 
     @classmethod
     def resolve(
@@ -173,7 +208,14 @@ class ModelStoragePaths:
         )
 
     def ensure(self) -> None:
-        for path in (self.app_root, self.model_root, self.staging_root, self.rollback_root):
+        for path in (
+            self.app_root,
+            self.model_root,
+            self.staging_root,
+            self.rollback_root,
+            self.runtime_cache_root,
+            self.runtime_cache_root / "hub",
+        ):
             path.mkdir(parents=True, exist_ok=True)
             if is_unsafe_link(path):
                 raise ModelPathError("Managed model storage contains a linked directory")
@@ -196,6 +238,7 @@ class ManagedModelState:
     active_models: dict[str, SupportedModel]
     verified_models: dict[str, VerifiedModel]
     failed_languages: tuple[str, ...]
+    failure_codes: dict[str, str]
 
 
 def _validate_model_root(path: Path, *, cwd: Path | None = None) -> None:
@@ -341,14 +384,16 @@ class ModelStore:
         active_models: dict[str, SupportedModel] = {}
         verified_models: dict[str, VerifiedModel] = {}
         failed_languages: list[str] = []
+        failure_codes: dict[str, str] = {}
         if configuration is not None:
             for language, model_id in configuration.active_models.items():
                 model = model_for_id(model_id)
                 active_models[language] = model
                 try:
                     verified_models[language] = self.verify_model(model)
-                except ModelIntegrityError:
+                except ModelIntegrityError as exc:
                     failed_languages.append(language)
+                    failure_codes[language] = exc.failure_code
 
         return ManagedModelState(
             config_found=config_found,
@@ -356,6 +401,7 @@ class ModelStore:
             active_models=active_models,
             verified_models=verified_models,
             failed_languages=tuple(failed_languages),
+            failure_codes=failure_codes,
         )
 
     def write_configuration(self, configuration: ModelConfiguration) -> None:
@@ -386,7 +432,21 @@ class ModelStore:
         self,
         model: SupportedModel,
         files: dict[str, InstalledFile],
+        runtime_files: dict[str, InstalledFile] | None = None,
     ) -> ModelInstallationManifest:
+        records = {
+            relative: InstalledFile(
+                size=record.size,
+                sha256=record.sha256,
+                component_id=model.id,
+                upstream_repo=model.upstream_repo,
+                upstream_revision=model.upstream_revision,
+                storage="model",
+                relative_path=relative,
+            )
+            for relative, record in files.items()
+        }
+        records.update(runtime_files or {})
         return ModelInstallationManifest(
             schema_version=MANIFEST_SCHEMA_VERSION,
             model_id=model.id,
@@ -396,7 +456,7 @@ class ModelStore:
             installed_at=datetime.now(UTC),
             securedact_version=package_version(),
             entrypoint=model.required_files[0],
-            files=files,
+            files=records,
         )
 
     def write_manifest(self, root: Path, manifest: ModelInstallationManifest) -> None:
@@ -412,6 +472,121 @@ class ModelStore:
         finally:
             temporary.unlink(missing_ok=True)
 
+    def runtime_component_root(self, component: SupportedRuntimeComponent) -> Path:
+        return self.paths.runtime_cache_root / "hub" / component.cache_repository_name
+
+    @staticmethod
+    def runtime_component_relative_paths(
+        component: SupportedRuntimeComponent,
+    ) -> dict[str, str]:
+        prefix = f"hub/{component.cache_repository_name}"
+        paths = {
+            f"runtime/{component.id}/refs/main": f"{prefix}/refs/main",
+        }
+        paths.update(
+            {
+                f"runtime/{component.id}/{relative}": (
+                    f"{prefix}/snapshots/{component.upstream_revision}/{relative}"
+                )
+                for relative in component.required_files
+            }
+        )
+        return paths
+
+    def runtime_component_records(
+        self,
+        component: SupportedRuntimeComponent,
+        *,
+        cache_root: Path | None = None,
+    ) -> dict[str, InstalledFile]:
+        root = (cache_root or self.paths.runtime_cache_root).resolve()
+        expected_paths = self.runtime_component_relative_paths(component)
+        records: dict[str, InstalledFile] = {}
+        expected_actual = {relative for relative in expected_paths.values()}
+        component_root = root / "hub" / component.cache_repository_name
+        if not component_root.is_dir() or is_unsafe_link(component_root):
+            raise ModelIntegrityError(
+                "A required managed runtime component is missing",
+                "contextual_model_dependency_missing",
+            )
+        actual: set[str] = set()
+        for path in component_root.rglob("*"):
+            if path.is_dir():
+                if is_unsafe_link(path):
+                    raise ModelIntegrityError("A managed runtime component contains a linked path")
+                continue
+            if is_unsafe_link(path):
+                raise ModelIntegrityError("A managed runtime component contains a linked path")
+            if path.suffix.casefold() in FORBIDDEN_EXECUTABLE_SUFFIXES:
+                raise ModelIntegrityError("A managed runtime component contains an executable")
+            actual.add(path.relative_to(root).as_posix())
+        if actual != expected_actual:
+            missing = expected_actual - actual
+            raise ModelIntegrityError(
+                "A managed runtime component layout is incomplete or unexpected",
+                (
+                    "contextual_model_dependency_missing"
+                    if missing
+                    else "contextual_model_integrity_failed"
+                ),
+            )
+
+        for logical, relative in expected_paths.items():
+            path = root / relative
+            size = path.stat().st_size
+            digest = _hash_file(path)
+            if relative.endswith("/refs/main"):
+                expected_content = component.upstream_revision.encode("ascii")
+                if path.read_bytes() != expected_content:
+                    raise ModelIntegrityError(
+                        "A managed runtime component revision pointer is invalid"
+                    )
+            else:
+                filename = Path(relative).name
+                if size != component.expected_sizes[filename]:
+                    raise ModelIntegrityError("A managed runtime component size is invalid")
+                if digest != component.expected_hashes[filename]:
+                    raise ModelIntegrityError("A managed runtime component hash is invalid")
+            records[logical] = InstalledFile(
+                size=size,
+                sha256=digest,
+                component_id=component.id,
+                upstream_repo=component.upstream_repo,
+                upstream_revision=component.upstream_revision,
+                storage="runtime_cache",
+                relative_path=relative,
+            )
+        return records
+
+    def primary_checkpoint_records(self, model: SupportedModel) -> dict[str, InstalledFile]:
+        """Validate only the pinned checkpoint, permitting repair of legacy manifests."""
+
+        root = self.model_path(model)
+        if not root.is_dir() or is_unsafe_link(root):
+            raise ModelIntegrityError("The installed model directory is missing or unsafe")
+        allowed = set(model.required_files) | set(model.optional_files) | {"manifest.json"}
+        actual: set[str] = set()
+        for path in root.rglob("*"):
+            if path.is_dir():
+                if is_unsafe_link(path):
+                    raise ModelIntegrityError("The installed model contains a linked directory")
+                continue
+            relative = path.relative_to(root).as_posix()
+            if is_unsafe_link(path) or path.suffix.casefold() in FORBIDDEN_EXECUTABLE_SUFFIXES:
+                raise ModelIntegrityError("The installed model contains an unsafe file")
+            actual.add(relative)
+        if not set(model.required_files).issubset(actual) or not actual.issubset(allowed):
+            raise ModelIntegrityError("The installed model checkpoint layout cannot be repaired")
+        records: dict[str, InstalledFile] = {}
+        for relative in model.required_files:
+            path = root / relative
+            size = path.stat().st_size
+            digest = _hash_file(path)
+            if size != model.expected_sizes[relative] or digest != model.expected_hashes[relative]:
+                raise ModelIntegrityError("The installed checkpoint does not match pinned metadata")
+            records[relative] = InstalledFile(size=size, sha256=digest)
+        return records
+
     def verify_model(self, model: SupportedModel) -> VerifiedModel:
         registered = model_for_id(model.id)
         if registered != model:
@@ -425,12 +600,18 @@ class ModelStore:
                 is_unsafe_link(manifest_path)
                 or manifest_path.stat().st_size > MAX_LOCAL_MANIFEST_BYTES
             ):
-                raise ModelIntegrityError("The local model manifest is missing or unsafe")
+                raise ModelIntegrityError(
+                    "The local model manifest is missing or unsafe",
+                    "contextual_model_manifest_invalid",
+                )
             manifest = ModelInstallationManifest.model_validate_json(manifest_path.read_bytes())
         except ModelIntegrityError:
             raise
         except Exception as exc:
-            raise ModelIntegrityError("The local model manifest is corrupt") from exc
+            raise ModelIntegrityError(
+                "The local model manifest is corrupt",
+                "contextual_model_manifest_invalid",
+            ) from exc
 
         if (
             manifest.model_id != model.id
@@ -441,6 +622,12 @@ class ModelStore:
             raise ModelIntegrityError("The installed model provenance does not match the registry")
         if _version_tuple(package_version()) < _version_tuple(model.minimum_securedact_version):
             raise ModelIntegrityError("The installed model requires a newer Securedact version")
+        components = runtime_components_for_model(model)
+        if components and manifest.schema_version != MANIFEST_SCHEMA_VERSION:
+            raise ModelIntegrityError(
+                "The installed model manifest requires managed runtime dependency repair",
+                "contextual_model_dependency_missing",
+            )
 
         allowed = set(model.required_files) | set(model.optional_files)
         actual_files: set[str] = set()
@@ -461,14 +648,19 @@ class ModelStore:
             allowed
         ):
             raise ModelIntegrityError("The installed model file layout is incomplete or unexpected")
-        if set(manifest.files) != actual_files:
+        model_records = {
+            logical: record
+            for logical, record in manifest.files.items()
+            if record.storage in {None, "model"}
+        }
+        if set(model_records) != actual_files:
             raise ModelIntegrityError("The local model manifest file set is incorrect")
 
         expected_sizes = model.expected_sizes
         expected_hashes = model.expected_hashes
         for relative in sorted(actual_files):
             path = root / relative
-            record = manifest.files[relative]
+            record = model_records[relative]
             size = path.stat().st_size
             digest = _hash_file(path)
             if size != record.size or digest != record.sha256:
@@ -477,6 +669,29 @@ class ModelStore:
                 raise ModelIntegrityError("The installed model size differs from upstream metadata")
             if relative in expected_hashes and digest != expected_hashes[relative]:
                 raise ModelIntegrityError("The installed model hash differs from upstream metadata")
+
+            if manifest.schema_version == MANIFEST_SCHEMA_VERSION and (
+                record.component_id != model.id
+                or record.upstream_repo != model.upstream_repo
+                or record.upstream_revision != model.upstream_revision
+                or record.storage != "model"
+                or record.relative_path != relative
+            ):
+                raise ModelIntegrityError("The installed model file provenance is invalid")
+
+        runtime_records = {
+            logical: record
+            for logical, record in manifest.files.items()
+            if record.storage == "runtime_cache"
+        }
+        expected_runtime: dict[str, InstalledFile] = {}
+        for component in components:
+            expected_runtime.update(self.runtime_component_records(component))
+        if set(runtime_records) != set(expected_runtime):
+            raise ModelIntegrityError("The managed runtime dependency manifest is incomplete")
+        for logical, expected in expected_runtime.items():
+            if runtime_records[logical] != expected:
+                raise ModelIntegrityError("A managed runtime dependency manifest record is invalid")
 
         entrypoint = root / manifest.entrypoint
         return VerifiedModel(model=model, root=root, entrypoint=entrypoint, manifest=manifest)
@@ -507,4 +722,21 @@ class ModelStore:
                 if language != model.language
             ]
             self.configure_languages(remaining)
+        required_by_remaining: set[str] = set()
+        for candidate in MODELS_BY_LANGUAGE.values():
+            if candidate.id == model.id:
+                continue
+            try:
+                self.primary_checkpoint_records(candidate)
+            except ModelIntegrityError:
+                continue
+            required_by_remaining.update(candidate.runtime_component_ids)
+        for component in runtime_components_for_model(model):
+            if component.id in required_by_remaining:
+                continue
+            component_root = self.runtime_component_root(component)
+            if component_root.exists():
+                if not component_root.is_dir() or is_unsafe_link(component_root):
+                    raise ModelPathError("The managed runtime component location is unsafe")
+                shutil.rmtree(component_root)
         return True

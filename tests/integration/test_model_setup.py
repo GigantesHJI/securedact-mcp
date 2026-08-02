@@ -36,7 +36,7 @@ def test_guided_setup_downloads_validates_tests_and_activates_mocked_model(
         return ModelInstaller(
             model_store,
             snapshot_download=snapshot_download,
-            smoke_test=loaded_paths.append,
+            smoke_test=lambda path, _cache: loaded_paths.append(path),
             progress=progress,
             sleeper=lambda _seconds: None,
         )

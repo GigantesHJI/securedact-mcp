@@ -4,7 +4,8 @@
 
 - Python `>=3.12,<3.13`
 - Internet access during the approved model download only
-- Approximately 2.4 GiB free per selected model, plus staging reserve
+- Approximately 2.4 GiB free per selected model, plus staging reserve. English
+  and Dutch share one additional 13.51 MiB transformer runtime component.
 - Optional: Node.js/npm for MCP Inspector
 
 The normal setup does not require administrator rights, Git Xet, the Hugging
@@ -86,7 +87,17 @@ securedact-mcp install --language none
 
 Securedact does not redistribute these model weights. During installation, the
 selected model is downloaded directly from its official Hugging Face repository
-to the user's local Securedact data directory.
+to the user's local Securedact data directory. The installer also obtains the
+pinned XLM-RoBERTa tokenizer/configuration files from their official repository;
+Securedact packages neither the checkpoints nor these runtime files.
+
+Early standalone development installations that already have valid checkpoints
+can be completed without redownloading them:
+
+```powershell
+securedact-mcp models repair all --accept-upstream-terms
+securedact-mcp models verify
+```
 
 See [Model installation](model-installation.md) for pinned revisions, sizes,
 storage locations, integrity manifests, offline use, updates, removal, recovery,
@@ -123,9 +134,15 @@ overwritten.
 
 ```powershell
 python -c "import securedact_mcp; print(securedact_mcp.__version__)"
-securedact-mcp models status
 securedact-mcp models verify
+securedact-mcp models status
 ```
 
 Then configure an MCP host or use MCP Inspector. Do not expect the raw `stdio`
 server command to display an interactive interface.
+
+On a cold start the server responds to MCP initialize before loading Flair.
+After the host sends the standard initialized notification, each configured
+model is validated and loaded once in the background. Calls made before all
+enabled languages are ready return `contextual_model_initializing`; wait and
+manually resubmit. Securedact does not retain or replay the rejected input.

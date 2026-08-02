@@ -43,6 +43,7 @@ class PrivacyEngine:
         *,
         require_contextual: bool = False,
         model_manager: ModelManager | None = None,
+        required_detector_names: frozenset[str] = frozenset(),
     ) -> None:
         self.detectors: list[Detector] = (
             list(detectors)
@@ -52,6 +53,7 @@ class PrivacyEngine:
         self.policies = policies or PolicyRegistry()
         self.require_contextual = require_contextual
         self.model_manager = model_manager
+        self.required_detector_names = required_detector_names
         self._startup_warnings: list[str] = []
         self._startup_failure_codes: dict[str, str] = {}
         self._detector_lock = threading.RLock()
@@ -197,6 +199,9 @@ class PrivacyEngine:
         blocked = any(entity.action == PrivacyAction.BLOCK for entity in accepted) or any(
             assertion.action == PrivacyAction.BLOCK for assertion in configured_assertions
         )
+        deterministic_ready = self.deterministic_detectors_ready()
+        if not deterministic_ready:
+            warnings.append("required deterministic detector stack is incomplete")
         return AnalysisResult(
             entities=accepted,
             assertions=configured_assertions,
@@ -205,7 +210,7 @@ class PrivacyEngine:
                 or any(assertion.requires_review for assertion in configured_assertions)
             ),
             blocked=blocked,
-            engine_ready=contextual_ready,
+            engine_ready=contextual_ready and deterministic_ready,
             warnings=warnings,
         )
 
@@ -222,6 +227,20 @@ class PrivacyEngine:
         if not contextual:
             return False
         return all(bool(getattr(detector, "ready", True)) for detector in contextual)
+
+    def deterministic_detectors_ready(self) -> bool:
+        if not self.required_detector_names:
+            return True
+        configured = {detector.name for detector in self.detectors if not detector.contextual}
+        return self.required_detector_names.issubset(configured)
+
+    def full_ready(self) -> bool:
+        return self.deterministic_detectors_ready() and self.contextual_ready()
+
+    def readiness_failure_code(self) -> str | None:
+        if not self.deterministic_detectors_ready():
+            return "privacy_detector_stack_incomplete"
+        return self.contextual_failure_code()
 
     def contextual_failure_code(self) -> str | None:
         if not self.require_contextual or self.contextual_ready():

@@ -46,6 +46,7 @@ models/
 model-packs/
 .cache/huggingface/
 models--*/
+.runtime-cache/
 snapshots/
 blobs/
 .locks/
@@ -61,6 +62,7 @@ blobs/
 # Runtime state and privacy-sensitive local output
 logs/
 *.log
+regex-test.txt
 *.sqlite
 *.sqlite3
 *.db

@@ -79,7 +79,11 @@ XLM_ROBERTA_LARGE_RUNTIME = SupportedRuntimeComponent(
             "sentencepiece.bpe.model",
             "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
         ),
-        ("tokenizer.json", "a898ea75433890f6610f4e470b8ebeb0c21dce5c8dd61f892eb09eb5919d2e2c"),
+        # Public upstream tokenizer SHA-256 used for integrity validation, not a credential.
+        (
+            "tokenizer.json",
+            "a898ea75433890f6610f4e470b8ebeb0c21dce5c8dd61f892eb09eb5919d2e2c",  # gitleaks:allow
+        ),
         (
             "tokenizer_config.json",
             "994f46754c5bf4014f1aa92d34b1374319c3a6b3f702105cd5b742beaecd18ce",

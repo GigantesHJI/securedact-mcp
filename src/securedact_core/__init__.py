@@ -1,5 +1,18 @@
 """Provider-independent privacy primitives for Securedact."""
 
+from .api import (
+    ErrorCode,
+    PrepareResult,
+    PrepareStatus,
+    RedactionRequest,
+    ResponseMode,
+    RestorationRequest,
+    RestorationResult,
+    SafeFinding,
+    SecuredactConfigurationError,
+    SecuredactEngine,
+    SecuredactError,
+)
 from .app_paths import SecuredactPaths
 from .engine import PrivacyEngine
 from .evaluation import EvaluationReport, evaluate_corpus, load_corpus
@@ -37,8 +50,14 @@ from .models import (
     TextSpan,
 )
 from .policies import Policy, PolicyRegistry
+from .policy_loader import LocalPolicyLoader, PolicyLoadError, PolicyLoadErrorCode
 from .production import PRODUCTION_DETERMINISTIC_DETECTORS, build_production_engine
 from .profile_storage import PrivacyConfiguration, PrivacyProfileStore
+from .restoration import (
+    RestorationErrorCode,
+    RestorationSessionError,
+    RestorationVault,
+)
 from .taxonomy import (
     CATEGORY_DEFINITIONS,
     CRITICAL_TYPES,
@@ -59,10 +78,12 @@ __all__ = [
     "DetectionSource",
     "EntityDefinition",
     "EntityType",
+    "ErrorCode",
     "EvaluationReport",
     "IndirectDisclosureRisk",
     "InstalledModel",
     "IntegrityStatus",
+    "LocalPolicyLoader",
     "ModelInstallErrorCode",
     "ModelInstallProgress",
     "ModelInstallResult",
@@ -75,17 +96,32 @@ __all__ = [
     "ModelStatus",
     "PartialMatch",
     "Policy",
+    "PolicyLoadError",
+    "PolicyLoadErrorCode",
     "PolicyRegistry",
+    "PrepareResult",
+    "PrepareStatus",
     "PrivacyAction",
     "PrivacyConfiguration",
     "PrivacyEngine",
     "PrivacyProfileStore",
     "RedactionMode",
+    "RedactionRequest",
     "RedactionResult",
     "ResidualScanResult",
+    "ResponseMode",
+    "RestorationErrorCode",
+    "RestorationRequest",
+    "RestorationResult",
+    "RestorationSessionError",
+    "RestorationVault",
     "ReviewAction",
     "ReviewDecision",
+    "SafeFinding",
     "SanitizationAudit",
+    "SecuredactConfigurationError",
+    "SecuredactEngine",
+    "SecuredactError",
     "SecuredactPaths",
     "SensitiveAssertion",
     "Severity",

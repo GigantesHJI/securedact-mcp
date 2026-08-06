@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import builtins
+import json
+from hashlib import sha256
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .models import DetectionSource, EntityType, PrivacyAction, RedactionMode
 from .taxonomy import (
@@ -17,13 +20,16 @@ ALL_ENTITY_TYPES = frozenset(EntityType)
 
 
 class Policy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     schema_version: int = PROFILE_SCHEMA_VERSION
-    name: str
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     display_name: str | None = None
-    description: str
+    description: str = Field(min_length=1, max_length=500)
     category_actions: dict[EntityType, PrivacyAction] = Field(default_factory=dict)
     enabled_entity_types: frozenset[EntityType] = ALL_ENTITY_TYPES
     minimum_confidence: float = Field(default=0.30, ge=0.0, le=1.0)
+    thresholds: dict[EntityType, float] = Field(default_factory=dict)
     auto_accept_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     always_review_types: frozenset[EntityType] = frozenset()
     review_sources: frozenset[DetectionSource] = frozenset(
@@ -34,7 +40,22 @@ class Policy(BaseModel):
     block_on_unreviewed: bool = True
     block_entity_types: frozenset[EntityType] = frozenset()
     contextual_residual_scan: bool = False
+    residual_validation_enabled: bool = True
+    residual_on_failure: Literal["block"] = "block"
+    default_response_mode: Literal["minimal", "review", "restore_capable"] = "minimal"
+    expose_raw_values: bool = False
+    expose_mapping: bool = False
     built_in: bool = True
+
+    @field_validator("thresholds")
+    @classmethod
+    def validate_thresholds(
+        cls,
+        value: dict[EntityType, float],
+    ) -> dict[EntityType, float]:
+        if any(threshold < 0.0 or threshold > 1.0 for threshold in value.values()):
+            raise ValueError("policy thresholds must be between zero and one")
+        return value
 
     def action_for(self, entity_type: EntityType) -> PrivacyAction:
         if entity_type in self.block_entity_types:
@@ -47,6 +68,19 @@ class Policy(BaseModel):
             entity_type,
             CATEGORY_DEFINITIONS[entity_type].default_action,
         )
+
+    def threshold_for(self, entity_type: EntityType) -> float:
+        return self.thresholds.get(entity_type, self.minimum_confidence)
+
+    @property
+    def digest(self) -> str:
+        payload = json.dumps(
+            self.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _secure_defaults() -> dict[EntityType, PrivacyAction]:
@@ -84,6 +118,30 @@ DEFAULT_POLICY = Policy(
     category_actions=_secure_defaults(),
 )
 
+
+def _strict_external_actions() -> dict[EntityType, PrivacyAction]:
+    actions = _secure_defaults()
+    for entity_type, definition in CATEGORY_DEFINITIONS.items():
+        if definition.group in {CategoryGroup.CREDENTIALS, CategoryGroup.SPECIAL_CATEGORY}:
+            actions[entity_type] = PrivacyAction.BLOCK
+    actions[EntityType.ORGANIZATION] = PrivacyAction.REVIEW
+    return actions
+
+
+STRICT_EXTERNAL_AI_POLICY = Policy(
+    name="strict_external_ai",
+    display_name="Strict External AI",
+    description="Blocks credentials and special-category data; redacts or reviews other findings.",
+    category_actions=_strict_external_actions(),
+    minimum_confidence=0.15,
+    thresholds={
+        EntityType.PERSON: 0.85,
+        EntityType.ORGANIZATION: 0.92,
+    },
+    review_all_contextual=False,
+    contextual_residual_scan=True,
+)
+
 GDPR_STRICT_POLICY = Policy(
     name="gdpr_strict",
     display_name="GDPR Strict",
@@ -92,6 +150,43 @@ GDPR_STRICT_POLICY = Policy(
     minimum_confidence=0.15,
     auto_accept_confidence=1.0,
     review_all_contextual=True,
+    contextual_residual_scan=True,
+)
+
+GDPR_POLICY = GDPR_STRICT_POLICY.model_copy(
+    update={
+        "name": "gdpr",
+        "display_name": "GDPR-related Detection",
+        "description": (
+            "Broad detection policy for categories relevant to GDPR; not a compliance certification."
+        ),
+    }
+)
+
+IDENTIFIERS_ONLY_POLICY = Policy(
+    name="identifiers_only",
+    display_name="Identifiers Only",
+    description="Redacts direct identifiers while keeping all other sensitive findings reviewable.",
+    category_actions=_profile_actions(
+        {
+            CategoryGroup.IDENTITY,
+            CategoryGroup.CONTACT,
+            CategoryGroup.LOCATION,
+            CategoryGroup.DATES,
+            CategoryGroup.GOVERNMENT,
+            CategoryGroup.FINANCIAL,
+            CategoryGroup.TECHNICAL,
+        }
+    ),
+)
+
+REVIEW_ALL_CONTEXTUAL_POLICY = Policy(
+    name="review_all_contextual",
+    display_name="Review All Contextual",
+    description="Requires local review for every contextual or statistical finding.",
+    category_actions=_secure_defaults(),
+    review_all_contextual=True,
+    auto_accept_confidence=1.0,
     contextual_residual_scan=True,
 )
 
@@ -170,7 +265,11 @@ CUSTOM_POLICY = Policy(
 
 BUILT_IN_POLICIES = (
     DEFAULT_POLICY,
+    STRICT_EXTERNAL_AI_POLICY,
+    GDPR_POLICY,
     GDPR_STRICT_POLICY,
+    IDENTIFIERS_ONLY_POLICY,
+    REVIEW_ALL_CONTEXTUAL_POLICY,
     PERSONAL_DATA_POLICY,
     FINANCIAL_DATA_POLICY,
     MEDICAL_DATA_POLICY,
@@ -184,6 +283,9 @@ BUILT_IN_POLICIES = (
 class PolicyRegistry:
     def __init__(self, policies: list[Policy] | None = None) -> None:
         defaults = policies or list(BUILT_IN_POLICIES)
+        names = [policy.name for policy in defaults]
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate privacy policy names are not allowed")
         self._policies = {policy.name: policy for policy in defaults}
 
     def get(self, name: str) -> Policy:
@@ -193,9 +295,11 @@ class PolicyRegistry:
             raise ValueError(f"Unknown privacy policy: {name}") from exc
 
     def list(self) -> list[Policy]:
-        return list(self._policies.values())
+        return [self._policies[name] for name in sorted(self._policies)]
 
     def register(self, policy: Policy) -> None:
+        if policy.name in self._policies:
+            raise ValueError(f"Duplicate privacy policy name: {policy.name}")
         self._policies[policy.name] = policy
 
     def resolve_actions(

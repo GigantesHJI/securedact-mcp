@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from .detectors import ContextualPrivacyDetector, RegexDetector
+from .detectors import ContextualPrivacyDetector, CredentialsDetector, RegexDetector
 from .detectors.base import Detector
 from .engine import PrivacyEngine
 from .model_management import ModelManager
 
-PRODUCTION_DETERMINISTIC_DETECTORS = frozenset({"regex", "contextual_rules"})
+PRODUCTION_DETERMINISTIC_DETECTORS = frozenset({"regex", "credentials", "contextual_rules"})
 
 
 def build_production_engine(
@@ -18,7 +18,11 @@ def build_production_engine(
 ) -> PrivacyEngine:
     """Build the one production detector stack used by runtime and release tests."""
 
-    detectors: list[Detector] = [RegexDetector(), ContextualPrivacyDetector()]
+    detectors: list[Detector] = [
+        CredentialsDetector(),
+        RegexDetector(),
+        ContextualPrivacyDetector(),
+    ]
     detectors.extend(contextual_detectors)
     return PrivacyEngine(
         detectors,

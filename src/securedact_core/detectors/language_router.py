@@ -131,14 +131,24 @@ class LanguageAwareFlairDetector:
             self._load_succeeded = True
 
     def detect(self, text: str) -> list[Detection]:
+        return self.detect_for_language(text, "auto")
+
+    def detect_for_language(self, text: str, language: str) -> list[Detection]:
+        if language not in {"auto", "en", "nl"}:
+            raise ValueError("Unsupported contextual model language")
         self.load()
-        if len(self.detectors) == 1:
+        selected: tuple[Detector, ...]
+        if language != "auto":
+            if language not in self.detectors:
+                raise RuntimeError("Requested contextual model language is unavailable")
+            selected = (self.detectors[language],)
+        elif len(self.detectors) == 1:
             selected = tuple(self.detectors.values())
         else:
-            language = detect_local_language(text)
+            detected_language = detect_local_language(text)
             selected = (
-                (self.detectors[language],)
-                if language in self.detectors
+                (self.detectors[detected_language],)
+                if detected_language in self.detectors
                 else tuple(self.detectors.values())
             )
         findings: list[Detection] = []

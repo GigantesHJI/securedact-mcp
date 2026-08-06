@@ -16,15 +16,16 @@ from ..models import (
 
 LEXICON_PATH = Path(__file__).with_name("lexicons") / "special_categories.v1.json"
 
+NAME_WORD = (
+    r"(?:[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+(?:['’.-][A-Za-zÀ-ÖØ-öø-ÿ]+)*"
+    r"|[A-ZÀ-ÖØ-Þ](?:['’.-][A-Za-zÀ-ÖØ-öø-ÿ]+)+"
+    r"|[A-ZÀ-ÖØ-Þ]\.)"
+)
 NAME_PATTERN = re.compile(
-    r"\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ'’.-]+"
-    r"(?:\s+(?:(?:de|den|der|van|von|al|el)\s+)?"
-    r"[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ'’.-]+){0,3}\b"
+    rf"\b{NAME_WORD}"
+    rf"(?:\s+(?:(?:de|den|der|van|von|al|el)\s+)?{NAME_WORD}){{0,3}}\b"
 )
-SELF_NAME_WORD = (
-    r"[A-Z\u00C0-\u00D6\u00D8-\u00DE]"
-    r"[a-z\u00E0-\u00F6\u00F8-\u00FF'\u2019.-]+"
-)
+SELF_NAME_WORD = NAME_WORD
 SELF_NAME_PATTERN = re.compile(
     r"(?i:\b(?:my name is|mijn naam is)\s+)"
     rf"(?P<name>{SELF_NAME_WORD}(?:\s+(?:(?:de|den|der|van|von|al|el)\s+)?"

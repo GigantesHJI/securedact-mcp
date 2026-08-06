@@ -7,6 +7,7 @@ from .models import Detection, DetectionSource, EntityType
 SOURCE_PRIORITY = {
     DetectionSource.LABEL: 0,
     DetectionSource.REGEX: 1,
+    DetectionSource.CREDENTIALS: 1,
     DetectionSource.CONTEXTUAL: 2,
     DetectionSource.FLAIR: 3,
 }
@@ -51,7 +52,7 @@ def overlaps(left: Detection, right: Detection) -> bool:
     return left.start < right.end and right.start < left.end
 
 
-def _rank(item: Detection) -> tuple[int, int, int, int, float, int]:
+def _rank(item: Detection) -> tuple[int, int, int, int, float, int, str, str, str]:
     # Policy-selected assertion/sentence replacement is an explicit privacy
     # decision, not a statistical guess. It must cover nested deterministic
     # findings when the policy calls for the entire assertion to be removed.
@@ -63,6 +64,9 @@ def _rank(item: Detection) -> tuple[int, int, int, int, float, int]:
         -item.length,
         -item.confidence,
         item.start,
+        item.entity_type.value,
+        item.source.value,
+        item.rule or "",
     )
 
 

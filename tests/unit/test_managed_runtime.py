@@ -179,7 +179,8 @@ async def test_verified_managed_models_create_server_without_false_load_block(
         {"text": "Contact alex.example@example.test", "policy": "default"}
     )
 
-    assert result["engine_ready"] is True
+    assert result["status"] == "ok"
+    assert result["counts"] == {"email": 1}
     assert result.get("status") != "blocked"
     assert len(FakeFlairDetector.load_calls) == len(languages)
 
@@ -203,9 +204,9 @@ async def test_one_enabled_child_failure_blocks_with_safe_failure_code(
     assert FakeFlairDetector.load_calls == ["english", "dutch"]
     assert result["status"] == "blocked"
     assert result["failure_code"] == "contextual_model_load_failed"
-    assert "required contextual model could not be loaded" in result["reason"].casefold()
-    assert "private" not in result["reason"].casefold()
-    assert "model.bin" not in result["reason"].casefold()
+    assert result["reason_codes"] == ["contextual_model_load_failed"]
+    assert "private" not in str(result).casefold()
+    assert "model.bin" not in str(result).casefold()
 
 
 def test_single_model_is_used_conservatively_for_other_language(
@@ -247,7 +248,7 @@ async def test_minimal_configuration_remains_fail_closed(
     )
 
     assert result["status"] == "blocked"
-    assert "No contextual model is enabled" in result["reason"]
+    assert result["reason_codes"] == ["contextual_model_not_enabled"]
 
 
 @pytest.mark.asyncio
@@ -277,14 +278,9 @@ async def test_tool_call_while_managed_models_are_loading_fails_closed(
     )
     first = calls[0]
 
-    assert first == {
-        "status": "blocked",
-        "failure_code": "contextual_model_initializing",
-        "reason": (
-            "The required contextual model is still loading. "
-            "Retry the request manually when the model is ready."
-        ),
-    }
+    assert first["status"] == "blocked"
+    assert first["failure_code"] == "contextual_model_initializing"
+    assert first["reason_codes"] == ["contextual_model_initializing"]
     assert all(item == first for item in calls)
     assert lifecycle.snapshot().contextual_state == RuntimeState.LOADING
     assert FakeFlairDetector.calls == []
@@ -295,5 +291,5 @@ async def test_tool_call_while_managed_models_are_loading_fails_closed(
         {"text": "Mijn e-mailadres is second@example.com.", "policy": "default"}
     )
 
-    assert second["engine_ready"] is True
+    assert second["status"] == "ok"
     assert lifecycle.snapshot().load_operations == 1

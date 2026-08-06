@@ -1,3 +1,5 @@
+from itertools import permutations
+
 from securedact_core.merge import merge_detections
 from securedact_core.models import Detection, DetectionSource, EntityType
 
@@ -29,3 +31,26 @@ def test_merge_preserves_order_and_never_returns_overlaps() -> None:
     last = detection(20, 25, DetectionSource.REGEX, EntityType.IPV4)
     first = detection(1, 6, DetectionSource.REGEX, EntityType.EMAIL)
     assert merge_detections([last, first]) == [first, last]
+
+
+def test_merge_is_order_independent_across_every_input_permutation() -> None:
+    findings = [
+        detection(0, 30, DetectionSource.FLAIR, EntityType.PERSON),
+        detection(8, 24, DetectionSource.CREDENTIALS, EntityType.ACCESS_TOKEN),
+        detection(35, 45, DetectionSource.REGEX, EntityType.EMAIL),
+        detection(45, 50, DetectionSource.CONTEXTUAL, EntityType.ORGANIZATION),
+    ]
+    expected = merge_detections(findings)
+
+    assert all(merge_detections(list(order)) == expected for order in permutations(findings))
+
+
+def test_equal_rank_tie_breaks_lexically_and_adjacent_spans_survive() -> None:
+    lexical_winner = detection(0, 5, DetectionSource.FLAIR, EntityType.ORGANIZATION)
+    lexical_loser = detection(0, 5, DetectionSource.FLAIR, EntityType.PERSON)
+    adjacent = detection(5, 10, DetectionSource.FLAIR, EntityType.PERSON)
+
+    assert merge_detections([lexical_loser, adjacent, lexical_winner]) == [
+        lexical_winner,
+        adjacent,
+    ]

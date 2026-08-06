@@ -92,6 +92,7 @@ class EntityType(StrEnum):
 class DetectionSource(StrEnum):
     LABEL = "label"
     REGEX = "regex"
+    CREDENTIALS = "credentials"
     CONTEXTUAL = "contextual"
     FLAIR = "flair"
 

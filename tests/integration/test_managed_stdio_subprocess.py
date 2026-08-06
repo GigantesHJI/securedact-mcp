@@ -21,6 +21,7 @@ RUNTIME_REVISION = "c" * 40
 RUNTIME_CONTENT = b"tiny-synthetic-tokenizer"
 RUNTIME_DIGEST = hashlib.sha256(RUNTIME_CONTENT).hexdigest()
 RUNTIME_CACHE_REPOSITORY = "models--synthetic-transformer"
+PROTOCOL_STARTUP_DEADLINE_SECONDS = 10.0
 
 
 def _console_entrypoint() -> str:
@@ -39,7 +40,7 @@ def _console_entrypoint() -> str:
 
 
 def _read_protocol_message(
-    process: subprocess.Popen[str], timeout: float = 2.0
+    process: subprocess.Popen[str], timeout: float = PROTOCOL_STARTUP_DEADLINE_SECONDS
 ) -> dict[str, object]:
     assert process.stdout is not None
     received: queue.Queue[str] = queue.Queue(maxsize=1)
@@ -352,7 +353,7 @@ async def test_fresh_console_process_uses_active_managed_models(
             exact_text = "Mijn naam is Emma de Vries en mijn e-mailadres is emma@example.com."
             exact = await session.call_tool(
                 "analyze_text",
-                {"text": exact_text, "policy": "default"},
+                {"text": exact_text, "policy": "default", "response_mode": "review"},
             )
             redacted = await session.call_tool(
                 "redact_text",
@@ -363,9 +364,12 @@ async def test_fresh_console_process_uses_active_managed_models(
     assert result.structuredContent is not None
     assert result.structuredContent.get("failure_code") != "contextual_model_not_configured"
     assert result.structuredContent.get("status") != "blocked"
-    assert result.structuredContent["engine_ready"] is True
+    assert result.structuredContent["status"] == "ok"
     assert exact.structuredContent is not None
-    detected = {(item["entity_type"], item["text"]) for item in exact.structuredContent["entities"]}
+    detected = {
+        (item["entity_type"], exact_text[item["start"] : item["end"]])
+        for item in exact.structuredContent["findings"]
+    }
     assert ("person", "Emma de Vries") in detected
     assert ("email", "emma@example.com") in detected
     assert redacted.structuredContent is not None
@@ -462,7 +466,9 @@ def test_stdio_initializes_before_slow_contextual_model_and_loads_once(
         initialize_elapsed = time.perf_counter() - started_at
         assert initialized_response["id"] == 1
         assert "result" in initialized_response
-        assert initialize_elapsed < 2.0
+        # Bound real console startup without treating Windows executable-shim and
+        # antivirus cold-scan variance as contextual-model work.
+        assert initialize_elapsed < PROTOCOL_STARTUP_DEADLINE_SECONDS
         # Heavy work is tied to the standard initialized notification, not the
         # lifespan that must be entered before the initialize response.
         assert not started.exists()
@@ -486,7 +492,13 @@ def test_stdio_initializes_before_slow_contextual_model_and_loads_once(
         assert listed["id"] == 2
         tool_names = {item["name"] for item in listed["result"]["tools"]}  # type: ignore[index]
         assert tool_names.issuperset(
-            {"analyze_text", "redact_text", "restore_text", "create_safe_copy"}
+            {
+                "prepare_for_external_ai",
+                "analyze_text",
+                "redact_text",
+                "restore_text",
+                "create_safe_copy",
+            }
         )
 
         _send_protocol_message(
@@ -506,14 +518,9 @@ def test_stdio_initializes_before_slow_contextual_model_and_loads_once(
         )
         first = _read_protocol_message(process)
         first_payload = first["result"]["structuredContent"]  # type: ignore[index]
-        assert first_payload == {
-            "status": "blocked",
-            "failure_code": "contextual_model_initializing",
-            "reason": (
-                "The required contextual model is still loading. "
-                "Retry the request manually when the model is ready."
-            ),
-        }
+        assert first_payload["status"] == "blocked"
+        assert first_payload["failure_code"] == "contextual_model_initializing"
+        assert first_payload["reason_codes"] == ["contextual_model_initializing"]
         assert not predictions.exists()
 
         gate.write_text("ready", encoding="ascii")
@@ -543,7 +550,7 @@ def test_stdio_initializes_before_slow_contextual_model_and_loads_once(
             request_id += 1
             time.sleep(0.01)
 
-        assert second_payload["engine_ready"] is True
+        assert second_payload["status"] == "ok"
         assert loads.read_text(encoding="ascii").splitlines() == ["load"]
         assert predictions.read_text(encoding="ascii").splitlines() == ["predict"]
     finally:

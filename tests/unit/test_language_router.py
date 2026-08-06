@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from securedact_core.detectors.language_router import (
     LanguageAwareFlairDetector,
     detect_local_language,
@@ -75,6 +77,23 @@ def test_single_enabled_model_is_never_silently_skipped() -> None:
 
     assert router.ready
     assert calls == ["english"]
+
+
+def test_explicit_language_hint_routes_exactly_and_missing_language_fails() -> None:
+    calls: list[str] = []
+    router = LanguageAwareFlairDetector(
+        {
+            "en": RecordingDetector("english", calls),
+            "nl": RecordingDetector("dutch", calls),
+        }
+    )
+
+    router.detect_for_language("Ambiguous synthetic input", "nl")
+    assert calls == ["dutch"]
+
+    english_only = LanguageAwareFlairDetector({"en": RecordingDetector("english", calls)})
+    with pytest.raises(RuntimeError, match="language is unavailable"):
+        english_only.detect_for_language("Nederlandse tekst", "nl")
 
 
 def test_load_initializes_every_child_exactly_once() -> None:

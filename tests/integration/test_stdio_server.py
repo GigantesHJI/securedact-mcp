@@ -32,6 +32,7 @@ async def test_stdio_startup_tool_registration_and_synthetic_redaction(
             await session.initialize()
             tools = await session.list_tools()
             assert {tool.name for tool in tools.tools} == {
+                "prepare_for_external_ai",
                 "analyze_text",
                 "redact_text",
                 "restore_text",
@@ -39,10 +40,10 @@ async def test_stdio_startup_tool_registration_and_synthetic_redaction(
             }
 
             result = await session.call_tool(
-                "redact_text",
+                "prepare_for_external_ai",
                 {
                     "text": "Contact alex.example@example.test",
-                    "policy": "default",
+                    "policy": "strict_external_ai",
                 },
             )
 

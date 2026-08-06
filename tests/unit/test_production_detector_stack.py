@@ -72,11 +72,8 @@ async def test_incomplete_production_stack_never_reports_ready() -> None:
 
     assert not engine.full_ready()
     assert lifecycle.snapshot().deterministic_detectors_ready is False
-    assert result == {
-        "status": "blocked",
-        "failure_code": "privacy_detector_stack_incomplete",
-        "reason": "The required deterministic privacy detector stack is incomplete.",
-    }
+    assert result["status"] == "blocked"
+    assert result["reason_codes"] == ["privacy_detector_stack_incomplete"]
 
 
 def test_exact_duplicate_contextual_email_does_not_duplicate_placeholder() -> None:

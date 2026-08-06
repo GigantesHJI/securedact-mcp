@@ -86,9 +86,12 @@ class PrivacyEngine:
         policy_name: str = "default",
         category_actions: dict[EntityType, PrivacyAction] | None = None,
         *,
+        language: str = "auto",
         advanced_unsafe_mode: bool = False,
         confirmed_allow_categories: set[EntityType] | None = None,
     ) -> AnalysisResult:
+        if language not in {"auto", "en", "nl"}:
+            raise ValueError("Unsupported analysis language")
         policy, actions, policy_exceptions = self.policies.resolve_actions(
             policy_name,
             category_actions,
@@ -116,7 +119,12 @@ class PrivacyEngine:
 
         for detector in detectors:
             try:
-                detected = detector.detect(text)
+                language_detector = getattr(detector, "detect_for_language", None)
+                detected = (
+                    language_detector(text, language)
+                    if detector.contextual and language_detector is not None
+                    else detector.detect(text)
+                )
                 assertion_detector = getattr(detector, "detect_assertions", None)
                 if assertion_detector is not None:
                     assertions.extend(assertion_detector(text))
@@ -143,7 +151,7 @@ class PrivacyEngine:
         for entity in merged:
             if entity.entity_type not in policy.enabled_entity_types:
                 continue
-            if entity.confidence < policy.minimum_confidence:
+            if entity.confidence < policy.threshold_for(entity.entity_type):
                 continue
             action = actions[entity.entity_type]
             controlled_by_assertion = (

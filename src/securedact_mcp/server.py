@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -10,11 +11,17 @@ from typing import Any, cast
 import anyio
 from mcp import types as mcp_types
 from mcp.server.fastmcp import FastMCP
+from pydantic import ValidationError
 
 from securedact_core import (
     InstalledModel,
+    LocalPolicyLoader,
     ModelManager,
+    PolicyLoadError,
     PrivacyEngine,
+    RedactionRequest,
+    RestorationRequest,
+    SecuredactEngine,
     SecuredactPaths,
     build_production_engine,
 )
@@ -286,6 +293,17 @@ def _contextual_block(reason: str, failure_code: str) -> dict[str, str]:
     }
 
 
+def _safe_block(policy: str, failure_code: str) -> dict[str, Any]:
+    return {
+        "schema_version": "1",
+        "status": "blocked",
+        "policy": policy,
+        "counts": {},
+        "failure_code": failure_code,
+        "reason_codes": [failure_code],
+    }
+
+
 def _valid_safe_copy_filename(filename: str) -> bool:
     if not filename or filename in {".", ".."}:
         return False
@@ -397,12 +415,23 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
     runtime = RuntimeBundle(engine) if engine is not None else build_runtime()
     privacy_engine = runtime.engine
     lifecycle = _runtime_lifecycle(runtime)
+    policy_configuration_error: str | None = None
+    try:
+        privacy_engine.policies = LocalPolicyLoader.from_environment().load(privacy_engine.policies)
+    except (PolicyLoadError, OSError, RuntimeError):
+        policy_configuration_error = "policy_configuration_invalid"
+    public_engine = SecuredactEngine(
+        privacy_engine,
+        debug_enabled=os.getenv("SECUREDACT_ENABLE_DEBUG_RESPONSES") == "1",
+        configuration_error=policy_configuration_error,
+    )
 
     @asynccontextmanager
     async def lifespan(_server: FastMCP) -> AsyncIterator[dict[str, object]]:
         try:
             yield {"runtime_lifecycle": lifecycle}
         finally:
+            public_engine.close()
             await anyio.to_thread.run_sync(lifecycle.shutdown)
 
     server = FastMCP("Securedact", json_response=True, lifespan=lifespan)
@@ -419,37 +448,141 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
     )
 
     @server.tool()
-    def analyze_text(text: str, policy: str = "default") -> dict[str, Any]:
-        """Detect personal information locally without transmitting the text."""
+    def prepare_for_external_ai(
+        text: str,
+        policy: str = "strict_external_ai",
+        language: str = "auto",
+        response_mode: str = "minimal",
+    ) -> dict[str, Any]:
+        """Recommended: prepare text locally and return only approved safe output."""
         lifecycle.mark_protocol_ready()
         invalid = _validate_text(text)
         if invalid is not None:
-            return invalid
+            return _safe_block(policy, "input_too_large")
         blocked = lifecycle.privacy_block()
         if blocked is not None:
-            return blocked
-        analysis = privacy_engine.analyze(text, policy)
-        if not analysis.engine_ready:
-            return _contextual_block(
-                "The privacy detector stack is unavailable.",
-                privacy_engine.readiness_failure_code() or "contextual_model_load_failed",
+            return _safe_block(
+                policy,
+                blocked.get("failure_code", "privacy_runtime_unavailable"),
             )
-        return analysis.model_dump(mode="json")
+        try:
+            request = RedactionRequest.model_validate(
+                {
+                    "text": text,
+                    "policy": policy,
+                    "language": language,
+                    "response_mode": response_mode,
+                }
+            )
+        except ValidationError:
+            return _safe_block(policy, "request_invalid")
+        return public_engine.prepare(request).model_dump(mode="json", exclude_none=True)
 
     @server.tool()
-    def redact_text(text: str, policy: str = "default") -> dict[str, Any]:
-        """Replace locally detected personal information with safe placeholders."""
+    def analyze_text(
+        text: str,
+        policy: str = "default",
+        response_mode: str = "minimal",
+    ) -> dict[str, Any]:
+        """Lower-level local review tool; raw details require enabled debug mode."""
         lifecycle.mark_protocol_ready()
         invalid = _validate_text(text)
         if invalid is not None:
-            return invalid
+            return _safe_block(policy, "input_too_large")
         blocked = lifecycle.privacy_block()
         if blocked is not None:
-            return blocked
-        analysis = privacy_engine.analyze(text, policy)
+            return _safe_block(
+                policy,
+                blocked.get("failure_code", "privacy_runtime_unavailable"),
+            )
+        if response_mode not in {"minimal", "review", "debug"}:
+            return _safe_block(policy, "response_mode_invalid")
+        if response_mode == "debug" and not public_engine.debug_enabled:
+            return _safe_block(policy, "debug_mode_disabled")
+        try:
+            selected_policy = privacy_engine.policies.get(policy)
+            analysis = privacy_engine.analyze(text, policy)
+        except ValueError:
+            return _safe_block(policy, "policy_not_found")
+        if not analysis.engine_ready or any(
+            warning.endswith("detector unavailable") for warning in analysis.warnings
+        ):
+            return _safe_block(
+                policy,
+                privacy_engine.readiness_failure_code() or "contextual_model_load_failed",
+            )
+        counts = dict(sorted(Counter(item.entity_type.value for item in analysis.entities).items()))
+        status = (
+            "blocked"
+            if analysis.blocked
+            else "review_required"
+            if analysis.requires_review
+            else "ok"
+        )
+        output: dict[str, Any] = {
+            "schema_version": "1",
+            "status": status,
+            "policy": policy,
+            "policy_version": selected_policy.schema_version,
+            "policy_digest": selected_policy.digest,
+            "counts": counts,
+        }
+        if response_mode in {"review", "debug"}:
+            output["findings"] = [
+                {
+                    "start": item.start,
+                    "end": item.end,
+                    "entity_type": item.entity_type.value,
+                    "action": item.action.value if item.action is not None else "review",
+                    "confidence": item.confidence,
+                    "source": item.source.value,
+                    "reason_code": item.rationale_code,
+                }
+                for item in analysis.entities
+            ]
+        if response_mode == "debug":
+            output["debug_details"] = analysis.model_dump(mode="json")
+        return output
+
+    @server.tool()
+    def redact_text(
+        text: str,
+        policy: str = "default",
+        response_mode: str = "minimal",
+    ) -> dict[str, Any]:
+        """Lower-level compatibility tool; prefer prepare_for_external_ai."""
+        lifecycle.mark_protocol_ready()
+        invalid = _validate_text(text)
+        if invalid is not None:
+            return _safe_block(policy, "input_too_large")
+        blocked = lifecycle.privacy_block()
+        if blocked is not None:
+            return _safe_block(
+                policy,
+                blocked.get("failure_code", "privacy_runtime_unavailable"),
+            )
+        if response_mode != "legacy":
+            try:
+                request = RedactionRequest.model_validate(
+                    {
+                        "text": text,
+                        "policy": policy,
+                        "response_mode": response_mode,
+                    }
+                )
+            except ValidationError:
+                return _safe_block(policy, "request_invalid")
+            return public_engine.prepare(request).model_dump(mode="json", exclude_none=True)
+
+        # Compatibility mode intentionally returns sensitive local-review data.
+        # It is never selected by default and carries an explicit deprecation code.
+        try:
+            analysis = privacy_engine.analyze(text, policy)
+        except ValueError:
+            return _safe_block(policy, "policy_not_found")
         if not analysis.engine_ready:
-            return _contextual_block(
-                "The required contextual model is unavailable.",
+            return _safe_block(
+                policy,
                 privacy_engine.readiness_failure_code() or "contextual_model_load_failed",
             )
         try:
@@ -464,17 +597,65 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         residual = privacy_engine.scan_residual(text, result, analysis, policy)
         if not residual.safe_to_send:
             return {"status": "blocked", "reason": "residual validation failed"}
-        return {"status": "ok", **result.model_dump(mode="json")}
+        return {
+            "schema_version": "legacy-0",
+            "status": "ok",
+            "deprecation_code": "legacy_sensitive_response",
+            **result.model_dump(mode="json"),
+        }
 
     @server.tool()
-    def restore_text(text: str, mapping: dict[str, str]) -> str:
-        """Restore known Securedact placeholders locally."""
+    def restore_text(
+        text: str,
+        restoration_session: str | None = None,
+        mapping: dict[str, str] | None = None,
+        trusted_local_review: bool = False,
+    ) -> dict[str, Any]:
+        """Restore an opaque session; direct mappings require explicit legacy mode."""
         if len(text) > _max_text_chars():
-            raise ValueError("input exceeds the configured size limit")
-        return privacy_engine.restore(text, mapping)
+            return {"schema_version": "1", "status": "blocked", "reason_codes": ["input_too_large"]}
+        if restoration_session is not None and mapping is None:
+            try:
+                request = RestorationRequest(
+                    text=text,
+                    restoration_session=restoration_session,
+                )
+            except ValidationError:
+                return {
+                    "schema_version": "1",
+                    "status": "blocked",
+                    "reason_codes": ["restoration_request_invalid"],
+                }
+            return public_engine.restore(request).model_dump(mode="json", exclude_none=True)
+        if mapping is not None and restoration_session is None and trusted_local_review:
+            mapping_size = sum(
+                len(key.encode("utf-8")) + len(value.encode("utf-8"))
+                for key, value in mapping.items()
+            )
+            if mapping_size > 1024 * 1024:
+                return {
+                    "schema_version": "legacy-0",
+                    "status": "blocked",
+                    "reason_codes": ["legacy_mapping_too_large"],
+                }
+            return {
+                "schema_version": "legacy-0",
+                "status": "ok",
+                "restored_text": privacy_engine.restore(text, mapping),
+                "deprecation_code": "legacy_mapping_restore",
+            }
+        return {
+            "schema_version": "1",
+            "status": "blocked",
+            "reason_codes": ["restoration_session_required"],
+        }
 
     @server.tool()
-    def create_safe_copy(content: str, filename: str, policy: str = "default") -> dict[str, Any]:
+    def create_safe_copy(
+        content: str,
+        filename: str,
+        policy: str = "strict_external_ai",
+    ) -> dict[str, Any]:
         """Write sanitized content to the configured Safe Copies directory only."""
         invalid = _validate_text(content)
         if invalid is not None:
@@ -484,7 +665,10 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             return {"status": "blocked", "reason": "safe copy directory is not configured"}
         if not _valid_safe_copy_filename(filename):
             return {"status": "blocked", "reason": "filename must be a .txt or .md basename"}
-        outcome = cast(dict[str, Any], redact_text(content, policy))
+        outcome = cast(
+            dict[str, Any],
+            prepare_for_external_ai(content, policy, "auto", "minimal"),
+        )
         if outcome.get("status") != "ok":
             return outcome
         root = Path(safe_root_value).expanduser().resolve()
@@ -498,9 +682,10 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         except FileExistsError:
             return {"status": "blocked", "reason": "destination already exists"}
         return {
+            "schema_version": "1",
             "status": "ok",
-            "path": str(target),
-            "entity_counts": outcome["entity_counts"],
+            "filename": filename,
+            "counts": outcome["counts"],
         }
 
     return server

@@ -13,6 +13,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 EXPECTED_TOOLS = {
+    "prepare_for_external_ai",
     "analyze_text",
     "redact_text",
     "restore_text",
@@ -22,6 +23,7 @@ EXPECTED_TOOLS = {
 
 async def smoke_test() -> None:
     command = os.getenv("SECUREDACT_ENTRYPOINT") or shutil.which("securedact-mcp")
+    command_arguments = os.getenv("SECUREDACT_ENTRYPOINT_ARGS", "").split()
     if command is None:
         scripts_directory = Path(sysconfig.get_path("scripts"))
         candidates = (
@@ -41,7 +43,11 @@ async def smoke_test() -> None:
                 "SECUREDACT_REQUIRE_FLAIR": "0",
             }
         )
-        parameters = StdioServerParameters(command=command, env=environment)
+        parameters = StdioServerParameters(
+            command=command,
+            args=command_arguments,
+            env=environment,
+        )
         async with stdio_client(parameters) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
@@ -50,19 +56,20 @@ async def smoke_test() -> None:
                 if names != EXPECTED_TOOLS:
                     raise RuntimeError(f"unexpected MCP tools: {sorted(names)}")
                 result = await session.call_tool(
-                    "redact_text",
+                    "prepare_for_external_ai",
                     {
                         "text": "Contact alex.example@example.test",
-                        "policy": "default",
                     },
                 )
                 content = result.structuredContent
                 if result.isError or content is None:
-                    raise RuntimeError("redact_text smoke call failed")
+                    raise RuntimeError("high-level preparation smoke call failed")
                 if content.get("status") != "ok":
-                    raise RuntimeError("redact_text did not return approved output")
+                    raise RuntimeError("high-level preparation did not approve output")
                 if content.get("sanitized_text") != "Contact [EMAIL_1]":
-                    raise RuntimeError("redact_text returned unexpected sanitized output")
+                    raise RuntimeError("high-level preparation returned unexpected output")
+                if "mapping" in content or "alex.example@example.test" in str(content):
+                    raise RuntimeError("minimal response exposed sensitive content")
 
 
 def main() -> int:

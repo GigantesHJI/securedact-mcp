@@ -144,9 +144,12 @@ Do not broaden filesystem permissions merely to suppress an error.
 
 ## A placeholder does not restore
 
-`restore_text` uses only the supplied mapping. Unknown placeholders remain
-unchanged. Confirm the mapping came from the same local redaction result and has
-not been modified. Never post mappings in public support requests.
+`restore_text` normally consumes the opaque session returned by a successful
+`restore_capable` request. A session expires after 15 minutes by default and is
+single-use; retrying it returns a replay/consumed code. Confirm the same server
+process is still running and the handle was not already consumed. Unknown
+placeholders remain unchanged. Never post handles, mappings, or restored content
+in public support requests.
 
 ## Reporting a problem
 

@@ -73,6 +73,8 @@ def validate_release(tag: str) -> None:
         raise RuntimeError("release_changelog_version_missing")
     if _git("cat-file", "-t", tag) != "tag":
         raise RuntimeError("release_tag_must_be_annotated")
+    if _git("rev-parse", f"{tag}^{{}}") != _git("rev-parse", "HEAD"):
+        raise RuntimeError("release_tag_must_reference_head")
     if _git("status", "--porcelain"):
         raise RuntimeError("release_commit_not_clean")
 
@@ -91,7 +93,7 @@ def create_metadata(dist: Path, output: Path, tag: str) -> dict[str, Any]:
         newline="\n",
     )
     benchmark_path = dist / "quality-deterministic.json"
-    sbom_path = dist / "securedact-mcp.spdx.json"
+    sbom_path = dist / "securedact-mcp.cdx.json"
     metadata = {
         "provenance_version": "1",
         "git_commit": _git("rev-parse", "HEAD"),

@@ -1,0 +1,58 @@
+name: Security audits
+
+on:
+  push:
+    branches: ["main"]
+  schedule:
+    - cron: "31 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.12.2"
+  UV_FROZEN: "1"
+
+jobs:
+  dependency-and-license-audit:
+    name: Dependency and license audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install locked audit environment with bounded transient retries
+        run: |
+          python scripts/retry_network.py -- python -m pip install "uv==${UV_VERSION}"
+          python scripts/retry_network.py -- uv sync --frozen --extra security
+      - name: Audit dependencies and approved licenses
+        run: |
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file dependency-audit-requirements.txt
+          python scripts/retry_network.py -- uv run pip-audit --strict --requirement dependency-audit-requirements.txt
+          uv run pip-licenses --format=json --output-file=dependency-licenses.json
+          uv run python scripts/validate_dependency_licenses.py dependency-licenses.json
+
+  secret-scan:
+    name: Full-history secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

@@ -6,27 +6,33 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: real-model-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   flair-quality-and-performance:
     name: Pre-provisioned Flair benchmark
     runs-on: [self-hosted, securedact-models]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - run: python -m pip install "uv==0.12.2"
-      - run: uv sync --frozen --extra ml --extra dev --extra benchmark
-      - name: Evaluate pre-provisioned local Flair model
+      - name: Install locked model environment with bounded transient retries
+        run: |
+          python scripts/retry_network.py -- python -m pip install "uv==0.12.2"
+          python scripts/retry_network.py -- uv sync --frozen --extra ml --extra dev --extra benchmark
+      - name: Evaluate the pre-provisioned local Flair model
         env:
           SECUREDACT_EVAL_FLAIR_MODEL: ${{ vars.SECUREDACT_EVAL_FLAIR_MODEL }}
           SECUREDACT_EVAL_MODEL_ID: ${{ vars.SECUREDACT_EVAL_MODEL_ID }}
         run: |
-          uv run python -m securedact_eval quality --mode flair --corpus benchmarks/corpora --output-dir real-model-results
-          uv run python -m securedact_eval performance --mode flair --repetitions 20 --warmups 3 --output real-model-results/performance-flair.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: real-model-benchmark-results
-          path: real-model-results/
-          if-no-files-found: error
+          uv run python -m securedact_eval quality --mode flair --corpus benchmarks/corpora --aggregate-only --format markdown >> "$GITHUB_STEP_SUMMARY"
+          uv run python -m securedact_eval performance --mode flair --repetitions 20 --warmups 3 --output real-model-performance.json
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat real-model-performance.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

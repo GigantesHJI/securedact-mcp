@@ -21,10 +21,13 @@ REQUIRED_FILES = {
     ".github/CODEOWNERS",
     ".github/dependabot.yml",
     ".github/pull_request_template.md",
-    ".github/workflows/ci.yml",
+    ".github/actions-lock.yml",
+    ".github/workflows/benchmark-scheduled.yml",
+    ".github/workflows/ci-essential.yml",
     ".github/workflows/codeql.yml",
     ".github/workflows/real-model-benchmark.yml",
     ".github/workflows/release.yml",
+    ".github/workflows/security.yml",
     "CHANGELOG.md",
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
@@ -35,6 +38,8 @@ REQUIRED_FILES = {
     "SECURITY.md",
     "docs/architecture.md",
     "docs/benchmarking.md",
+    "docs/benchmark-migration.md",
+    "docs/ci-troubleshooting.md",
     "docs/compatibility.md",
     "docs/conflict-resolution.md",
     "docs/governance.md",
@@ -71,7 +76,10 @@ REQUIRED_FILES = {
     "scripts/validate_dependency_licenses.py",
     "scripts/smoke_test_entrypoint.py",
     "scripts/validate_release_artifacts.py",
+    "scripts/validate_repository_size.py",
     "scripts/validate_repo.py",
+    "scripts/validate_workflows.py",
+    "scripts/verify.py",
     "src/securedact_core/api.py",
     "src/securedact_core/detectors/credentials_detector.py",
     "src/securedact_core/policy_loader.py",
@@ -88,6 +96,10 @@ REQUIRED_FILES = {
     "tests/unit/test_production_detector_stack.py",
     "tests/unit/test_runtime_lifecycle.py",
     "benchmarks/baselines/quality-deterministic.json",
+    "benchmarks/README.md",
+    "benchmarks/fixtures/smoke/manifest.json",
+    "benchmarks/generators/profiles.yml",
+    "benchmarks/registry/sources.yml",
     "benchmarks/corpora/manifest.json",
     "benchmarks/thresholds.json",
     "integrations/codex/README.md",
@@ -263,7 +275,12 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
             errors.append(f"personal Windows path found: {relative}")
 
         synthetic_fixture = relative.startswith(
-            ("tests/", "benchmarks/corpora/", "examples/synthetic-test-prompts.md")
+            (
+                "tests/",
+                "benchmarks/corpora/",
+                "benchmarks/fixtures/",
+                "examples/synthetic-test-prompts.md",
+            )
         )
         if relative != "scripts/validate_repo.py" and not synthetic_fixture:
             for name, pattern in SECRET_PATTERNS.items():

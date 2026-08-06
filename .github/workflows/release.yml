@@ -3,9 +3,14 @@ name: Signed release
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   UV_VERSION: "0.12.2"
@@ -14,22 +19,29 @@ env:
 jobs:
   verify-and-build:
     name: Verify and build exact release artifacts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - run: python -m pip install "uv==${UV_VERSION}"
-      - run: uv sync --frozen --extra dev --extra benchmark --extra security
+      - name: Install locked release environment with bounded transient retries
+        run: |
+          python scripts/retry_network.py -- python -m pip install "uv==${UV_VERSION}"
+          python scripts/retry_network.py -- uv sync --frozen --extra dev --extra benchmark --extra security
       - name: Validate annotated tag, version, changelog, and clean commit
         run: uv run python scripts/release_metadata.py validate
       - name: Repository, format, lint, and strict type gates
         run: |
           uv lock --check
           uv run python scripts/validate_repo.py --require-implementation
+          uv run python scripts/validate_repository_size.py
+          uv run python scripts/validate_workflows.py
           uv run python -m ruff format --check .
           uv run python -m ruff check .
           uv run python -m mypy src scripts
@@ -38,40 +50,34 @@ jobs:
           SECUREDACT_REQUIRE_FLAIR: "0"
         run: |
           uv run python -m pytest
-          uv run python -m pytest tests/privacy
-          uv run python -m pytest tests/evaluation
           uv run python scripts/run_privacy_tests.py
-      - name: Deterministic release gate
-        run: uv run python -m securedact_eval quality --mode deterministic --gate --thresholds benchmarks/thresholds.json --baseline benchmarks/baselines/quality-deterministic.json --output-dir dist
-      - name: Deterministic performance report and broad latency gate
-        run: uv run python -m securedact_eval performance --mode deterministic --repetitions 20 --warmups 3 --gate --thresholds benchmarks/thresholds.json --output dist/performance-deterministic.json
+      - name: Deterministic release gates
+        run: |
+          uv run python -m securedact_eval quality --mode deterministic --gate --thresholds benchmarks/thresholds.json --baseline benchmarks/baselines/quality-deterministic.json --aggregate-only --output-dir dist
+          uv run python -m securedact_eval performance --mode deterministic --repetitions 20 --warmups 3 --gate --thresholds benchmarks/thresholds.json --output dist/performance-deterministic.json
       - name: Build, metadata check, and artifact inspection
         run: |
-          uv run python -m build
+          uv run python -m build --no-isolation
           uv run python -m twine check dist/*
           uv run python scripts/validate_release_artifacts.py dist
       - name: Clean-install exact wheel and smoke-test console and MCP protocol
         run: |
           uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file dist/runtime-requirements.txt
           uv venv .clean-venv --python 3.12
-          uv pip install --python .clean-venv/bin/python --requirements dist/runtime-requirements.txt
+          python scripts/retry_network.py -- uv pip install --python .clean-venv/bin/python --requirements dist/runtime-requirements.txt
           uv pip install --python .clean-venv/bin/python --no-deps dist/*.whl
           .clean-venv/bin/python scripts/smoke_test_entrypoint.py
           .clean-venv/bin/python scripts/smoke_test_mcp.py .clean-venv/bin/securedact-mcp
       - name: Dependency and license audit
         run: |
-          uv run pip-audit --strict --requirement dist/runtime-requirements.txt
+          python scripts/retry_network.py -- uv run pip-audit --strict --requirement dist/runtime-requirements.txt
           uv run pip-licenses --format=json --output-file=dist/dependency-licenses.json
           uv run python scripts/validate_dependency_licenses.py dist/dependency-licenses.json
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          path: .
-          format: spdx-json
-          output-file: dist/securedact-mcp.spdx.json
-          upload-artifact: false
+      - name: Generate CycloneDX SBOM with the locked Python tool
+        run: uv run cyclonedx-py environment --output-format JSON --output-file dist/securedact-mcp.cdx.json
       - name: Generate checksums and repository provenance record
         run: uv run python scripts/release_metadata.py metadata
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: securedact-mcp-release-candidate
           path: dist/*
@@ -80,13 +86,17 @@ jobs:
   sign-attest-and-publish:
     name: Keyless sign, attest, and attach to GitHub release
     needs: [verify-and-build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: securedact-mcp-release-candidate
           path: dist
@@ -96,7 +106,7 @@ jobs:
             ./dist/*.whl
             ./dist/*.tar.gz
             ./dist/SHA256SUMS
-            ./dist/securedact-mcp.spdx.json
+            ./dist/securedact-mcp.cdx.json
             ./dist/provenance.json
       - uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e # v4
         with:
@@ -104,9 +114,9 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             dist/SHA256SUMS
-            dist/securedact-mcp.spdx.json
+            dist/securedact-mcp.cdx.json
             dist/provenance.json
       - name: Create GitHub release and attach verified artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes --title "Securedact MCP ${GITHUB_REF_NAME}"
+        run: python scripts/retry_network.py --attempts 3 --attempt-timeout 180 --overall-timeout 420 -- gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes --title "Securedact MCP ${GITHUB_REF_NAME}"

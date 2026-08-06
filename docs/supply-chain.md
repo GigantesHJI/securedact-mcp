@@ -10,10 +10,16 @@ test/evaluation gates, `pip-audit`, and regenerated license/SBOM evidence.
 ## GitHub Actions
 
 Third-party actions are pinned to full commit SHAs with a nearby release tag
-comment. Dependabot proposes updates. Reviewers must inspect the upstream tag,
+comment and declared in `.github/actions-lock.yml`; local validation rejects mutable, short,
+undeclared, or mismatched references without downloading actions. Dependabot proposes updates.
+Reviewers must inspect the upstream tag,
 commit ownership/diff, permissions, release notes, and workflow behavior before
 accepting a new SHA. Actions receive job-scoped least privilege; untrusted pull
 requests never receive publish permissions.
+
+Essential CI uses only official checkout and Python-setup actions. Security scans, CodeQL, scheduled
+benchmarks, and tag-only signing/provenance are isolated. See [CI troubleshooting](ci-troubleshooting.md)
+for pre-step action-resolution failures and safe reruns.
 
 ## Artifacts, signing, and provenance
 

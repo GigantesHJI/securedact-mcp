@@ -50,7 +50,7 @@ python -m mypy src scripts
 python -m pytest
 python -m pytest tests\privacy
 python -m securedact_eval quality --mode deterministic
-python -m build
+python -m build --no-isolation
 python -m twine check dist\*
 python scripts\validate_release_artifacts.py dist
 ```

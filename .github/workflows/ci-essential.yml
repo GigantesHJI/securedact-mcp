@@ -1,0 +1,114 @@
+name: Essential CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: essential-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.12.2"
+  UV_FROZEN: "1"
+
+jobs:
+  repository-hygiene:
+    name: Repository, format, lint, and types
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install locked environment with bounded transient retries
+        run: |
+          python scripts/retry_network.py -- python -m pip install "uv==${UV_VERSION}"
+          python scripts/retry_network.py -- uv sync --frozen --extra dev --extra benchmark
+      - name: Validate the repository and benchmark boundaries
+        run: |
+          uv lock --check
+          uv run python scripts/validate_repo.py --require-implementation
+          uv run python scripts/validate_repository_size.py
+          uv run python scripts/validate_workflows.py
+          uv run python -m securedact_eval validate --dataset benchmarks/fixtures/smoke
+      - name: Check formatting, lint, and types
+        run: |
+          uv run python -m ruff format --check .
+          uv run python -m ruff check .
+          uv run python -m mypy src scripts
+
+  tests:
+    name: Tests / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install locked environment with bounded transient retries
+        run: |
+          python scripts/retry_network.py -- python -m pip install "uv==${{ env.UV_VERSION }}"
+          python scripts/retry_network.py -- uv sync --frozen --extra dev --extra benchmark
+      - name: Run the full synthetic suite
+        env:
+          SECUREDACT_REQUIRE_FLAIR: "0"
+        run: uv run python -m pytest
+      - name: Parse the Windows bootstrap installer
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/install-securedact-mcp.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
+  package:
+    name: Build and clean-install package
+    needs: [repository-hygiene, tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install locked build environment with bounded transient retries
+        run: |
+          python scripts/retry_network.py -- python -m pip install "uv==${UV_VERSION}"
+          python scripts/retry_network.py -- uv sync --frozen --extra dev
+      - name: Build, inspect, and clean-install
+        run: |
+          uv run python -m build --no-isolation
+          uv run python -m twine check dist/*
+          uv run python scripts/validate_release_artifacts.py dist
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file dist/runtime-requirements.txt
+          uv venv .clean-venv --python 3.12
+          python scripts/retry_network.py -- uv pip install --python .clean-venv/bin/python --requirements dist/runtime-requirements.txt
+          uv pip install --python .clean-venv/bin/python --no-deps dist/*.whl
+          .clean-venv/bin/python scripts/smoke_test_entrypoint.py
+          .clean-venv/bin/securedact-mcp --help

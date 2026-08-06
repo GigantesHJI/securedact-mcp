@@ -154,12 +154,7 @@ security extras for Python 3.12.
 
 ```powershell
 uv sync --frozen --extra dev --extra benchmark
-uv run python scripts\validate_repo.py --require-implementation
-uv run python -m ruff format --check .
-uv run python -m ruff check .
-uv run python -m mypy src scripts
-uv run python -m pytest
-uv run python -m pytest tests\privacy
+uv run python scripts\verify.py
 ```
 
 Never use real personal information, private documents, credentials, customer
@@ -182,6 +177,11 @@ are document-level negative examples, not token-level safety. The GDPR-related
 suite is detection evaluation, not legal compliance certification. Real Flair
 and GPU benchmarks require an explicitly configured local model and are not
 ordinary CI. See [benchmarking](docs/benchmarking.md).
+The [benchmark framework](benchmarks/README.md) documents local data tiers and large profiles;
+the [migration plan](docs/benchmark-migration.md) defines its future extraction boundary. For a
+failure before GitHub executes repository steps, use the
+[CI troubleshooting decision tree](docs/ci-troubleshooting.md). Local success does not replace a
+required GitHub check.
 
 ## Security and limitations
 

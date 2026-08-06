@@ -12,18 +12,43 @@ Ordinary tests never download models or contact an AI provider.
 ## Complete local verification
 
 ```powershell
+uv run python scripts\verify.py
+```
+
+That is the primary parity command. It checks the lock, repository/data/workflow boundaries,
+smoke manifest, formatting, lint, types, full test suite, aggregate smoke evaluation, package build,
+Twine metadata, and artifact contents. The corresponding commands and additional release gates are:
+
+```powershell
 uv lock --check
-uv run python scripts\validate_repo.py
+uv run python scripts\validate_repo.py --require-implementation
+uv run python scripts\validate_repository_size.py
+uv run python scripts\validate_workflows.py
+uv run securedact-eval validate --dataset benchmarks\fixtures\smoke
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy src scripts
 uv run pytest
+# Included in the full pytest invocation; useful as a focused rerun:
 uv run python scripts\run_privacy_tests.py
+# Additional versioned release gates:
 uv run securedact-eval quality --corpus benchmarks\corpora --gate --baseline benchmarks\baselines\quality-deterministic.json --output-dir build\evaluation
 uv run securedact-eval performance --mode deterministic --gate --output build\evaluation\performance-deterministic.json
-uv run python -m build
+uv run python -m build --no-isolation
 uv run python -m twine check dist\*
 uv run python scripts\validate_release_artifacts.py dist
+```
+
+The essential package job additionally proves a clean installation. Reproduce that network-using
+tail after the build with:
+
+```powershell
+uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file dist\runtime-requirements.txt
+uv venv .clean-venv --python 3.12
+$cleanPython = if ($IsWindows) { ".clean-venv\Scripts\python.exe" } else { ".clean-venv/bin/python" }
+uv pip install --python $cleanPython --requirements dist\runtime-requirements.txt
+uv pip install --python $cleanPython --no-deps (Get-ChildItem dist\*.whl).FullName
+& $cleanPython scripts\smoke_test_entrypoint.py
 ```
 
 The suite covers all five MCP tools, minimal/review/debug/restore-capable

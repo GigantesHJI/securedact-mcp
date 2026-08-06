@@ -50,7 +50,7 @@ Implemented properties:
 - fail-closed behavior when required detection capability is unavailable;
 - exact residual validation before output is marked approved;
 - restricted safe-copy directories and supported file types;
-- caller-supplied mappings with no server-side persistence;
+- minimal-by-default responses and bounded, single-use in-memory restoration sessions;
 - no telemetry;
 - no shell execution or unrestricted filesystem access.
 - consent-based model setup restricted to three official Hugging Face repository
@@ -109,17 +109,21 @@ CI and release tests must include sensitive canaries and stdout-capture checks.
 
 ## Placeholder and restoration security
 
-Mappings reconnect placeholders to original sensitive values and must be treated
-as secrets:
+Mappings reconnect placeholders to original sensitive values and are held only
+when `restore_capable` is explicitly requested:
 
-- `redact_text` returns the mapping to the local caller;
-- the server does not retain a mapping vault or restoration session;
-- `restore_text` uses only the mapping supplied on that call;
-- unknown placeholders remain unchanged;
-- mappings must remain out of logs and external payloads.
+- minimal, review, and debug preparation do not create a restoration session;
+- the bounded in-memory vault uses cryptographically random opaque handles;
+- sessions expire after 15 minutes by default and are consumed once;
+- capacity and mapped-byte limits prevent unbounded retention;
+- mappings are erased on consume, expiry, cleanup, close, or process exit;
+- mappings and handles are never logged or returned together;
+- malformed, unknown, expired, and replayed handles fail with safe codes.
 
-The host is responsible for access control, isolation, expiry, and secure
-destruction of mappings. This is a material current limitation.
+The deprecated direct-mapping MCP route requires
+`trusted_local_review: true`. Anyone able to restore a session can recover its
+values, so the host must still protect handles and restored output. The vault is
+not encrypted persistent storage and does not survive process termination.
 
 ## Residual leakage and model availability
 
@@ -132,7 +136,7 @@ incompatible, or fails integrity validation, approval must fail closed. A weaker
 fallback must never be selected silently.
 
 Full readiness also requires the production deterministic detector invariant:
-the validated regex detector and contextual rule detector must both be present.
+the validated regex, credentials, and contextual-rule detectors must all be present.
 An incomplete stack returns `privacy_detector_stack_incomplete`, even if Flair
 loaded successfully. This prevents a runtime-construction regression from
 silently dropping canonical email and identifier coverage.
@@ -145,8 +149,8 @@ than skipping contextual analysis.
 ## Dependency and supply-chain security
 
 - Keep runtime dependencies minimal and constrained.
-- Separate developer and optional ML dependencies.
-- Review lock or reproducible-resolution strategy before release.
+- Separate developer, benchmark, security, and optional ML dependencies.
+- Use the committed lock with frozen resolution in CI and release jobs.
 - Verify model origin, license, version, and integrity.
 - Allow model downloads only from registry-approved official Hugging Face
   repositories at immutable commits; never accept arbitrary repository IDs or
@@ -159,8 +163,10 @@ than skipping contextual analysis.
 - Do not accept successful loading through an ambient Hugging Face cache as
   installation proof. The verifier starts a clean child process, disables user
   site imports, and points all cache variables at Securedact-managed storage.
-- Pin GitHub Actions to reviewed revisions for production release.
-- Scan commits and release artifacts for secrets and unexpected files.
+- Keep GitHub Actions pinned to reviewed full commit SHAs.
+- Scan commits and release artifacts for secrets and unexpected files; audit
+  dependencies/licenses and attach SBOM, checksums, keyless signature, and
+  build provenance.
 - Do not commit or publish model checkpoints, logs, mappings, databases, safe
   copies, environment files, credential exports, or user data.
 

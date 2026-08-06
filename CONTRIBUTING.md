@@ -1,65 +1,100 @@
 # Contributing to Securedact MCP
 
-Thank you for helping improve Securedact MCP. Privacy and accuracy take
-precedence over feature velocity.
+Securedact MCP is an Apache-2.0 open-source project. Privacy, predictable
+interfaces, and fail-closed behavior take precedence over feature velocity.
 
 ## Repository boundary
 
-This repository contains the standalone MCP adapter and provider-independent
-privacy engine imported from the tested Securedact source. Keep it independent
-from desktop, Tauri, FastAPI gateway, provider, and website code.
+This repository contains only the local MCP server and provider-neutral privacy
+engine. The separately released enforceable Securedact gateway is not part of
+this project. Do not add provider clients, provider request forwarding, a reverse
+proxy, chatbot UI, website, desktop client, or claims of universal prompt
+interception.
 
-## Before opening a change
+## Data safety
 
-1. Open an issue for substantial architecture or tool-contract changes.
-2. Use only synthetic data in code, tests, examples, issues, and pull requests.
-3. Never include model checkpoints, logs, mappings, credentials, or local data.
-4. Preserve fail-closed behavior and the host-invocation limitation.
-5. Update `CHANGELOG.md` under `Unreleased`.
+Use synthetic data everywhere: code, tests, fixtures, issues, screenshots, logs,
+benchmarks, and pull requests. Never submit private documents, real personal
+data, credentials, tokens, mappings, model weights, customer material, or local
+paths containing a username. Use reserved examples such as `example.test` and
+obviously inactive credential shapes.
 
 ## Development setup
+
+Python 3.12 is the supported development version. With `uv` installed:
+
+```powershell
+uv sync --frozen --extra dev
+uv run python -m pytest
+```
+
+For an editable pip environment:
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
+
+Real Flair checkpoints are not required for ordinary development or CI. Tests
+use tiny local fakes. Installing `[ml]` or downloading a real model is an
+explicit local choice; review the upstream terms first.
 
 ## Required checks
 
 ```powershell
-python scripts\validate_repo.py
+python scripts\validate_repo.py --require-implementation
 python -m ruff format --check .
 python -m ruff check .
-python -m mypy src\securedact_mcp scripts
+python -m mypy src scripts
 python -m pytest
-python scripts\run_privacy_tests.py
+python -m pytest tests\privacy
+python -m securedact_eval quality --mode deterministic
 python -m build
 python -m twine check dist\*
+python scripts\validate_release_artifacts.py dist
 ```
 
-## Privacy-sensitive changes
+Update `CHANGELOG.md` under `Unreleased` for user-visible changes. Detector,
+policy, merge, restoration, response-schema, residual-validation, model-loading,
+or safe-copy changes need focused synthetic tests and a threat-model review.
 
-Changes to detectors, policies, merging, redaction, residual checks, mappings,
-model loading, safe-copy behavior, tool schemas, or result status require:
+## Contribution sign-off
 
-- focused synthetic unit tests;
-- end-to-end MCP tests where the tool contract changes;
-- privacy-corpus evaluation;
-- documentation and threat-model updates;
-- an explanation of whether false negatives or raw-value exposure can increase.
+The project uses the Developer Certificate of Origin 1.1 process. Add a
+`Signed-off-by: Name <email>` trailer to each commit (for example with
+`git commit -s`). The sign-off certifies that you have the right to submit the
+contribution under the project's license. It is not a copyright assignment.
 
-Do not create a second independent copy of privacy logic.
+## Review and governance
 
-## Pull requests
+- Maintainers triage issues, protect the privacy boundary, review compatibility,
+  keep release automation reproducible, and coordinate private disclosures.
+- At least one maintainer review is expected for all changes. Security-sensitive
+  areas should receive a second knowledgeable review before release.
+- Reviews check schema compatibility, safe failure modes, synthetic-data use,
+  test evidence, documentation, and whether false negatives or exposure can rise.
+- Public contracts follow semantic versioning after the first stable release.
+  During `0.x`, breaking changes remain possible but require migration notes and
+  an explicit changelog entry.
+- Stable serialized schemas carry their own `schema_version`. Breaking schema or
+  policy changes require a new version; fields are deprecated before removal
+  whenever safety permits.
+- Supported Python, operating-system, MCP, and model compatibility is changed
+  only with evidence-backed CI or documented manual verification.
 
-Keep changes focused. Explain privacy impact, threat-model impact, validation
-performed, and remaining limitations. All checks must pass before merge. Do not
-merge directly to `main`.
+Suggested issue categories are `bug`, `security` (private report only),
+`enhancement`, `detector-quality`, `policy`, `integration`, `documentation`, and
+`release`. Maintainers should document GitHub settings they cannot verify rather
+than claiming those controls are enabled.
 
-## Security reports
+## Pull requests and security reports
 
-Do not disclose suspected vulnerabilities in public issues. Follow
-[SECURITY.md](SECURITY.md).
+Keep changes scoped and explain privacy impact, threat-model impact, validation,
+and remaining limitations. Do not merge directly to `main`. Suspected
+vulnerabilities or accidental data exposure must be reported privately as
+described in [SECURITY.md](SECURITY.md), never in a public issue.
 
+Dependencies and external model weights keep their own licenses. A contribution
+under Apache-2.0 does not relicense those third-party materials; see
+[Third-party licenses](docs/third-party-licenses.md).

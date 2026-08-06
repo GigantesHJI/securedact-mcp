@@ -1,109 +1,82 @@
 # Architecture
 
-## Repository boundary
+## Product boundary
+
+Securedact is a local `stdio` MCP server plus a provider-neutral Python privacy
+engine. It has no desktop shell, web UI, HTTP API, AI-provider adapter,
+telemetry, unrestricted file reader, or model checkpoint in the package.
 
 ```text
-src/
-├── securedact_mcp/
-│   ├── cli.py
-│   ├── server.py
-│   ├── model_registry.py
-│   ├── model_installer.py
-│   └── model_store.py
-└── securedact_core/
-    ├── detectors/
-    ├── engine.py
-    ├── policies.py
-    ├── redaction.py
-    ├── model_management.py
-    └── supporting privacy modules
+MCP host
+  -> Securedact stdio adapter
+     -> request/schema and size validation
+     -> local policy selection
+     -> deterministic credentials + identifier detectors
+     -> optional verified local Flair detector
+     -> deterministic merge and policy action
+     -> redaction and residual validation
+     -> minimal structured result
+  -> host checks status == "ok"
+  -> host sends sanitized_text only
 ```
 
-`securedact_mcp` owns the MCP adapter and guided model lifecycle.
-`securedact_core` remains the provider-independent local privacy engine. No
-desktop, Tauri, website, FastAPI gateway, provider adapter, or checkpoint is
-included.
+The recommended operation is the single high-level
+`prepare_for_external_ai` tool. Lower-level analysis and redaction operations
+exist for trusted local review and compatibility. MCP registration cannot force
+a host to invoke Securedact or prevent the host from separately forwarding the
+original input.
 
-## Setup and runtime separation
+## Code ownership
 
-```text
-pip install securedact-mcp[ml]
-        |
-        | deterministic package install; no model network I/O
-        v
-securedact-mcp install
-        |
-        | consent + pinned official Hugging Face snapshot
-        v
-staging -> hashes/manifest -> offline Flair test -> atomic activation
+- `securedact_core` owns typed schemas, detection, deterministic merge, policy
+  decisions, redaction, residual validation, and bounded restoration sessions.
+- `securedact_mcp` owns MCP schemas, runtime readiness, managed local-model
+  lifecycle, safe-copy restrictions, and `stdio` protocol integrity.
+- `securedact_eval` owns versioned corpus validation, quality metrics,
+  confidence intervals, performance measurement, reports, and release gates.
+- `integrations` contains examples only; hosts remain responsible for routing
+  and approved-field selection.
 
-MCP host -> securedact-mcp (stdio) -> verified local model -> privacy engine
-```
+All production detector stacks require the regex, credentials, and curated
+contextual-rule layers. Contextual Flair coverage is required by default and
+must come from the verified managed model store. Initialization remains fast;
+model validation/loading starts after the MCP initialized notification, and
+calls made while loading fail closed without queuing their input.
 
-The default `securedact-mcp` command starts the `stdio` server. It never invokes
-the installer or contacts Hugging Face. Human setup output goes to stderr;
-protocol stdout remains reserved for MCP JSON-RPC.
+## Decisions and data flow
 
-## Runtime flow
+`minimal` responses contain status, policy metadata, aggregate counts, reason
+codes, and—only for an approved result—`sanitized_text`. `review` adds offsets
+and classifications without raw substrings. `debug` may include raw values, but
+is disabled unless the process started with
+`SECUREDACT_ENABLE_DEBUG_RESPONSES=1`. `restore_capable` returns an opaque local
+session handle instead of a mapping.
 
-```text
-MCP host or agent workflow
-        |
-        | stdio / JSON-RPC
-        v
-Securedact MCP
-        ├── schema validation
-        ├── deterministic + contextual detection
-        ├── policy decision
-        ├── redaction / placeholder mapping
-        ├── residual validation
-        └── restricted safe-copy output
-        |
-        v
-structured local result -> host uses approved sanitized_text only
-```
+Blocked and review-required responses never contain `sanitized_text`.
+Credentials and special-category data block under `strict_external_ai`.
+Residual validation is mandatory for approved high-level output.
 
-The host controls whether a tool is invoked and whether its output is used. MCP
-does not provide universal interception by itself.
+## Restoration and safe copies
 
-## Responsibilities
+Restoration mappings live only in a bounded, synchronized in-memory vault.
+Handles are random, expire after 15 minutes by default, and can be consumed
+once. Mappings are erased on consumption, expiry, cleanup, engine close, or
+process exit. The MCP compatibility route accepting a direct mapping requires
+`trusted_local_review: true` and is deprecated.
 
-The MCP adapter registers exactly `analyze_text`, `redact_text`, `restore_text`,
-and `create_safe_copy`; converts local engine results; preserves review/block
-outcomes; applies text and filesystem limits; and runs over `stdio`.
+`create_safe_copy` accepts content, not a source path. It sanitizes through the
+same high-level operation, creates only a `.txt` or `.md` basename under a
+configured root, refuses overwrite, and returns a filename rather than an
+absolute path.
 
-The privacy engine owns deterministic/checksum detection, curated English/Dutch
-rules and assertions, local Flair NER, merge precedence, policy actions, typed
-replacement, restoration, and residual checks. It contains no provider-specific
-logic.
+## Setup/runtime separation
 
-The model subsystem owns one versioned allowlist, user consent, official pinned
-downloads, storage restrictions, local manifests, integrity verification,
-offline smoke testing, activation, rollback, active-language configuration, and
-runtime selection. With both models enabled, certain language selects one model;
-uncertain language runs both conservatively.
+Package installation and normal MCP startup perform no model download. The
+separate consent-gated installer fetches only allowlisted immutable official
+Hugging Face snapshots into staging, verifies exact manifests and hashes, runs
+an offline fresh-process Flair load, then activates atomically. Runtime is
+offline and re-verifies managed state.
 
-The MCP host must invoke the correct tools, keep analysis/mappings local, resolve
-review decisions, require `status == "ok"`, and send only `sanitized_text`
-downstream.
-
-## Restoration and safe-copy boundaries
-
-`redact_text` returns a mapping to the local caller; `restore_text` accepts a
-mapping on each call. The process does not persist restoration sessions. The host
-therefore owns mapping isolation, retention, and destruction.
-
-`create_safe_copy` accepts content strings rather than source paths, permits only
-`.txt`/`.md` basenames under a configured root, rejects traversal and drive
-prefixes, and creates without overwrite.
-
-## Excluded architecture
-
-- desktop or Tauri code;
-- provider dispatch;
-- web UI or website;
-- telemetry;
-- shell execution;
-- unrestricted filesystem tools;
-- package-install hooks or import-time downloads;
-- embedded or redistributed model checkpoints.
+See the product-boundary decision in
+[ADR 0001](adr/0001-mcp-server-product-boundary.md) and the bypass warning in
+[Privacy model](privacy-model.md).

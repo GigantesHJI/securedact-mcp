@@ -3,7 +3,7 @@
 ## Scope
 
 This threat model covers the local Securedact MCP server, its `stdio` protocol
-boundary, privacy engine, caller-managed mappings, consent-based model setup,
+boundary, privacy engine, in-memory restoration vault, consent-based model setup,
 runtime model loading, and safe-copy output.
 
 ## Assets
@@ -65,7 +65,7 @@ The host may select the wrong field or send a pre-audit value.
 
 Controls:
 
-- residual validation inside `redact_text`;
+- residual validation inside the high-level preparation operation;
 - fail-closed status on review, policy, model, and residual failures;
 - one documented approved field: `sanitized_text`;
 - no provider package or provider call in this repository.
@@ -88,19 +88,22 @@ Controls:
 Residual risk: operating-system compromise, filesystem races outside the process
 trust boundary, and a maliciously configured root.
 
-### Placeholder mapping disclosure
+### Restoration-session disclosure or replay
 
-Mappings reveal original values.
+Mappings reveal original values, and a stolen live handle can restore them.
 
 Controls:
 
-- no server-side mapping persistence;
-- mappings returned only to the local MCP caller;
-- unknown placeholders preserved;
-- no mapping logging.
+- mappings are never returned by the safe high-level operation;
+- 256-bit opaque handles, short expiry, single-use consumption, and bounded
+  storage;
+- synchronized consume/cleanup and bounded hashed replay tombstones;
+- erasure on consume, expiry, close, or exit;
+- no mapping, handle, or restored-value logging;
+- direct caller mappings require an explicit deprecated trusted-local mode.
 
-Residual risk: the host owns mapping isolation, retention, and access control.
-There is no server-side session isolation or encrypted mapping vault.
+Residual risk: the host owns handle access control. Memory compromise can expose
+live mappings; the vault is intentionally ephemeral, not encrypted persistence.
 
 ### Residual or indirect disclosure
 
@@ -170,8 +173,9 @@ Python packages, actions, build tools, or model artifacts may be compromised.
 
 Controls:
 
-- constrained Python dependencies and separate optional ML extra;
-- CI secret scanning and artifact inspection;
+- frozen Python dependencies and separate ML, benchmark, and security extras;
+- pinned CI actions, secret scanning, dependency/license audit, SBOM generation,
+  and artifact inspection;
 - no model checkpoints in source distributions or wheels;
 - release build and clean-install smoke test;
 - model integrity checks;
@@ -185,8 +189,8 @@ exact pinned digest reduce substitution risk but do not establish that upstream
 content is harmless. The upstream model cards currently omit a clear separate
 model-weight license identifier; citations are not license grants.
 
-Before a public production release, pin GitHub Actions to reviewed commit hashes
-and adopt a reproducible dependency-resolution policy.
+Release artifacts are signed keylessly and receive GitHub build provenance.
+Action and lock updates follow the review process in `docs/supply-chain.md`.
 
 ## Out of scope
 

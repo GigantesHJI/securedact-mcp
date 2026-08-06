@@ -1,72 +1,112 @@
-name: Release artifacts
+name: Signed release
 
 on:
-  workflow_dispatch:
-  release:
-    types: [published]
+  push:
+    tags: ["v*.*.*"]
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  UV_VERSION: "0.12.2"
+  UV_FROZEN: "1"
 
 jobs:
-  build-release:
+  verify-and-build:
+    name: Verify and build exact release artifacts
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-          cache: pip
-
-      - name: Install development dependencies
-        run: python -m pip install -e ".[ml,dev]"
-
-      - name: Report Python and ML dependency versions
+      - run: python -m pip install "uv==${UV_VERSION}"
+      - run: uv sync --frozen --extra dev --extra benchmark --extra security
+      - name: Validate annotated tag, version, changelog, and clean commit
+        run: uv run python scripts/release_metadata.py validate
+      - name: Repository, format, lint, and strict type gates
         run: |
-          python --version
-          python -m pip show flair huggingface-hub
-          python -c "import flair; import huggingface_hub; print('ML dependency imports succeeded')"
-
-      - name: Validate repository
-        run: python scripts/validate_repo.py --require-implementation
-
-      - name: Check formatting, lint, and types
+          uv lock --check
+          uv run python scripts/validate_repo.py --require-implementation
+          uv run python -m ruff format --check .
+          uv run python -m ruff check .
+          uv run python -m mypy src scripts
+      - name: Unit, integration, privacy, and evaluator tests
+        env:
+          SECUREDACT_REQUIRE_FLAIR: "0"
         run: |
-          python -m ruff format --check .
-          python -m ruff check .
-          python -m mypy src/securedact_core src/securedact_mcp scripts
-
-      - name: Run tests and privacy gate
+          uv run python -m pytest
+          uv run python -m pytest tests/privacy
+          uv run python -m pytest tests/evaluation
+          uv run python scripts/run_privacy_tests.py
+      - name: Deterministic release gate
+        run: uv run python -m securedact_eval quality --mode deterministic --gate --thresholds benchmarks/thresholds.json --baseline benchmarks/baselines/quality-deterministic.json --output-dir dist
+      - name: Deterministic performance report and broad latency gate
+        run: uv run python -m securedact_eval performance --mode deterministic --repetitions 20 --warmups 3 --gate --thresholds benchmarks/thresholds.json --output dist/performance-deterministic.json
+      - name: Build, metadata check, and artifact inspection
         run: |
-          python -m pytest
-          python scripts/run_privacy_tests.py
-          python -m pytest tests/unit/test_model_registry.py tests/unit/test_model_installer.py tests/unit/test_model_store.py tests/unit/test_cli.py tests/unit/test_managed_runtime.py tests/integration/test_model_setup.py tests/integration/test_offline_model_verifier.py tests/integration/test_managed_stdio_subprocess.py
-
-      - name: Build and verify distributions
+          uv run python -m build
+          uv run python -m twine check dist/*
+          uv run python scripts/validate_release_artifacts.py dist
+      - name: Clean-install exact wheel and smoke-test console and MCP protocol
         run: |
-          python -m build
-          python -m twine check dist/*
-          python scripts/validate_release_artifacts.py dist
-
-      - name: Clean-install and smoke-test wheel
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file dist/runtime-requirements.txt
+          uv venv .clean-venv --python 3.12
+          uv pip install --python .clean-venv/bin/python --requirements dist/runtime-requirements.txt
+          uv pip install --python .clean-venv/bin/python --no-deps dist/*.whl
+          .clean-venv/bin/python scripts/smoke_test_entrypoint.py
+          .clean-venv/bin/python scripts/smoke_test_mcp.py .clean-venv/bin/securedact-mcp
+      - name: Dependency and license audit
         run: |
-          python -m pip install --force-reinstall --no-deps dist/*.whl
-          python scripts/smoke_test_entrypoint.py
-          securedact-mcp --help
-          securedact-mcp models list
-
-      - uses: actions/upload-artifact@v6
+          uv run pip-audit --strict --requirement dist/runtime-requirements.txt
+          uv run pip-licenses --format=json --output-file=dist/dependency-licenses.json
+          uv run python scripts/validate_dependency_licenses.py dist/dependency-licenses.json
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
-          name: securedact-mcp-release
+          path: .
+          format: spdx-json
+          output-file: dist/securedact-mcp.spdx.json
+          upload-artifact: false
+      - name: Generate checksums and repository provenance record
+        run: uv run python scripts/release_metadata.py metadata
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: securedact-mcp-release-candidate
           path: dist/*
           if-no-files-found: error
 
-      - name: Attach distributions to GitHub release
-        if: github.event_name == 'release'
+  sign-attest-and-publish:
+    name: Keyless sign, attest, and attach to GitHub release
+    needs: [verify-and-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: securedact-mcp-release-candidate
+          path: dist
+      - uses: sigstore/gh-action-sigstore-python@f7ad0af51a5648d09a20d00370f0a91c3bdf8f84 # v3.0.1
+        with:
+          inputs: >-
+            ./dist/*.whl
+            ./dist/*.tar.gz
+            ./dist/SHA256SUMS
+            ./dist/securedact-mcp.spdx.json
+            ./dist/provenance.json
+      - uses: actions/attest-build-provenance@78e6cbd37d0ac1a40113c04f2037dacf1ea3f12e # v4
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/securedact-mcp.spdx.json
+            dist/provenance.json
+      - name: Create GitHub release and attach verified artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes --title "Securedact MCP ${GITHUB_REF_NAME}"

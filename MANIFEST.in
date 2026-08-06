@@ -2,11 +2,14 @@ include CHANGELOG.md
 include CODE_OF_CONDUCT.md
 include CONTRIBUTING.md
 include LICENSE.md
+include NOTICE
 include README.md
 include SECURITY.md
 include requirements-dev.txt
 recursive-include docs *.md
 recursive-include examples *.json *.md *.toml
+recursive-include integrations *.json *.md *.toml
+recursive-include benchmarks *.json *.md *.csv
 recursive-include scripts *.ps1 *.py
 recursive-include src *.json *.py
 recursive-include tests *.json *.py

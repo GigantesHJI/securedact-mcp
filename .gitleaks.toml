@@ -2,9 +2,9 @@
 useDefault = true
 
 [[allowlists]]
-description = "Versioned synthetic privacy fixtures contain deliberate test canaries"
+description = "Synthetic tests, corpora, and prompts contain deliberate inactive canaries"
 paths = [
-  '''tests/privacy_corpus/.*''',
+  '''tests/.*''',
+  '''benchmarks/corpora/.*''',
   '''examples/synthetic-test-prompts\.md''',
 ]
-

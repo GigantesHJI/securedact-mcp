@@ -18,46 +18,81 @@ REQUIRED_FILES = {
     ".github/ISSUE_TEMPLATE/bug_report.yml",
     ".github/ISSUE_TEMPLATE/feature_request.yml",
     ".github/ISSUE_TEMPLATE/security_issue.md",
+    ".github/CODEOWNERS",
+    ".github/dependabot.yml",
     ".github/pull_request_template.md",
     ".github/workflows/ci.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/real-model-benchmark.yml",
     ".github/workflows/release.yml",
     "CHANGELOG.md",
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
     "LICENSE.md",
     "MANIFEST.in",
+    "NOTICE",
     "README.md",
     "SECURITY.md",
     "docs/architecture.md",
+    "docs/benchmarking.md",
+    "docs/compatibility.md",
+    "docs/conflict-resolution.md",
+    "docs/governance.md",
     "docs/codex.md",
     "docs/cursor.md",
     "docs/installation.md",
     "docs/mcp-tools.md",
     "docs/model-installation.md",
     "docs/privacy-model.md",
+    "docs/public-api.md",
     "docs/release.md",
+    "docs/releasing.md",
+    "docs/restoration-sessions.md",
+    "docs/rollback.md",
+    "docs/supply-chain.md",
     "docs/testing.md",
     "docs/threat-model.md",
     "docs/troubleshooting.md",
+    "docs/upgrading.md",
+    "docs/versioning.md",
+    "docs/vulnerability-releases.md",
     "docs/windsurf.md",
     "examples/codex-config.toml",
     "examples/cursor-mcp.json",
     "examples/synthetic-test-prompts.md",
     "examples/windsurf-mcp.json",
     "pyproject.toml",
+    "uv.lock",
     "requirements-dev.txt",
     "scripts/run_privacy_tests.py",
     "scripts/install-securedact-mcp.ps1",
+    "scripts/release_metadata.py",
+    "scripts/smoke_test_mcp.py",
+    "scripts/validate_dependency_licenses.py",
     "scripts/smoke_test_entrypoint.py",
     "scripts/validate_release_artifacts.py",
     "scripts/validate_repo.py",
+    "src/securedact_core/api.py",
+    "src/securedact_core/detectors/credentials_detector.py",
+    "src/securedact_core/policy_loader.py",
     "src/securedact_core/production.py",
+    "src/securedact_core/restoration.py",
+    "src/securedact_eval/cli.py",
+    "src/securedact_eval/metrics.py",
+    "src/securedact_eval/performance.py",
+    "src/securedact_eval/quality.py",
     "src/securedact_mcp/runtime_lifecycle.py",
     "tests/integration/test_managed_stdio_subprocess.py",
     "tests/privacy_corpus/nl/mcp_email_regression.json",
     "tests/unit/test_email_detector.py",
     "tests/unit/test_production_detector_stack.py",
     "tests/unit/test_runtime_lifecycle.py",
+    "benchmarks/baselines/quality-deterministic.json",
+    "benchmarks/corpora/manifest.json",
+    "benchmarks/thresholds.json",
+    "integrations/codex/README.md",
+    "integrations/cursor/README.md",
+    "integrations/windsurf/README.md",
 }
 
 FORBIDDEN_PATH_PARTS = {
@@ -137,6 +172,8 @@ def tracked_candidates(root: Path) -> list[Path]:
         ".ruff_cache",
         ".tmp",
         ".venv",
+        ".verify-venv",
+        ".clean-venv",
         "__pycache__",
         "build",
         "dist",
@@ -178,6 +215,23 @@ def validate_markdown_links(root: Path, files: list[Path]) -> list[str]:
     return errors
 
 
+def validate_workflow_pins(root: Path) -> list[str]:
+    errors: list[str] = []
+    for path in sorted((root / ".github" / "workflows").glob("*.yml")):
+        content = path.read_text(encoding="utf-8")
+        for action in re.findall(r"^\s*-\s+uses:\s*([^\s#]+)", content, re.MULTILINE):
+            if action.startswith("./"):
+                continue
+            _separator, marker, revision = action.rpartition("@")
+            if not marker or not re.fullmatch(r"[0-9a-f]{40}", revision):
+                errors.append(
+                    f"workflow action is not pinned to a full commit SHA: {path.name}:{action}"
+                )
+        if not re.search(r"^permissions:\s*$", content, re.MULTILINE):
+            errors.append(f"workflow has no explicit top-level permissions: {path.name}")
+    return errors
+
+
 def validate_repository(root: Path, *, require_implementation: bool = False) -> list[str]:
     errors: list[str] = []
     files = tracked_candidates(root)
@@ -185,6 +239,7 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
 
     missing = sorted(REQUIRED_FILES - relative_files)
     errors.extend(f"missing required file: {path}" for path in missing)
+    errors.extend(validate_workflow_pins(root))
 
     for path in files:
         relative = path.relative_to(root).as_posix()
@@ -207,7 +262,9 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
         if WINDOWS_USER_PATH_PATTERN.search(content):
             errors.append(f"personal Windows path found: {relative}")
 
-        synthetic_fixture = relative.startswith(("tests/", "examples/synthetic-test-prompts.md"))
+        synthetic_fixture = relative.startswith(
+            ("tests/", "benchmarks/corpora/", "examples/synthetic-test-prompts.md")
+        )
         if relative != "scripts/validate_repo.py" and not synthetic_fixture:
             for name, pattern in SECRET_PATTERNS.items():
                 if pattern.search(content):
@@ -223,6 +280,7 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
         required_statements = (
             "does not automatically intercept every prompt",
             "does not redistribute these model weights",
+            "`prepare_for_external_ai`",
             "`analyze_text`",
             "`redact_text`",
             "`restore_text`",
@@ -271,8 +329,17 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
                 errors.append("implementation is present but [project.scripts] is missing")
             elif scripts.get("securedact-mcp") != "securedact_mcp.cli:main":
                 errors.append("securedact-mcp console entry point is missing or incorrect")
+            elif scripts.get("securedact-eval") != "securedact_eval.cli:main":
+                errors.append("securedact-eval console entry point is missing or incorrect")
             if project.get("name") != "securedact-mcp":
                 errors.append("project name must be securedact-mcp")
+            if project.get("license") != "Apache-2.0":
+                errors.append("project license expression must be Apache-2.0")
+            license_files = project.get("license-files")
+            if not isinstance(license_files, list) or not {"LICENSE.md", "NOTICE"}.issubset(
+                license_files
+            ):
+                errors.append("project metadata must package LICENSE.md and NOTICE")
             dependencies = project.get("dependencies")
             if not isinstance(dependencies, list):
                 errors.append("runtime dependencies are missing")
@@ -299,6 +366,7 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
             )
         )
         expected_tools = {
+            "prepare_for_external_ai",
             "analyze_text",
             "redact_text",
             "restore_text",
@@ -312,7 +380,7 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
     production_path = root / "src" / "securedact_core" / "production.py"
     if production_path.exists():
         production = production_path.read_text(encoding="utf-8")
-        for required_detector in ('"regex"', '"contextual_rules"'):
+        for required_detector in ('"regex"', '"credentials"', '"contextual_rules"'):
             if required_detector not in production:
                 errors.append(
                     f"production factory is missing deterministic detector: {required_detector}"

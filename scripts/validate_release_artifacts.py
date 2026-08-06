@@ -89,8 +89,16 @@ def inspect_wheel(path: Path) -> list[str]:
         "securedact_mcp/server.py",
         "securedact_mcp/__main__.py",
         "securedact_core/engine.py",
+        "securedact_core/api.py",
+        "securedact_core/policy_loader.py",
         "securedact_core/production.py",
+        "securedact_core/restoration.py",
+        "securedact_core/detectors/credentials_detector.py",
         "securedact_core/detectors/lexicons/special_categories.v1.json",
+        "securedact_eval/cli.py",
+        "securedact_eval/metrics.py",
+        "securedact_eval/performance.py",
+        "securedact_eval/quality.py",
     }
     for required in required_suffixes:
         if not any(name.endswith(required) for name in names):

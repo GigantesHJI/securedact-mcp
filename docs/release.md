@@ -1,64 +1,27 @@
-# Release Process
+# Release overview
 
-## Current status
+Securedact releases are immutable GitHub artifacts, not PyPI publications. Only
+an annotated `v<version>` tag whose version matches package metadata and a dated
+changelog section can start the release workflow. The tag must point at a clean,
+reviewed commit.
 
-The standalone package and release automation are present. No release should be
-published until the complete validation sequence passes and the interim license,
-upstream model terms, security contact, and compatibility claims receive owner
-review.
+The workflow recreates the frozen lock environment, runs every quality/privacy
+gate, builds once, inspects archives, installs the wheel into a clean
+environment, performs an exact MCP protocol smoke test, creates an SBOM and
+checksums, and uploads the build as a workflow artifact. A separate least-
+privilege publish job keylessly signs the same bytes, produces GitHub build
+provenance, and attaches artifacts to the GitHub release. It never rebuilds and
+never publishes to PyPI.
 
-The workflow never publishes to PyPI.
+Use the step-by-step [Releasing runbook](releasing.md). Related controls:
 
-## Maintainer checklist
+- [Versioning and compatibility](versioning.md)
+- [Upgrade and migration](upgrading.md)
+- [Rollback](rollback.md)
+- [Vulnerability releases](vulnerability-releases.md)
+- [Supply chain](supply-chain.md)
+- [Release notes template](release-notes-template.md)
 
-1. Create a release branch; do not work directly on `main`.
-2. Update the version in `pyproject.toml` and `src/securedact_mcp/__init__.py`.
-3. Move relevant changelog entries from `Unreleased` to the version/date.
-4. Run repository, format, lint, type, unit, integration, and privacy checks.
-5. Build with `python -m build`.
-6. Run `python -m twine check dist/*`.
-7. Inspect wheel and source-distribution contents.
-8. Confirm no models, logs, mappings, safe copies, secrets, local databases,
-   archives, desktop code, provider code, or user data are included.
-9. Confirm the English/Dutch repository IDs, revisions, sizes, and hashes against
-   official Hugging Face metadata; moving revisions are release blockers.
-10. Recheck upstream model-weight licensing. A citation is not permission.
-11. Install the wheel into a clean Python 3.12 environment.
-12. Verify import, CLI parsing, console entry point, MCP initialization, and tool
-    registration without downloading real weights.
-13. Verify with MCP Inspector and supported client versions.
-14. Tag the reviewed commit and create a GitHub release.
-15. Let the release workflow attach artifacts; do not publish to PyPI.
-
-## Artifact policy
-
-Allowed:
-
-- Python source;
-- lexicon JSON required by the contextual detector;
-- package metadata;
-- license and documentation.
-
-Forbidden:
-
-- model checkpoints or model-pack archives;
-- Hugging Face caches, snapshots, blobs, or staging directories;
-- logs, mappings, safe copies, SQLite data, environment files, or credentials;
-- desktop/Tauri, website, API gateway, or provider implementations;
-- PyInstaller output.
-
-## Versioning
-
-Use semantic versioning. A breaking change to a tool name, input schema, output
-status, mapping behavior, safe-copy boundary, or privacy guarantee requires a
-major-version decision and explicit migration notes.
-
-## GitHub metadata
-
-Recommended description:
-
-> Local-first privacy MCP server that analyzes, reviews, and redacts sensitive
-> data before AI workflows process it.
-
-Suggested topics: `mcp`, `model-context-protocol`, `privacy`, `pii`, `gdpr`,
-`data-redaction`, `ai-security`, `local-first`, `codex`, `cursor`, `windsurf`.
+No public release is ready while the NOTICE copyright-holder placeholder,
+interim security-address confirmation, or upstream model-weight license review
+remains unresolved.

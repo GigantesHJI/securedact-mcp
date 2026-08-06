@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://securedact.dev/schemas/benchmark/sample-v2.schema.json",
+  "title": "Securedact benchmark sample v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "language", "domain", "text", "entities", "source", "tier", "format", "transformation", "transformation_chain", "transformation_support", "metadata"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{2,79}$"},
+    "language": {"type": "string", "pattern": "^[a-z]{2,8}$"},
+    "domain": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{1,39}$"},
+    "text": {"type": "string", "maxLength": 100000},
+    "source": {"type": "string"},
+    "tier": {"enum": ["public", "external", "restricted"]},
+    "format": {"type": "string"},
+    "split": {"type": ["string", "null"]},
+    "transformation": {"type": "string"},
+    "transformation_chain": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "transformation_support": {"enum": ["supported", "partial", "deliberately_unsupported"]},
+    "template_group": {"type": ["string", "null"]},
+    "source_record_group": {"type": ["string", "null"]},
+    "source_document_group": {"type": ["string", "null"]},
+    "transformation_parent": {"type": ["string", "null"]},
+    "entity_value_group": {"type": ["string", "null"]},
+    "seed_group": {"type": ["string", "null"]},
+    "metadata": {"type": "object"},
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end", "entity_type", "assertion_type", "provenance"],
+        "properties": {
+          "start": {"type": "integer", "minimum": 0},
+          "end": {"type": "integer", "minimum": 1},
+          "text": {"type": ["string", "null"]},
+          "entity_type": {"type": "string"},
+          "expected_action": {"type": ["string", "null"]},
+          "assertion_type": {"enum": ["current", "negated", "uncertain", "hypothetical", "quotation", "historical", "family_history", "general_discussion", "organization_level", "near_miss"]},
+          "provenance": {"type": "object", "additionalProperties": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

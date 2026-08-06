@@ -1,0 +1,35 @@
+{
+  "baseline_version": 1,
+  "dependency_lock_digest": "aecc42aec359b744b3383f6cbd68932389784ed244d4f9748e299862ef7631bd",
+  "faker_version": "40.35.0",
+  "generator_version": "2.5.1",
+  "profiles": {
+    "benchmark-v0.2": {
+      "adversarial_count": 19047,
+      "corpus_bytes": 29091923,
+      "corpus_sha256": "351fe18b1f5f14f0a11aa07dadc306dcf49eea5318cea6a25afacbca26febd87",
+      "document_count": 20000,
+      "entity_count": 32761,
+      "language_counts": {
+        "en": 11000,
+        "nl": 9000
+      },
+      "mixed_entity_count": 16000,
+      "negative_count": 4000
+    },
+    "public-medium": {
+      "adversarial_count": 4761,
+      "corpus_bytes": 7241843,
+      "corpus_sha256": "8d58d9cf2f9fc04229a93527a8e070bc8a5b7a6f9cf8458a7dc4495589d4bd31",
+      "document_count": 5000,
+      "entity_count": 8190,
+      "language_counts": {
+        "en": 2750,
+        "nl": 2250
+      },
+      "mixed_entity_count": 4000,
+      "negative_count": 1000
+    }
+  },
+  "synthetic_only": true
+}

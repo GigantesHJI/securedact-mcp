@@ -1,0 +1,20 @@
+{
+  "benchmark_version": "private-release-gate-placeholder",
+  "metrics": {
+    "approved_output_residual_leak_rate": null,
+    "exact_f1": null,
+    "exact_precision": null,
+    "exact_recall": null,
+    "false_negative_rate": null,
+    "false_positive_rate": null
+  },
+  "report_version": "1",
+  "sample_count": 0,
+  "support_count": 0,
+  "suppression": {
+    "membership": true,
+    "raw_text": true,
+    "record_results": true
+  },
+  "tier": "restricted"
+}

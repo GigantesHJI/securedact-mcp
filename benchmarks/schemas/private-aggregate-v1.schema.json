@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://securedact.dev/schemas/benchmark/private-aggregate-v1.schema.json",
+  "title": "Restricted/private release-gate aggregate report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["report_version", "tier", "benchmark_version", "sample_count", "support_count", "metrics", "suppression"],
+  "properties": {
+    "report_version": {"const": "1"},
+    "tier": {"enum": ["restricted"]},
+    "benchmark_version": {"type": "string"},
+    "sample_count": {"type": "integer", "minimum": 0},
+    "support_count": {"type": "integer", "minimum": 0},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {"type": ["number", "null"]}
+    },
+    "suppression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_results", "raw_text", "membership"],
+      "properties": {
+        "record_results": {"const": true},
+        "raw_text": {"const": true},
+        "membership": {"const": true}
+      }
+    }
+  }
+}

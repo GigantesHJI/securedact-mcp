@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: Apache-2.0
+registry_version: 1
+sources:
+  - id: faker-40.35.0
+    title: Faker 40.35.0
+    version: 40.35.0
+    homepage: https://faker.readthedocs.io/
+    retrieval_location: https://pypi.org/project/Faker/40.35.0/
+    adapter: faker
+    tier: public
+    allowed_tiers: [public]
+    enabled: true
+    license_spdx: MIT
+    license_url: https://github.com/joke2k/faker/blob/v40.35.0/LICENSE.txt
+    attribution: Faker contributors
+    commercial_use: true
+    raw_redistribution: true
+    annotation_redistribution: true
+    derivative_works: true
+    attribution_obligations: Preserve the MIT licence and copyright notice when redistributing Faker.
+    share_alike_obligations: None.
+    access_restrictions: None.
+    languages: [en, nl]
+    label_mapping: {}
+    files:
+      - name: faker-40.35.0-py3-none-any.whl
+        url: https://files.pythonhosted.org/packages/8c/c4/d217ea24d07fbdb00c81c83325fc814ee72ed93c70978ea5d4150604c305/faker-40.35.0-py3-none-any.whl
+        size: 2062734
+        sha256: 804224bc4ea6644256dd2ef5c951563bea318cb19be3505461c9c424c90181ec
+    review_date: 2026-08-06
+    reviewer: REVIEWER_PLACEHOLDER
+    approval_status: approved
+    notes: Exact runtime pin; generated names and identifiers are fictional test data.
+  - id: multiconer-1-en-nl
+    title: MultiCoNER 1 English and Dutch train/development data
+    version: multiconer2022-release-1
+    homepage: https://registry.opendata.aws/multiconer/
+    retrieval_location: https://multiconer.s3.amazonaws.com/
+    adapter: multiconer-1
+    tier: external
+    allowed_tiers: [external]
+    enabled: true
+    license_spdx: CC-BY-4.0
+    license_url: https://creativecommons.org/licenses/by/4.0/
+    attribution: MultiCoNER shared-task organizers and dataset contributors
+    commercial_use: true
+    raw_redistribution: true
+    annotation_redistribution: true
+    derivative_works: true
+    attribution_obligations: Attribute the MultiCoNER dataset under CC BY 4.0 and identify changes.
+    share_alike_obligations: None.
+    access_restrictions: Explicit local retrieval only; no automatic or CI download.
+    languages: [en, nl]
+    label_mapping:
+      PER: person
+      LOC: location
+      GRP: organization
+      CORP: organization
+    files:
+      - name: en_dev.conll
+        url: https://multiconer.s3.amazonaws.com/multiconer2022/EN-English/en_dev.conll
+        size: 206595
+        etag_md5: e9c0e6a6f09bf2775d9fa95480a54622
+      - name: en_train.conll
+        url: https://multiconer.s3.amazonaws.com/multiconer2022/EN-English/en_train.conll
+        size: 3936860
+        etag_md5: ac875ee4c075667b4bc7cddaa5b50183
+      - name: nl_dev.conll
+        url: https://multiconer.s3.amazonaws.com/multiconer2022/NL-Dutch/nl_dev.conll
+        size: 190703
+        etag_md5: 2bce52638a194389256bd6e29b3e2892
+      - name: nl_train.conll
+        url: https://multiconer.s3.amazonaws.com/multiconer2022/NL-Dutch/nl_train.conll
+        size: 3732388
+        etag_md5: 34c3d2ad256049deb07f43905c5f0fce
+    review_date: 2026-08-06
+    reviewer: REVIEWER_PLACEHOLDER
+    approval_status: approved
+    notes: S3 single-part ETags provide upstream change detection, not cryptographic authentication; verify TLS, size, and ETag before adaptation.
+  - id: dutch-open-government-generic
+    title: Generic Dutch open-government adapter contract
+    version: template-1
+    homepage: https://data.overheid.nl/
+    retrieval_location: https://data.overheid.nl/
+    adapter: dutch-open-government
+    tier: external
+    allowed_tiers: [external]
+    enabled: false
+    license_spdx: NOASSERTION
+    license_url: https://data.overheid.nl/ondersteuning/open-data
+    attribution: Configure the exact publisher and attribution before enabling.
+    commercial_use: null
+    raw_redistribution: null
+    annotation_redistribution: null
+    derivative_works: null
+    attribution_obligations: Unknown until an exact source is reviewed.
+    share_alike_obligations: Unknown until an exact source is reviewed.
+    access_restrictions: Source-specific; explicit local access only.
+    languages: [nl]
+    label_mapping: {}
+    files: []
+    review_date: 2026-08-06
+    reviewer: REVIEWER_PLACEHOLDER
+    approval_status: template
+    notes: Fail-closed template only. Add an exact approved URL, license, size, and SHA-256 before use.

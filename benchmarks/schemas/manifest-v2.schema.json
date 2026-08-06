@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://securedact.dev/schemas/benchmark/manifest-v2.schema.json",
+  "title": "Securedact benchmark manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_version", "profile", "generator_version", "seed", "dependency_lock_digest", "tier", "document_count", "entity_count", "negative_count", "adversarial_count", "mixed_entity_count", "language_counts", "source_counts", "split_counts", "assertion_type_counts", "category_counts", "domain_counts", "transformation_counts", "template_family_counts", "files", "generation"],
+  "properties": {
+    "manifest_version": {"const": 2},
+    "profile": {"type": "string"},
+    "generator_version": {"type": "string"},
+    "seed": {"type": "integer", "minimum": 0},
+    "dependency_lock_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "tier": {"enum": ["public", "external", "restricted"]},
+    "document_count": {"type": "integer", "minimum": 1},
+    "entity_count": {"type": "integer", "minimum": 0},
+    "negative_count": {"type": "integer", "minimum": 0},
+    "adversarial_count": {"type": "integer", "minimum": 0},
+    "mixed_entity_count": {"type": "integer", "minimum": 0},
+    "language_counts": {"$ref": "#/$defs/counts"},
+    "source_counts": {"$ref": "#/$defs/counts"},
+    "split_counts": {"$ref": "#/$defs/counts"},
+    "assertion_type_counts": {"$ref": "#/$defs/counts"},
+    "category_counts": {"$ref": "#/$defs/counts"},
+    "domain_counts": {"$ref": "#/$defs/counts"},
+    "transformation_counts": {"$ref": "#/$defs/counts"},
+    "template_family_counts": {"$ref": "#/$defs/counts"},
+    "files": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+    "generation": {"type": "object"}
+  },
+  "$defs": {
+    "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}
+  }
+}

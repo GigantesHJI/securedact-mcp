@@ -1,5 +1,8 @@
 # Quality and performance benchmarking
 
+The migration-ready architecture, data tiers, profiles, workspace, source approvals, integrity
+rules, and generation commands are documented in [the benchmark README](../benchmarks/README.md).
+
 The benchmark corpus is synthetic and divided into development, validation,
 frozen release-gate, adversarial, and negative files. `manifest.json` pins every
 corpus file by SHA-256 so frozen data cannot change unnoticed. Do not tune rules
@@ -27,7 +30,9 @@ python -m securedact_eval report `
 Quality output includes JSON, CSV detail, and Markdown. Metrics include TP, FP,
 document-level TN where defined, FN, precision, recall, F1, false-positive rate,
 false-negative rate, support, micro/macro/weighted averages, exact and relaxed
-span matching, category/action accuracy, per entity/language/domain/split, and a
+span matching, category/action accuracy, document unsafe/block/review decisions, residual sensitive
+values and approved-output leaks, per entity/language/domain/source/tier/format/assertion/
+transformation/mixedness/text-length/split, and a
 deterministic bootstrap 95% recall interval. Undefined denominators serialize as
 `null`, never a fabricated zero or one.
 

@@ -14,9 +14,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from securedact_core import PrivacyEngine, build_production_engine
+from securedact_core import PrivacyAction, PrivacyEngine, build_production_engine
 from securedact_core.detectors import FlairDetector
 
+from .benchmark.generator import load_jsonl
+from .benchmark.manifest import verify_benchmark
 from .metrics import Metric, Span, SpanEvaluation, evaluate_spans, metric_from_counts
 from .models import CorpusFile, CorpusSample
 
@@ -40,8 +42,25 @@ class SampleResult(BaseModel):
     split: str
     language: str
     domain: str
+    source: str = "legacy-curated"
+    tier: str = "public"
+    format: str = "plain_text"
     exact: Metric
     relaxed: Metric
+
+
+class DocumentDecisionMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    unsafe_detection_accuracy: float | None
+    block_or_review_accuracy: float | None
+    blocked_document_accuracy: float | None
+    review_required_accuracy: float | None
+    residual_sensitive_value_rate: float | None
+    approved_output_leak_rate: float | None
+    approved_documents: int
+    leaked_approved_documents: int
+    audit_failure_count: int
 
 
 class QualityReport(BaseModel):
@@ -60,6 +79,14 @@ class QualityReport(BaseModel):
     per_language: dict[str, SpanEvaluation]
     per_domain: dict[str, SpanEvaluation]
     per_split: dict[str, SpanEvaluation]
+    per_source: dict[str, SpanEvaluation] = Field(default_factory=dict)
+    per_tier: dict[str, SpanEvaluation] = Field(default_factory=dict)
+    per_format: dict[str, SpanEvaluation] = Field(default_factory=dict)
+    per_assertion_type: dict[str, SpanEvaluation] = Field(default_factory=dict)
+    per_transformation: dict[str, SpanEvaluation] = Field(default_factory=dict)
+    per_mixed: dict[str, SpanEvaluation] = Field(default_factory=dict)
+    per_text_length: dict[str, SpanEvaluation] = Field(default_factory=dict)
+    document_decisions: DocumentDecisionMetrics | None = None
     exact_recall_bootstrap_95: tuple[float, float] | None = None
     sample_results: list[SampleResult]
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -99,9 +126,27 @@ def verify_corpus_manifest(root: Path) -> str:
 
 
 def load_evaluation_corpus(root: Path) -> tuple[list[_LoadedSample], str]:
+    try:
+        raw_manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvaluationConfigurationError("corpus_manifest_invalid") from exc
+    if raw_manifest.get("manifest_version") == 2:
+        try:
+            manifest = verify_benchmark(root)
+            samples = load_jsonl(root / "corpus.jsonl")
+        except ValueError as exc:
+            raise EvaluationConfigurationError(str(exc)) from exc
+        if len(samples) != manifest.document_count:
+            raise EvaluationConfigurationError("corpus_document_count_mismatch")
+        ids = [sample.id for sample in samples]
+        if len(ids) != len(set(ids)):
+            raise EvaluationConfigurationError("corpus_duplicate_id")
+        return [
+            _LoadedSample(sample.split or "unspecified", sample) for sample in samples
+        ], _file_digest(root / "manifest.json")
     manifest_digest = verify_corpus_manifest(root)
     loaded: list[_LoadedSample] = []
-    ids: set[str] = set()
+    legacy_ids: set[str] = set()
     for path in sorted(root.glob("*.json")):
         if path.name == "manifest.json":
             continue
@@ -110,9 +155,9 @@ def load_evaluation_corpus(root: Path) -> tuple[list[_LoadedSample], str]:
         except (OSError, ValueError) as exc:
             raise EvaluationConfigurationError("corpus_schema_invalid") from exc
         for sample in corpus.samples:
-            if sample.id in ids:
+            if sample.id in legacy_ids:
                 raise EvaluationConfigurationError("corpus_duplicate_id")
-            ids.add(sample.id)
+            legacy_ids.add(sample.id)
             loaded.append(_LoadedSample(corpus.split, sample))
     if not loaded:
         raise EvaluationConfigurationError("corpus_empty")
@@ -259,8 +304,12 @@ def run_quality_evaluation(
     mode: str = "deterministic",
     engine: PrivacyEngine | None = None,
     model_identifier: str | None = None,
+    aggregate_only: bool = False,
 ) -> QualityReport:
     samples, manifest_digest = load_evaluation_corpus(root)
+    tiers = {loaded.sample.tier for loaded in samples}
+    if len(tiers) > 1:
+        raise EvaluationConfigurationError("mixed_benchmark_tiers_forbidden")
     if engine is None:
         engine, resolved_model_identifier = _engine_for_mode(mode)
     else:
@@ -268,6 +317,15 @@ def run_quality_evaluation(
     policy = engine.policies.get("gdpr")
     predictions: dict[str, list[Span]] = {}
     sample_results: list[SampleResult] = []
+    unsafe_correct = 0
+    disposition_correct = 0
+    blocked_correct = 0
+    review_correct = 0
+    residual_values = 0
+    expected_values = 0
+    approved_documents = 0
+    leaked_approved_documents = 0
+    audit_failures = 0
     for loaded in samples:
         analysis = engine.analyze(loaded.sample.text, "gdpr")
         predicted = [
@@ -281,16 +339,57 @@ def run_quality_evaluation(
         ]
         predictions[loaded.sample.id] = predicted
         result = evaluate_spans(_spans(loaded.sample), predicted)
-        sample_results.append(
-            SampleResult(
-                id=loaded.sample.id,
-                split=loaded.split,
-                language=loaded.sample.language,
-                domain=loaded.sample.domain,
-                exact=result.exact,
-                relaxed=result.relaxed,
-            )
+        expected_unsafe = bool(loaded.sample.entities)
+        predicted_unsafe = bool(analysis.entities or analysis.assertions)
+        unsafe_correct += expected_unsafe == predicted_unsafe
+        disposition = analysis.blocked or analysis.requires_review or predicted_unsafe
+        disposition_correct += disposition == expected_unsafe
+        expected_blocked = any(
+            item.expected_action == PrivacyAction.BLOCK for item in loaded.sample.entities
         )
+        expected_review = any(
+            item.expected_action == PrivacyAction.REVIEW for item in loaded.sample.entities
+        )
+        blocked_correct += analysis.blocked == expected_blocked
+        review_correct += analysis.requires_review == expected_review
+        expected_text = [
+            item.text
+            for item in loaded.sample.entities
+            if item.text and item.expected_action != PrivacyAction.ALLOW
+        ]
+        expected_values += len(expected_text)
+        try:
+            audit = engine.audit(loaded.sample.text, "gdpr")
+        except ValueError:
+            # Unsupported/adversarial records remain in the benchmark. A failure to produce an
+            # audited output is a fail-closed aggregate outcome, never an approved output.
+            audit_failures += 1
+            residual_values += len(expected_text)
+            audit = None
+        if audit is None:
+            leaks = 0
+            approved = False
+        else:
+            leaks = sum(value in audit.sanitized_text for value in expected_text)
+            approved = audit.residual_scan.safe_to_send
+        residual_values += leaks
+        if approved:
+            approved_documents += 1
+            leaked_approved_documents += bool(leaks)
+        if not aggregate_only and loaded.sample.tier != "restricted":
+            sample_results.append(
+                SampleResult(
+                    id=loaded.sample.id,
+                    split=loaded.split,
+                    language=loaded.sample.language,
+                    domain=loaded.sample.domain,
+                    source=loaded.sample.source,
+                    tier=loaded.sample.tier,
+                    format=loaded.sample.format,
+                    exact=result.exact,
+                    relaxed=result.relaxed,
+                )
+            )
 
     global_metrics = _aggregate(samples, predictions)
     entity_names = sorted(
@@ -320,6 +419,28 @@ def run_quality_evaluation(
             for value in values
         }
 
+    def grouped_by(name: str, selector: object) -> dict[str, SpanEvaluation]:
+        groups: dict[str, list[_LoadedSample]] = {}
+        for loaded in samples:
+            value = selector(loaded)  # type: ignore[operator]
+            groups.setdefault(str(value), []).append(loaded)
+        return {key: _aggregate(values, predictions) for key, values in sorted(groups.items())}
+
+    assertion_types = sorted(
+        {entity.assertion_type for loaded in samples for entity in loaded.sample.entities}
+    )
+    per_assertion: dict[str, SpanEvaluation] = {
+        assertion_type: _aggregate(
+            [
+                loaded
+                for loaded in samples
+                if any(entity.assertion_type == assertion_type for entity in loaded.sample.entities)
+            ],
+            predictions,
+        )
+        for assertion_type in assertion_types
+    }
+
     repository_root = root.parent.parent
     lock_path = repository_root / "uv.lock"
     return QualityReport(
@@ -339,6 +460,46 @@ def run_quality_evaluation(
         per_language=grouped("language"),
         per_domain=grouped("domain"),
         per_split=grouped("split"),
+        per_source=grouped("source"),
+        per_tier=grouped("tier"),
+        per_format=grouped("format"),
+        per_assertion_type=per_assertion,
+        per_transformation=grouped("transformation"),
+        per_mixed=grouped_by(
+            "mixed",
+            lambda loaded: (
+                "negative"
+                if not loaded.sample.entities
+                else "mixed_entities"
+                if len({item.entity_type for item in loaded.sample.entities}) > 1
+                else "single_entity_type"
+            ),
+        ),
+        per_text_length=grouped_by(
+            "text_length",
+            lambda loaded: (
+                "short"
+                if len(loaded.sample.text) < 80
+                else "medium"
+                if len(loaded.sample.text) < 300
+                else "long"
+            ),
+        ),
+        document_decisions=DocumentDecisionMetrics(
+            unsafe_detection_accuracy=unsafe_correct / len(samples) if samples else None,
+            block_or_review_accuracy=disposition_correct / len(samples) if samples else None,
+            blocked_document_accuracy=blocked_correct / len(samples) if samples else None,
+            review_required_accuracy=review_correct / len(samples) if samples else None,
+            residual_sensitive_value_rate=(
+                residual_values / expected_values if expected_values else None
+            ),
+            approved_output_leak_rate=(
+                leaked_approved_documents / approved_documents if approved_documents else None
+            ),
+            approved_documents=approved_documents,
+            leaked_approved_documents=leaked_approved_documents,
+            audit_failure_count=audit_failures,
+        ),
         exact_recall_bootstrap_95=_bootstrap_recall(samples, predictions),
         sample_results=sorted(sample_results, key=lambda item: item.id),
         metadata={
@@ -351,5 +512,8 @@ def run_quality_evaluation(
             "model_identifier": resolved_model_identifier,
             "corpus_manifest_digest": manifest_digest,
             "evaluation_unit": "character spans; true negatives are document-level negatives",
+            "aggregate_only": aggregate_only,
+            "tiers": sorted(tiers),
+            "restricted_record_results_suppressed": "restricted" in tiers,
         },
     )

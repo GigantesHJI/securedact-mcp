@@ -44,8 +44,10 @@ dev = [
   "twine>=6.1,<7",
   "types-PyYAML>=6.0.12,<7",
   "types-psutil>=6,<8",
+  "wheel>=0.45,<1",
 ]
 benchmark = [
+  "Faker==40.35.0",
   "psutil>=6,<8",
 ]
 security = [

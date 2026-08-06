@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+profile_version: 1
+profiles:
+  - name: smoke
+    description: Small committed synthetic fixture for fast offline validation.
+    documents: 160
+    minimum_entities: 250
+    dutch_fraction: 0.50
+    seed: 20260806
+    tier: public
+    commit_allowed: true
+  - name: public-medium
+    description: Local synthetic corpus for scheduled and contributor evaluation.
+    documents: 5000
+    minimum_entities: 8000
+    dutch_fraction: 0.45
+    seed: 20260806
+    tier: public
+  - name: benchmark-v0.2
+    description: Reproducible full synthetic benchmark with broad format coverage.
+    documents: 20000
+    minimum_entities: 30000
+    dutch_fraction: 0.45
+    seed: 20260806
+    tier: public
+  - name: external-full
+    description: Locally adapted approved public sources; data is never committed.
+    documents: 1
+    minimum_entities: 0
+    dutch_fraction: 0.50
+    seed: 20260806
+    tier: external
+    adapter_only: true
+  - name: restricted-local
+    description: Explicit local-only profile for private holdout evaluation.
+    documents: 1
+    minimum_entities: 0
+    dutch_fraction: 0.50
+    seed: 20260806
+    tier: restricted
+    adapter_only: true
+    include_private_holdout: true

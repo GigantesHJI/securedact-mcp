@@ -71,6 +71,17 @@ placeholder-mappings/
 safe-copies/
 safe-copy-output/
 local-output/
+benchmark-data/
+benchmarks/generated/
+benchmarks/private/
+benchmarks/private-holdout/
+benchmarks/restricted/
+benchmarks/restricted-data/
+benchmarks/external-data/
+benchmarks/external/
+benchmarks/raw/
+benchmarks/downloads/
+benchmarks/extracted/
 
 # Temporary files
 .tmp/

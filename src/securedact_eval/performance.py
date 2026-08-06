@@ -221,5 +221,9 @@ def run_performance_evaluation(
             "model_identifier": model_identifier,
             "policy_version": policy.schema_version,
             "policy_digest": policy.digest,
+            "corpus_digest": sha256(SYNTHETIC_INPUT.encode("utf-8")).hexdigest(),
+            "benchmark_version": "performance-synthetic-v1",
+            "runner_image": os.getenv("ImageOS"),
+            "runner_image_version": os.getenv("ImageVersion"),
         },
     }

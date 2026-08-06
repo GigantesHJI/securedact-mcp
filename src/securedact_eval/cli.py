@@ -7,6 +7,12 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from .benchmark.generator import generate_profile, load_jsonl
+from .benchmark.integrity import validate_integrity
+from .benchmark.manifest import verify_benchmark
+from .benchmark.profiles import load_profiles
+from .benchmark.registry import load_registry, verify_source_file
+from .benchmark.workspace import resolve_workspace
 from .gates import evaluate_performance_gate, evaluate_quality_gate, load_thresholds
 from .performance import cold_worker, run_performance_evaluation
 from .quality import EvaluationConfigurationError, run_quality_evaluation
@@ -29,6 +35,7 @@ def _parser() -> argparse.ArgumentParser:
     quality.add_argument("--gate", action="store_true")
     quality.add_argument("--thresholds", type=Path, default=Path("benchmarks/thresholds.json"))
     quality.add_argument("--baseline", type=Path)
+    quality.add_argument("--aggregate-only", action="store_true")
 
     performance = subparsers.add_parser("performance")
     performance.add_argument("--mode", choices=("deterministic", "flair"), default="deterministic")
@@ -45,6 +52,28 @@ def _parser() -> argparse.ArgumentParser:
 
     cold = subparsers.add_parser("_cold_worker")
     cold.add_argument("--mode", choices=("deterministic", "flair"), required=True)
+
+    generate = subparsers.add_parser("generate")
+    generate.add_argument("--profile", required=True)
+    generate.add_argument(
+        "--profiles", type=Path, default=Path("benchmarks/generators/profiles.yml")
+    )
+    generate.add_argument("--output", type=Path)
+    generate.add_argument("--allow-repository-output", action="store_true")
+
+    validate = subparsers.add_parser("validate")
+    validate.add_argument("--dataset", type=Path, required=True)
+
+    workspace = subparsers.add_parser("workspace")
+    workspace.add_argument("--no-create", action="store_true")
+
+    verify_source = subparsers.add_parser("verify-source")
+    verify_source.add_argument(
+        "--registry", type=Path, default=Path("benchmarks/registry/sources.yml")
+    )
+    verify_source.add_argument("--source", required=True)
+    verify_source.add_argument("--file-name", required=True)
+    verify_source.add_argument("--path", type=Path, required=True)
     return parser
 
 
@@ -52,7 +81,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         if arguments.command == "quality":
-            quality = run_quality_evaluation(arguments.corpus, mode=arguments.mode)
+            quality = run_quality_evaluation(
+                arguments.corpus,
+                mode=arguments.mode,
+                aggregate_only=arguments.aggregate_only,
+            )
             if arguments.output_dir is not None:
                 write_quality_outputs(quality, arguments.output_dir)
             if arguments.gate:
@@ -98,9 +131,53 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if arguments.output is not None:
                 arguments.output.write_text(output, encoding="utf-8", newline="\n")
+        elif arguments.command == "generate":
+            profiles = load_profiles(arguments.profiles)
+            if arguments.profile not in profiles:
+                raise EvaluationConfigurationError("benchmark_profile_unknown")
+            repository_root = Path.cwd().resolve()
+            target = arguments.output
+            if target is None:
+                workspace = resolve_workspace(repository_root=repository_root)
+                target = workspace.generated / arguments.profile
+            manifest = generate_profile(
+                profiles[arguments.profile],
+                target,
+                repository_root=repository_root,
+                allow_repository_output=arguments.allow_repository_output,
+            )
+            output = manifest.model_dump_json(indent=2)
+        elif arguments.command == "validate":
+            manifest = verify_benchmark(arguments.dataset)
+            report = validate_integrity(load_jsonl(arguments.dataset / "corpus.jsonl"))
+            if not report.valid:
+                print(report.model_dump_json(), file=sys.stderr)
+                return 3
+            output = json.dumps(
+                {
+                    "manifest": manifest.model_dump(mode="json"),
+                    "integrity": report.model_dump(mode="json"),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        elif arguments.command == "workspace":
+            workspace = resolve_workspace(
+                repository_root=Path.cwd(), create=not arguments.no_create
+            )
+            output = json.dumps({"root": str(workspace.root)}, sort_keys=True)
+        elif arguments.command == "verify-source":
+            source = load_registry(arguments.registry).require(arguments.source)
+            approved = next(
+                (item for item in source.files if item.name == arguments.file_name), None
+            )
+            if approved is None:
+                raise EvaluationConfigurationError("source_file_not_registered")
+            verify_source_file(arguments.path, approved)
+            output = json.dumps({"status": "verified", "source": source.id, "file": approved.name})
         else:
             output = json.dumps(cold_worker(arguments.mode), sort_keys=True)
-    except EvaluationConfigurationError as exc:
+    except (EvaluationConfigurationError, ValueError) as exc:
         print(json.dumps({"status": "blocked", "error_code": str(exc)}), file=sys.stderr)
         return 2
     print(output)

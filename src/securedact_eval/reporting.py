@@ -47,6 +47,30 @@ def quality_markdown(report: QualityReport) -> str:
             f"| {name} | {metric.true_positives} | {metric.false_positives} | "
             f"{metric.false_negatives} | " + " | ".join(formatted) + " |"
         )
+    if report.document_decisions is not None:
+        decisions = report.document_decisions
+        lines.extend(
+            [
+                "",
+                "## Document decisions",
+                "",
+                "| Unsafe accuracy | Block/review accuracy | Blocked accuracy | Review accuracy | Residual value rate | Approved-output leak rate | Audit failures |",
+                "|---:|---:|---:|---:|---:|---:|---:|",
+                "| "
+                + " | ".join(
+                    "undefined" if value is None else f"{value:.4f}"
+                    for value in (
+                        decisions.unsafe_detection_accuracy,
+                        decisions.block_or_review_accuracy,
+                        decisions.blocked_document_accuracy,
+                        decisions.review_required_accuracy,
+                        decisions.residual_sensitive_value_rate,
+                        decisions.approved_output_leak_rate,
+                    )
+                )
+                + f" | {decisions.audit_failure_count} |",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 

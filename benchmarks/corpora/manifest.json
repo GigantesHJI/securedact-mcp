@@ -1,0 +1,10 @@
+{
+  "manifest_version": 1,
+  "files": {
+    "adversarial.json": "9f4021fa9f524348e385e1c25eea7abe899f2221bc99998f278b011a793fa1ee",
+    "development.json": "813ae494d72603f31e9c6127142198d55c9f49551ffc572e4f07b5b922deaa6c",
+    "negative.json": "330b3ea32328f2752c02df72373277ce71d16df57c3c77c13830037e391bdd7c",
+    "release_gate.json": "cb51f75d350aeba00d5288210b5ec7b0a716a6ca3803111502d7916a3c59e500",
+    "validation.json": "9c9892d4be5decf18c600d9e2e1a572f5d846f055b4627a8e422a4ff9af2275a"
+  }
+}

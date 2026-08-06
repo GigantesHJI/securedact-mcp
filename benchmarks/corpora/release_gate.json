@@ -1,0 +1,122 @@
+{
+  "corpus_version": 1,
+  "split": "release_gate",
+  "samples": [
+    {
+      "id": "gate-en-racial-001",
+      "language": "en",
+      "domain": "hr",
+      "text": "Emma identifies as Dutch-Moroccan.",
+      "entities": [
+        {"start": 0, "end": 4, "entity_type": "person", "expected_action": "redact"},
+        {"start": 19, "end": 33, "entity_type": "racial_or_ethnic_origin", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "gate-en-political-001",
+      "language": "en",
+      "domain": "meeting_notes",
+      "text": "John supports the Green Party.",
+      "entities": [
+        {"start": 0, "end": 4, "entity_type": "person", "expected_action": "redact"},
+        {"start": 18, "end": 29, "entity_type": "political_opinion", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "gate-en-religion-001",
+      "language": "en",
+      "domain": "general_prose",
+      "text": "Anna is not Muslim.",
+      "entities": [
+        {"start": 0, "end": 4, "entity_type": "person", "expected_action": "redact"},
+        {"start": 12, "end": 18, "entity_type": "religious_or_philosophical_belief", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "gate-en-philosophy-001",
+      "language": "en",
+      "domain": "general_prose",
+      "text": "Maya follows secular humanism.",
+      "entities": [
+        {"start": 0, "end": 4, "entity_type": "person", "expected_action": "redact"},
+        {"start": 13, "end": 29, "entity_type": "religious_or_philosophical_belief", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "gate-en-union-001",
+      "language": "en",
+      "domain": "hr",
+      "text": "Robert is a member of the Example Workers Union.",
+      "entities": [
+        {"start": 0, "end": 6, "entity_type": "person", "expected_action": "redact"},
+        {"start": 34, "end": 47, "entity_type": "trade_union_membership", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "gate-en-genetic-001",
+      "language": "en",
+      "domain": "healthcare",
+      "text": "Emma has a BRCA1 pathogenic variant.",
+      "entities": [
+        {"start": 0, "end": 4, "entity_type": "person", "expected_action": "redact"},
+        {"start": 11, "end": 16, "entity_type": "genetic_data", "expected_action": "block"}
+      ]
+    },
+    {
+      "id": "gate-en-biometric-001",
+      "language": "en",
+      "domain": "configuration",
+      "text": "Fingerprint template ID: BIO-FP-8821.",
+      "entities": [
+        {"start": 25, "end": 36, "entity_type": "biometric_data", "expected_action": "block"}
+      ]
+    },
+    {
+      "id": "gate-en-health-001",
+      "language": "en",
+      "domain": "healthcare",
+      "text": "Emma has type 2 diabetes.",
+      "entities": [
+        {"start": 0, "end": 4, "entity_type": "person", "expected_action": "redact"},
+        {"start": 9, "end": 24, "entity_type": "health_data", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "gate-en-sex-life-001",
+      "language": "en",
+      "domain": "legal",
+      "text": "The clinical note contains information about the patient's sexual activity.",
+      "entities": [
+        {"start": 59, "end": 74, "entity_type": "sex_life", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "gate-en-orientation-001",
+      "language": "en",
+      "domain": "general_prose",
+      "text": "John identifies as bisexual.",
+      "entities": [
+        {"start": 0, "end": 4, "entity_type": "person", "expected_action": "redact"},
+        {"start": 19, "end": 27, "entity_type": "sexual_orientation", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "gate-en-bearer-001",
+      "language": "en",
+      "domain": "source_code",
+      "text": "Authorization: Bearer syntheticBearerToken123456789",
+      "entities": [
+        {"start": 22, "end": 51, "entity_type": "access_token", "expected_action": "block"}
+      ]
+    },
+    {
+      "id": "gate-en-github-001",
+      "language": "en",
+      "domain": "configuration",
+      "text": "GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+      "entities": [
+        {"start": 13, "end": 49, "entity_type": "api_token", "expected_action": "block"}
+      ]
+    }
+  ]
+}

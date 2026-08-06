@@ -1,0 +1,51 @@
+{
+  "corpus_version": 1,
+  "split": "adversarial",
+  "samples": [
+    {
+      "id": "adv-en-markdown-001",
+      "language": "en",
+      "domain": "email",
+      "text": "Send to [Alex](mailto:alex.markdown@example.test).",
+      "entities": [
+        {"start": 22, "end": 48, "entity_type": "email", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "adv-en-json-001",
+      "language": "en",
+      "domain": "source_code",
+      "text": "{\"email\": \"alex.json@example.test\"}",
+      "entities": [
+        {"start": 11, "end": 33, "entity_type": "email", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "adv-nl-yaml-001",
+      "language": "nl",
+      "domain": "configuration",
+      "text": "email: alex.yaml@example.test",
+      "entities": [
+        {"start": 7, "end": 29, "entity_type": "email", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "adv-en-log-001",
+      "language": "en",
+      "domain": "application_logs",
+      "text": "2026-08-06 user=alex.log@example.test status=ok",
+      "entities": [
+        {"start": 16, "end": 37, "entity_type": "email", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "adv-en-url-001",
+      "language": "en",
+      "domain": "customer_support",
+      "text": "redirect=https://example.test/?email=alex.url%40example.test",
+      "entities": [
+        {"start": 9, "end": 60, "entity_type": "sensitive_url_parameter", "expected_action": "redact"}
+      ]
+    }
+  ]
+}

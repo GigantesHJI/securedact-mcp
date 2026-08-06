@@ -1,0 +1,96 @@
+{
+  "corpus_version": 1,
+  "split": "validation",
+  "samples": [
+    {
+      "id": "val-en-person-001",
+      "language": "en",
+      "domain": "hr",
+      "text": "Name: Emma de Vries",
+      "entities": [
+        {"start": 6, "end": 19, "entity_type": "person", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "val-en-email-001",
+      "language": "en",
+      "domain": "email",
+      "text": "Email: alex.valid@example.test",
+      "entities": [
+        {"start": 7, "end": 30, "entity_type": "email", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "val-en-phone-001",
+      "language": "en",
+      "domain": "customer_support",
+      "text": "Phone: +44 20 7946 0958",
+      "entities": [
+        {"start": 7, "end": 23, "entity_type": "phone", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "val-nl-address-001",
+      "language": "nl",
+      "domain": "legal",
+      "text": "Address: Examplelaan 12, 1234 AB Utrecht",
+      "entities": [
+        {"start": 9, "end": 40, "entity_type": "address", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "val-nl-bsn-001",
+      "language": "nl",
+      "domain": "education",
+      "text": "BSN: 123456782",
+      "entities": [
+        {"start": 5, "end": 14, "entity_type": "bsn", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "val-nl-iban-001",
+      "language": "nl",
+      "domain": "meeting_notes",
+      "text": "IBAN: NL91 ABNA 0417 1643 00",
+      "entities": [
+        {"start": 6, "end": 28, "entity_type": "iban", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "val-en-ip-001",
+      "language": "en",
+      "domain": "application_logs",
+      "text": "Client IP: 192.0.2.44",
+      "entities": [
+        {"start": 11, "end": 21, "entity_type": "ipv4", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "val-nl-date-001",
+      "language": "nl",
+      "domain": "healthcare",
+      "text": "Date of birth: 11 maart 1991",
+      "entities": [
+        {"start": 15, "end": 28, "entity_type": "date_of_birth", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "val-en-organization-001",
+      "language": "en",
+      "domain": "general_prose",
+      "text": "Organization: Example Research BV",
+      "entities": [
+        {"start": 14, "end": 33, "entity_type": "organization", "expected_action": "review"}
+      ]
+    },
+    {
+      "id": "val-nl-location-001",
+      "language": "nl",
+      "domain": "general_prose",
+      "text": "Location: Den Haag",
+      "entities": [
+        {"start": 10, "end": 18, "entity_type": "location", "expected_action": "review"}
+      ]
+    }
+  ]
+}

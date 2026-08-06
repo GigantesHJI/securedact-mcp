@@ -1,0 +1,15 @@
+{
+  "threshold_version": 1,
+  "mode": "baseline_regression",
+  "allowed_recall_regression": 0.02,
+  "allowed_false_positive_rate_increase": 0.02,
+  "minimum_global_recall": 0.90,
+  "minimum_high_risk_recall": 0.95,
+  "maximum_false_positive_rate": 0.25,
+  "minimum_mode_recall": {"deterministic": 0.90, "flair": 0.90},
+  "minimum_language_recall": {"en": 0.90, "nl": 0.85},
+  "minimum_domain_recall": 0.50,
+  "high_risk_entities": ["email", "api_token", "access_token", "private_key", "password"],
+  "latency_ceiling_ms": 1000,
+  "notes": "Initial gates compare against the committed deterministic baseline; hardware-sensitive resource metrics are reporting-only."
+}

@@ -1,0 +1,14 @@
+{
+  "corpus_version": 1,
+  "split": "negative",
+  "samples": [
+    {"id": "neg-en-month-001", "language": "en", "domain": "general_prose", "text": "May is followed by June in this calendar.", "entities": []},
+    {"id": "neg-nl-month-001", "language": "nl", "domain": "education", "text": "Mei volgt op april in de kalender.", "entities": []},
+    {"id": "neg-en-version-001", "language": "en", "domain": "source_code", "text": "Package version 3.12.4 passed all tests.", "entities": []},
+    {"id": "neg-en-uuid-001", "language": "en", "domain": "application_logs", "text": "Trace 123e4567-e89b-12d3-a456-426614174000 completed.", "entities": []},
+    {"id": "neg-en-hash-001", "language": "en", "domain": "configuration", "text": "Digest 0123456789abcdef0123456789abcdef is a synthetic fixture.", "entities": []},
+    {"id": "neg-en-number-001", "language": "en", "domain": "meeting_notes", "text": "The room contains 24 chairs and 6 tables.", "entities": []},
+    {"id": "neg-en-gdpr-001", "language": "en", "domain": "legal", "text": "GDPR Article 9 discusses categories without making an assertion about a person.", "entities": []},
+    {"id": "neg-nl-common-001", "language": "nl", "domain": "customer_support", "text": "De gewone woorden Oranje en Unie staan in de handleiding.", "entities": []}
+  ]
+}

@@ -1,0 +1,2328 @@
+{
+  "report_version": "1",
+  "mode": "deterministic",
+  "sample_count": 37,
+  "support_count": 37,
+  "exact": {
+    "true_positives": 35,
+    "false_positives": 1,
+    "true_negatives": 8,
+    "false_negatives": 2,
+    "precision": 0.9722222222222222,
+    "recall": 0.9459459459459459,
+    "f1": 0.9589041095890412,
+    "false_positive_rate": 0.1111111111111111,
+    "false_negative_rate": 0.05405405405405406,
+    "support": 37
+  },
+  "relaxed": {
+    "true_positives": 35,
+    "false_positives": 1,
+    "true_negatives": 8,
+    "false_negatives": 2,
+    "precision": 0.9722222222222222,
+    "recall": 0.9459459459459459,
+    "f1": 0.9589041095890412,
+    "false_positive_rate": 0.1111111111111111,
+    "false_negative_rate": 0.05405405405405406,
+    "support": 37
+  },
+  "micro_average": {
+    "precision": 0.9722222222222222,
+    "recall": 0.9459459459459459,
+    "f1": 0.9589041095890412
+  },
+  "macro_average": {
+    "precision": 0.9952380952380951,
+    "recall": 0.9130434782608695,
+    "f1": 0.9974937343358395
+  },
+  "weighted_average": {
+    "precision": 0.9742857142857143,
+    "recall": 0.9459459459459459,
+    "f1": 0.9864661654135338
+  },
+  "per_entity": {
+    "access_token": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "address": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "api_token": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "biometric_data": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "bsn": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "date_of_birth": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "email": {
+      "exact": {
+        "true_positives": 6,
+        "false_positives": 0,
+        "true_negatives": 31,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 6
+      },
+      "relaxed": {
+        "true_positives": 6,
+        "false_positives": 0,
+        "true_negatives": 31,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 6
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "genetic_data": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "health_data": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "iban": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "ipv4": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "location": {
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 1,
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 1.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 1,
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 1.0,
+        "support": 1
+      },
+      "category_accuracy": null,
+      "action_accuracy": null
+    },
+    "organization": {
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 1,
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 1.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 1,
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 1.0,
+        "support": 1
+      },
+      "category_accuracy": null,
+      "action_accuracy": null
+    },
+    "person": {
+      "exact": {
+        "true_positives": 9,
+        "false_positives": 1,
+        "true_negatives": 27,
+        "false_negatives": 0,
+        "precision": 0.9,
+        "recall": 1.0,
+        "f1": 0.9473684210526316,
+        "false_positive_rate": 0.03571428571428571,
+        "false_negative_rate": 0.0,
+        "support": 9
+      },
+      "relaxed": {
+        "true_positives": 9,
+        "false_positives": 1,
+        "true_negatives": 27,
+        "false_negatives": 0,
+        "precision": 0.9,
+        "recall": 1.0,
+        "f1": 0.9473684210526316,
+        "false_positive_rate": 0.03571428571428571,
+        "false_negative_rate": 0.0,
+        "support": 9
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "phone": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "political_opinion": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "postcode": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "racial_or_ethnic_origin": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "religious_or_philosophical_belief": {
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 35,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 35,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "sensitive_url_parameter": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "sex_life": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "sexual_orientation": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "trade_union_membership": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 36,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    }
+  },
+  "per_language": {
+    "en": {
+      "exact": {
+        "true_positives": 29,
+        "false_positives": 1,
+        "true_negatives": 6,
+        "false_negatives": 1,
+        "precision": 0.9666666666666667,
+        "recall": 0.9666666666666667,
+        "f1": 0.9666666666666667,
+        "false_positive_rate": 0.14285714285714285,
+        "false_negative_rate": 0.03333333333333333,
+        "support": 30
+      },
+      "relaxed": {
+        "true_positives": 29,
+        "false_positives": 1,
+        "true_negatives": 6,
+        "false_negatives": 1,
+        "precision": 0.9666666666666667,
+        "recall": 0.9666666666666667,
+        "f1": 0.9666666666666667,
+        "false_positive_rate": 0.14285714285714285,
+        "false_negative_rate": 0.03333333333333333,
+        "support": 30
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "nl": {
+      "exact": {
+        "true_positives": 6,
+        "false_positives": 0,
+        "true_negatives": 2,
+        "false_negatives": 1,
+        "precision": 1.0,
+        "recall": 0.8571428571428571,
+        "f1": 0.923076923076923,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.14285714285714285,
+        "support": 7
+      },
+      "relaxed": {
+        "true_positives": 6,
+        "false_positives": 0,
+        "true_negatives": 2,
+        "false_negatives": 1,
+        "precision": 1.0,
+        "recall": 0.8571428571428571,
+        "f1": 0.923076923076923,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.14285714285714285,
+        "support": 7
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    }
+  },
+  "per_domain": {
+    "application_logs": {
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "configuration": {
+      "exact": {
+        "true_positives": 3,
+        "false_positives": 1,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 0.75,
+        "recall": 1.0,
+        "f1": 0.8571428571428571,
+        "false_positive_rate": 0.5,
+        "false_negative_rate": 0.0,
+        "support": 3
+      },
+      "relaxed": {
+        "true_positives": 3,
+        "false_positives": 1,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 0.75,
+        "recall": 1.0,
+        "f1": 0.8571428571428571,
+        "false_positive_rate": 0.5,
+        "false_negative_rate": 0.0,
+        "support": 3
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "customer_support": {
+      "exact": {
+        "true_positives": 3,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 3
+      },
+      "relaxed": {
+        "true_positives": 3,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 3
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "education": {
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "email": {
+      "exact": {
+        "true_positives": 3,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 3
+      },
+      "relaxed": {
+        "true_positives": 3,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 3
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "general_prose": {
+      "exact": {
+        "true_positives": 6,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 2,
+        "precision": 1.0,
+        "recall": 0.75,
+        "f1": 0.8571428571428571,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.25,
+        "support": 8
+      },
+      "relaxed": {
+        "true_positives": 6,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 2,
+        "precision": 1.0,
+        "recall": 0.75,
+        "f1": 0.8571428571428571,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.25,
+        "support": 8
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "healthcare": {
+      "exact": {
+        "true_positives": 5,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 5
+      },
+      "relaxed": {
+        "true_positives": 5,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 5
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "hr": {
+      "exact": {
+        "true_positives": 5,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 5
+      },
+      "relaxed": {
+        "true_positives": 5,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 5
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "legal": {
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "meeting_notes": {
+      "exact": {
+        "true_positives": 3,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 3
+      },
+      "relaxed": {
+        "true_positives": 3,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 3
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "source_code": {
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    }
+  },
+  "per_split": {
+    "adversarial": {
+      "exact": {
+        "true_positives": 5,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 5
+      },
+      "relaxed": {
+        "true_positives": 5,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 5
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "development": {
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "negative": {
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 8,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 8,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "category_accuracy": null,
+      "action_accuracy": null
+    },
+    "release_gate": {
+      "exact": {
+        "true_positives": 20,
+        "false_positives": 1,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 0.9523809523809523,
+        "recall": 1.0,
+        "f1": 0.975609756097561,
+        "false_positive_rate": 1.0,
+        "false_negative_rate": 0.0,
+        "support": 20
+      },
+      "relaxed": {
+        "true_positives": 20,
+        "false_positives": 1,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 0.9523809523809523,
+        "recall": 1.0,
+        "f1": 0.975609756097561,
+        "false_positive_rate": 1.0,
+        "false_negative_rate": 0.0,
+        "support": 20
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    },
+    "validation": {
+      "exact": {
+        "true_positives": 8,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 2,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.2,
+        "support": 10
+      },
+      "relaxed": {
+        "true_positives": 8,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 2,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.2,
+        "support": 10
+      },
+      "category_accuracy": 1.0,
+      "action_accuracy": 1.0
+    }
+  },
+  "exact_recall_bootstrap_95": [
+    0.8604651162790697,
+    1.0
+  ],
+  "sample_results": [
+    {
+      "id": "adv-en-json-001",
+      "split": "adversarial",
+      "language": "en",
+      "domain": "source_code",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "adv-en-log-001",
+      "split": "adversarial",
+      "language": "en",
+      "domain": "application_logs",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "adv-en-markdown-001",
+      "split": "adversarial",
+      "language": "en",
+      "domain": "email",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "adv-en-url-001",
+      "split": "adversarial",
+      "language": "en",
+      "domain": "customer_support",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "adv-nl-yaml-001",
+      "split": "adversarial",
+      "language": "nl",
+      "domain": "configuration",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "dev-en-email-001",
+      "split": "development",
+      "language": "en",
+      "domain": "email",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "dev-nl-postcode-001",
+      "split": "development",
+      "language": "nl",
+      "domain": "customer_support",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "gate-en-bearer-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "source_code",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "gate-en-biometric-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "configuration",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 1,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666,
+        "false_positive_rate": 1.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 1,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666,
+        "false_positive_rate": 1.0,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "gate-en-genetic-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "healthcare",
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      }
+    },
+    {
+      "id": "gate-en-github-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "configuration",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "gate-en-health-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "healthcare",
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      }
+    },
+    {
+      "id": "gate-en-orientation-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "general_prose",
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      }
+    },
+    {
+      "id": "gate-en-philosophy-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "general_prose",
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      }
+    },
+    {
+      "id": "gate-en-political-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "meeting_notes",
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      }
+    },
+    {
+      "id": "gate-en-racial-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "hr",
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      }
+    },
+    {
+      "id": "gate-en-religion-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "general_prose",
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      }
+    },
+    {
+      "id": "gate-en-sex-life-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "legal",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "gate-en-union-001",
+      "split": "release_gate",
+      "language": "en",
+      "domain": "hr",
+      "exact": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      },
+      "relaxed": {
+        "true_positives": 2,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 2
+      }
+    },
+    {
+      "id": "neg-en-gdpr-001",
+      "split": "negative",
+      "language": "en",
+      "domain": "legal",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      }
+    },
+    {
+      "id": "neg-en-hash-001",
+      "split": "negative",
+      "language": "en",
+      "domain": "configuration",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      }
+    },
+    {
+      "id": "neg-en-month-001",
+      "split": "negative",
+      "language": "en",
+      "domain": "general_prose",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      }
+    },
+    {
+      "id": "neg-en-number-001",
+      "split": "negative",
+      "language": "en",
+      "domain": "meeting_notes",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      }
+    },
+    {
+      "id": "neg-en-uuid-001",
+      "split": "negative",
+      "language": "en",
+      "domain": "application_logs",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      }
+    },
+    {
+      "id": "neg-en-version-001",
+      "split": "negative",
+      "language": "en",
+      "domain": "source_code",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      }
+    },
+    {
+      "id": "neg-nl-common-001",
+      "split": "negative",
+      "language": "nl",
+      "domain": "customer_support",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      }
+    },
+    {
+      "id": "neg-nl-month-001",
+      "split": "negative",
+      "language": "nl",
+      "domain": "education",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 1,
+        "false_negatives": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null,
+        "false_positive_rate": 0.0,
+        "false_negative_rate": null,
+        "support": 0
+      }
+    },
+    {
+      "id": "val-en-email-001",
+      "split": "validation",
+      "language": "en",
+      "domain": "email",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-en-ip-001",
+      "split": "validation",
+      "language": "en",
+      "domain": "application_logs",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-en-organization-001",
+      "split": "validation",
+      "language": "en",
+      "domain": "general_prose",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 1,
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "false_positive_rate": null,
+        "false_negative_rate": 1.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 1,
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "false_positive_rate": null,
+        "false_negative_rate": 1.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-en-person-001",
+      "split": "validation",
+      "language": "en",
+      "domain": "hr",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-en-phone-001",
+      "split": "validation",
+      "language": "en",
+      "domain": "customer_support",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-nl-address-001",
+      "split": "validation",
+      "language": "nl",
+      "domain": "legal",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-nl-bsn-001",
+      "split": "validation",
+      "language": "nl",
+      "domain": "education",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-nl-date-001",
+      "split": "validation",
+      "language": "nl",
+      "domain": "healthcare",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-nl-iban-001",
+      "split": "validation",
+      "language": "nl",
+      "domain": "meeting_notes",
+      "exact": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 1,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "false_negative_rate": 0.0,
+        "support": 1
+      }
+    },
+    {
+      "id": "val-nl-location-001",
+      "split": "validation",
+      "language": "nl",
+      "domain": "general_prose",
+      "exact": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 1,
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "false_positive_rate": null,
+        "false_negative_rate": 1.0,
+        "support": 1
+      },
+      "relaxed": {
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 1,
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "false_positive_rate": null,
+        "false_negative_rate": 1.0,
+        "support": 1
+      }
+    }
+  ],
+  "metadata": {
+    "tool_version": "0.1.0",
+    "policy_version": 1,
+    "policy_digest": "cab1a25b82d968450e464f75d3fa940360d1a521de8fdcaac72f9fed9185ef59",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python_version": "3.12.13",
+    "dependency_lock_digest": "e02090cfdd8817a71a4e739681de17843fc8f1917957145988f225b1d59254f3",
+    "model_identifier": "deterministic-local-v1",
+    "corpus_manifest_digest": "072a945890f788b1d4b2f4ee601cf52819e57f0f54e91bb0e47b6d574cc01e74",
+    "evaluation_unit": "character spans; true negatives are document-level negatives"
+  }
+}

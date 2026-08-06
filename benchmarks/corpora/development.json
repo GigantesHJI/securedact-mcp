@@ -1,0 +1,24 @@
+{
+  "corpus_version": 1,
+  "split": "development",
+  "samples": [
+    {
+      "id": "dev-en-email-001",
+      "language": "en",
+      "domain": "email",
+      "text": "Contact alex.dev@example.test",
+      "entities": [
+        {"start": 8, "end": 29, "entity_type": "email", "expected_action": "redact"}
+      ]
+    },
+    {
+      "id": "dev-nl-postcode-001",
+      "language": "nl",
+      "domain": "customer_support",
+      "text": "Postcode: 1234 AB",
+      "entities": [
+        {"start": 10, "end": 17, "entity_type": "postcode", "expected_action": "redact"}
+      ]
+    }
+  ]
+}

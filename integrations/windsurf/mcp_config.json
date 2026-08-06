@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "securedact": {
+      "command": "<ABSOLUTE_PATH_TO_PYTHON>",
+      "args": ["-m", "securedact_mcp"],
+      "env": {"SECUREDACT_REQUIRE_FLAIR": "1"}
+    }
+  }
+}

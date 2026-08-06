@@ -1,0 +1,7 @@
+[mcp_servers.securedact]
+command = "<ABSOLUTE_PATH_TO_PYTHON>"
+args = ["-m", "securedact_mcp"]
+required = true
+
+[mcp_servers.securedact.env]
+SECUREDACT_REQUIRE_FLAIR = "1"

@@ -25,8 +25,6 @@ disclosure of private or sensitive information are not acceptable.
 
 ## Enforcement
 
-Report conduct concerns privately to `security@securedact.com`. Maintainers may
-remove content, restrict participation, or take other proportionate action. This
-role address must be replaced if it is not actively monitored before public
-community participation begins.
+Report conduct concerns privately to `info@securedact.com`. Maintainers may
+remove content, restrict participation, or take other proportionate action.
 

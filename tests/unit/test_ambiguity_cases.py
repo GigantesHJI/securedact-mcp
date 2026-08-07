@@ -28,6 +28,7 @@ def test_month_words_are_not_misclassified_as_people_or_dates(text: str) -> None
     [
         "Anne-Marie de Vries",
         "A. de Vries",
+        "van der Jolijn van der Leek-Jorlink",
         "Élodie van Oosten",
         "O\u2019Connor",
         "D'Angelo",
@@ -41,6 +42,19 @@ def test_self_identified_accented_hyphenated_and_apostrophe_names(name: str) -> 
         if item.entity_type == EntityType.PERSON
     ]
     assert any(item.text == name and text[item.start : item.end] == name for item in people)
+
+
+@pytest.mark.parametrize("possessive", ["Gabriel Fernandez's", "Gabriel Fernandez\u2019s"])
+def test_contextual_person_span_excludes_possessive_suffix(possessive: str) -> None:
+    text = f"{possessive} sexual activity is recorded."
+
+    people = [
+        item
+        for item in ContextualPrivacyDetector().detect(text)
+        if item.entity_type == EntityType.PERSON
+    ]
+
+    assert [item.text for item in people] == ["Gabriel Fernandez"]
 
 
 def test_non_latin_finding_preserves_python_unicode_offsets() -> None:

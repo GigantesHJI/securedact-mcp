@@ -22,15 +22,16 @@ NAME_WORD = (
     r"|[A-ZÀ-ÖØ-Þ](?:['’.-][A-Za-zÀ-ÖØ-öø-ÿ]+)+"
     r"|[A-ZÀ-ÖØ-Þ]\.)"
 )
+NAME_PARTICLES = r"(?:(?:de|den|der|van|von|al|el)\s+)"
 NAME_PATTERN = re.compile(
-    rf"\b{NAME_WORD}"
-    rf"(?:\s+(?:(?:de|den|der|van|von|al|el)\s+)?{NAME_WORD}){{0,3}}\b"
+    rf"\b(?:{NAME_PARTICLES}){{0,3}}{NAME_WORD}"
+    rf"(?:\s+(?:{NAME_PARTICLES}){{0,3}}{NAME_WORD}){{0,3}}\b"
 )
 SELF_NAME_WORD = NAME_WORD
 SELF_NAME_PATTERN = re.compile(
     r"(?i:\b(?:my name is|mijn naam is)\s+)"
-    rf"(?P<name>{SELF_NAME_WORD}(?:\s+(?:(?:de|den|der|van|von|al|el)\s+)?"
-    rf"{SELF_NAME_WORD}){{0,3}})\b"
+    rf"(?P<name>(?:{NAME_PARTICLES}){{0,3}}{SELF_NAME_WORD}"
+    rf"(?:\s+(?:{NAME_PARTICLES}){{0,3}}{SELF_NAME_WORD}){{0,3}})\b"
 )
 PRONOUN_PATTERN = re.compile(
     r"\b(?:she|he|her|his|they|their|the patient|patient|zij|ze|hij|haar|zijn|de patiënt)\b",
@@ -163,10 +164,13 @@ class ContextualPrivacyDetector:
         for match in NAME_PATTERN.finditer(text):
             if self._looks_like_non_person(match.group(0)):
                 continue
+            end = match.end()
+            if match.group(0).casefold().endswith(("'s", "\u2019s")):
+                end -= 2
             person = Detection(
                 start=match.start(),
-                end=match.end(),
-                text=match.group(0),
+                end=end,
+                text=text[match.start() : end],
                 entity_type=EntityType.PERSON,
                 confidence=0.82,
                 source=DetectionSource.CONTEXTUAL,

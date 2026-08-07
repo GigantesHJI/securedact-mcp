@@ -94,8 +94,11 @@ def test_compound_dutch_location_preserves_unicode_offsets() -> None:
     assert text[finding.start : finding.end] == location_text
 
 
-def test_fullwidth_email_lookalike_is_not_treated_as_canonical_email() -> None:
+def test_fullwidth_email_is_detected_but_preserves_source_boundaries() -> None:
     text = "alex\uff20example.test"
     detections = RegexDetector().detect(text)
 
-    assert all(item.entity_type != EntityType.EMAIL for item in detections)
+    finding = next(item for item in detections if item.entity_type == EntityType.EMAIL)
+
+    assert finding.text == text
+    assert (finding.start, finding.end) == (0, len(text))

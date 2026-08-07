@@ -71,3 +71,48 @@ def test_normalized_detection_maps_back_to_exact_source_offsets(
 
     assert detection.text == expected
     assert text[detection.start : detection.end] == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Contact: 'case20260834@example.invalid'.",
+        "Contact: 'case20260834&#64;example.invalid'.",
+        "Contact: 'case20260834%40example.invalid'.",
+    ],
+)
+def test_email_does_not_absorb_a_surrounding_quote(text: str) -> None:
+    detection = next(item for item in RegexDetector().detect(text) if item.entity_type == EntityType.EMAIL)
+
+    assert not detection.text.startswith("'")
+    assert detection.text.endswith("example.invalid")
+
+
+def test_email_preserves_an_internal_apostrophe() -> None:
+    value = "o'neil@example.test"
+
+    detection = next(
+        item for item in RegexDetector().detect(value) if item.entity_type == EntityType.EMAIL
+    )
+
+    assert detection.text == value
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "reference N L 2 2   T E S T   2 6 0 8   0 6 0 0   2 3",
+        "customer C U S T - 0 8 0 6 - 0 0 0 0 0 1 4 9",
+    ],
+)
+def test_spaced_identifier_fragments_are_not_phone_numbers(text: str) -> None:
+    assert all(item.entity_type != EntityType.PHONE for item in RegexDetector().detect(text))
+
+
+@pytest.mark.parametrize("value", ["+ 3 1 20 1000023", "+31 - 20 - 1000039", "020 100 0039"])
+def test_structured_phone_spacing_is_supported(value: str) -> None:
+    detection = next(
+        item for item in RegexDetector().detect(value) if item.entity_type == EntityType.PHONE
+    )
+
+    assert detection.text == value

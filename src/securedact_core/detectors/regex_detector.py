@@ -169,11 +169,13 @@ def _phone(value: str) -> bool:
     digits = _digits(value)
     if not 7 <= len(digits) <= 15:
         return False
-    return (
-        value.lstrip().startswith("+")
-        or any(char in value for char in "(). ")
-        or value.startswith("0")
-    )
+    stripped = value.lstrip()
+    if stripped.startswith("+"):
+        return True
+    groups = re.findall(r"\d+", value)
+    if groups and all(len(group) == 1 for group in groups):
+        return False
+    return any(char in value for char in "(). ") or stripped.startswith("0")
 
 
 def _bic(value: str) -> bool:
@@ -591,7 +593,7 @@ RULES = (
     RegexRule(
         "phone",
         EntityType.PHONE,
-        re.compile(r"(?<![\w-])(?:\+?\d[\d(). -]{5,}\d)(?![\w-])"),
+        re.compile(r"(?<![\w-])(?:\+\s*|(?=\d))\d[\d(). -]{5,}\d(?![\w-])"),
         _phone,
         precedence=40,
     ),
@@ -693,6 +695,9 @@ class RegexDetector:
         for rule, match in self._matches(text):
             start, end = match.span()
             value = match.group(0)
+            if rule.name == "email" and value.startswith("'"):
+                start += 1
+                value = value[1:]
             if rule.name == "iban":
                 value = self._trim_iban(value)
                 end = start + len(value)

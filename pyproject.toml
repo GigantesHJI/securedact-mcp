@@ -12,7 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE.md", "NOTICE"]
 dependencies = [
   "cryptography>=50,<51",
-  "mcp>=1.2,<2",
+  "mcp>=2.0.0,<3",
   "pydantic>=2.10,<3",
   "PyYAML>=6.0.2,<7",
 ]

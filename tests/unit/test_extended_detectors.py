@@ -178,3 +178,40 @@ def test_normalized_assertions_preserve_original_person_and_evidence_offsets(
     assert any(item.entity_type == EntityType.PERSON and item.text == person for item in detections)
     assert assertion.evidence_spans[0].text == evidence
     assert text[assertion.evidence_spans[0].start : assertion.evidence_spans[0].end] == evidence
+
+
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        (
+            "jEFFREY wILSON IS mUSLIM; SYNTHETIC RECORD.",
+            EntityType.RELIGIOUS_OR_PHILOSOPHICAL_BELIEF,
+        ),
+        ("iLSE mEIJER STEUNT gROENlINKS.", EntityType.POLITICAL_OPINION),
+        ("dAWN nOBLE IDENTIFIES AS BISEXUAL.", EntityType.SEXUAL_ORIENTATION),
+    ],
+)
+def test_explicit_mixed_case_subject_still_creates_a_sensitive_assertion(
+    text: str,
+    category: EntityType,
+) -> None:
+    detector = ContextualPrivacyDetector()
+
+    assertions = detector.detect_assertions(text)
+    people = [item for item in detector.detect(text) if item.entity_type == EntityType.PERSON]
+
+    assert any(item.category == category for item in assertions)
+    assert any(item.subject_entity_ids == ["record-subject"] for item in assertions)
+    assert people == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The hospital has type 2 diabetes guidance.",
+        "The Green Party is a political affiliation.",
+        "The policy supports the Green Party.",
+    ],
+)
+def test_non_person_subjects_do_not_trigger_the_record_subject_fallback(text: str) -> None:
+    assert ContextualPrivacyDetector().detect_assertions(text) == []

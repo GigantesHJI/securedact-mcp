@@ -305,7 +305,19 @@ class ContextualPrivacyDetector:
                     value in lowered
                     for value in ("her wife", "his husband", "haar vrouw", "zijn man")
                 )
-                if not linked_people and not structured_record and not record_subject_reference:
+                explicit_subject = bool(
+                    relation
+                    and self._explicit_record_subject(
+                        sentence,
+                        relation.start(),
+                    )
+                )
+                if (
+                    not linked_people
+                    and not structured_record
+                    and not record_subject_reference
+                    and not explicit_subject
+                ):
                     continue
                 if (
                     relation is None
@@ -334,7 +346,9 @@ class ContextualPrivacyDetector:
                 )
                 detections.append(evidence)
                 subject_ids = [person.id for person in linked_people]
-                if (structured_record or record_subject_reference) and not subject_ids:
+                if (
+                    structured_record or record_subject_reference or explicit_subject
+                ) and not subject_ids:
                     subject_ids = ["record-subject"]
                 assertions.append(
                     SensitiveAssertion(
@@ -537,6 +551,28 @@ class ContextualPrivacyDetector:
             "political preference",
         }
         return lowered in words or lowered.startswith(("the ", "a "))
+
+    @staticmethod
+    def _explicit_record_subject(sentence: str, relation_start: int) -> bool:
+        prefix = sentence[:relation_start].strip(" \t\r\n,;:|()[]{}<>\"'")
+        if not prefix or len(prefix) > 80 or any(character.isdigit() for character in prefix):
+            return False
+        words = re.findall(r"[^\W\d_]+(?:['\u2019.-][^\W\d_]+)*", prefix, re.UNICODE)
+        if not 2 <= len(words) <= 6:
+            return False
+        ignored_starts = {
+            "a",
+            "an",
+            "de",
+            "een",
+            "het",
+            "that",
+            "the",
+            "this",
+            "those",
+            "these",
+        }
+        return words[0].casefold() not in ignored_starts and " ".join(words) == prefix
 
     @staticmethod
     def _sentences(text: str) -> list[tuple[int, int, str]]:

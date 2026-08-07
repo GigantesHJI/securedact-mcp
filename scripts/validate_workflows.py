@@ -33,7 +33,7 @@ APPROVED_ACTION_REPOSITORIES = {
 }
 
 
-class WorkflowLoader(yaml.SafeLoader):
+class WorkflowLoader(yaml.SafeLoader):  # type: ignore[misc]
     pass
 
 
@@ -42,7 +42,7 @@ for first_character, resolvers in list(WorkflowLoader.yaml_implicit_resolvers.it
     WorkflowLoader.yaml_implicit_resolvers[first_character] = [
         item for item in resolvers if item[0] != "tag:yaml.org,2002:bool"
     ]
-WorkflowLoader.add_implicit_resolver(  # type: ignore[no-untyped-call]
+WorkflowLoader.add_implicit_resolver(
     "tag:yaml.org,2002:bool",
     re.compile(r"^(?:true|false)$", re.IGNORECASE),
     list("tTfF"),

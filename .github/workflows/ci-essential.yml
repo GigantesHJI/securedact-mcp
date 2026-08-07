@@ -85,39 +85,39 @@ jobs:
             exit 1
           }
 
- package:
-  name: Build and clean-install package
-  needs: [repository-hygiene, tests]
-  runs-on: ubuntu-24.04
-  timeout-minutes: 25
-  steps:
-    - name: Repository steps started — action resolution succeeded
-      run: echo "SECUREDACT_CI_STEPS_STARTED=1"
+  package:
+    name: Build and clean-install package
+    needs: [repository-hygiene, tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Repository steps started — action resolution succeeded
+        run: echo "SECUREDACT_CI_STEPS_STARTED=1"
 
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: "3.12"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
 
-    - name: Install locked build environment with bounded transient retries
-      run: |
-        python scripts/retry_network.py -- python -m pip install "uv==${UV_VERSION}"
-        python scripts/retry_network.py -- uv sync --frozen --extra dev
+      - name: Install locked build environment with bounded transient retries
+        run: |
+          python scripts/retry_network.py -- python -m pip install "uv==${UV_VERSION}"
+          python scripts/retry_network.py -- uv sync --frozen --extra dev
 
-    - name: Verify build backend
-      run: |
-        uv run --extra dev python -c "import setuptools; print('setuptools', setuptools.__version__)"
-        uv run --extra dev python -c "import setuptools.build_meta; print('setuptools.build_meta available')"
+      - name: Verify build backend
+        run: |
+          uv run --extra dev python -c "import setuptools; print('setuptools', setuptools.__version__)"
+          uv run --extra dev python -c "import setuptools.build_meta; print('setuptools.build_meta available')"
 
-    - name: Build, inspect, and clean-install
-      run: |
-        uv run --extra dev python -m build --no-isolation
-        uv run --extra dev python -m twine check dist/*
-        uv run --extra dev python scripts/validate_release_artifacts.py dist
-        uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file dist/runtime-requirements.txt
-        uv venv .clean-venv --python 3.12
-        python scripts/retry_network.py -- uv pip install --python .clean-venv/bin/python --requirements dist/runtime-requirements.txt
-        uv pip install --python .clean-venv/bin/python --no-deps dist/*.whl
-        .clean-venv/bin/python scripts/smoke_test_entrypoint.py
-        .clean-venv/bin/securedact-mcp --help
+      - name: Build, inspect, and clean-install
+        run: |
+          uv run --extra dev python -m build --no-isolation
+          uv run --extra dev python -m twine check dist/*
+          uv run --extra dev python scripts/validate_release_artifacts.py dist
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file dist/runtime-requirements.txt
+          uv venv .clean-venv --python 3.12
+          python scripts/retry_network.py -- uv pip install --python .clean-venv/bin/python --requirements dist/runtime-requirements.txt
+          uv pip install --python .clean-venv/bin/python --no-deps dist/*.whl
+          .clean-venv/bin/python scripts/smoke_test_entrypoint.py
+          .clean-venv/bin/securedact-mcp --help

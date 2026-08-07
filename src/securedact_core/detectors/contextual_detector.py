@@ -13,7 +13,11 @@ from ..models import (
     SensitiveAssertion,
     TextSpan,
 )
-from ..normalization import NormalizedText, normalize_for_detection
+from ..normalization import (
+    NormalizedText,
+    normalize_for_detection,
+    requires_detection_normalization,
+)
 
 LEXICON_PATH = Path(__file__).with_name("lexicons") / "special_categories.v1.json"
 
@@ -125,9 +129,9 @@ class ContextualPrivacyDetector:
         return assertions
 
     def _analyze(self, text: str) -> tuple[list[Detection], list[SensitiveAssertion]]:
-        normalized = normalize_for_detection(text)
-        if normalized.text == text:
+        if not requires_detection_normalization(text):
             return self._analyze_view(text)
+        normalized = normalize_for_detection(text)
         detections, assertions = self._analyze_view(normalized.text)
         mapped_detections = [
             self._map_detection(normalized, detection) for detection in detections

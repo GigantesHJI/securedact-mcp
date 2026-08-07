@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from ..models import Detection, DetectionSource, EntityType
-from ..normalization import NormalizedText, normalize_for_detection
+from ..normalization import (
+    NormalizedText,
+    normalize_for_detection,
+    requires_detection_normalization,
+)
 from .contextual_detector import NAME_PATTERN
 
 DEFAULT_TAG_MAP: dict[str, EntityType] = {
@@ -107,9 +111,9 @@ class FlairDetector:
                 self._on_ready()
 
     def detect(self, text: str) -> list[Detection]:
-        normalized = normalize_for_detection(text)
-        if normalized.text == text:
+        if not requires_detection_normalization(text):
             return self._detect_view(text)
+        normalized = normalize_for_detection(text)
         return [
             self._map_to_original(normalized, detection)
             for detection in self._detect_view(normalized.text)

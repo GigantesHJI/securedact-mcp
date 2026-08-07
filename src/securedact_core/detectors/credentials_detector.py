@@ -7,7 +7,11 @@ from collections import Counter
 from dataclasses import dataclass
 
 from ..models import Detection, DetectionSource, EntityType
-from ..normalization import NormalizedText, normalize_for_detection
+from ..normalization import (
+    NormalizedText,
+    normalize_for_detection,
+    requires_detection_normalization,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,14 +135,18 @@ class CredentialsDetector:
 
     def detect(self, text: str) -> list[Detection]:
         output = self._detect_view(text)
+        if not requires_detection_normalization(text):
+            return sorted(
+                output.values(),
+                key=lambda item: (item.start, item.end, item.entity_type.value),
+            )
         normalized = normalize_for_detection(text)
-        if normalized.text != text:
-            for detection in self._detect_view(normalized.text).values():
-                mapped = self._map_to_original(normalized, detection)
-                key = (mapped.start, mapped.end, mapped.entity_type)
-                current = output.get(key)
-                if current is None or mapped.precedence > current.precedence:
-                    output[key] = mapped
+        for detection in self._detect_view(normalized.text).values():
+            mapped = self._map_to_original(normalized, detection)
+            key = (mapped.start, mapped.end, mapped.entity_type)
+            current = output.get(key)
+            if current is None or mapped.precedence > current.precedence:
+                output[key] = mapped
         return sorted(
             output.values(),
             key=lambda item: (item.start, item.end, item.entity_type.value),

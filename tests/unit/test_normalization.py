@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from securedact_core.normalization import normalize_for_detection
+from securedact_core.normalization import (
+    normalize_for_detection,
+    requires_detection_normalization,
+)
 
 
 @pytest.mark.parametrize(
@@ -50,3 +53,19 @@ def test_rejects_invalid_normalized_spans(start: int, end: int) -> None:
 
     with pytest.raises(ValueError, match="normalized span is invalid"):
         view.original_span(start, end)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("ordinary ASCII text with one space", False),
+        ("ordinary.email@example.test", False),
+        ("two  spaces", True),
+        ("line\nwrap", True),
+        ("user%40example.test", True),
+        ("Jo\u200bhn", True),
+        ("O\u2019Neil", True),
+    ],
+)
+def test_reports_when_offset_normalization_is_required(text: str, expected: bool) -> None:
+    assert requires_detection_normalization(text) is expected

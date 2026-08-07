@@ -458,9 +458,10 @@ class PrivacyEngine:
             lambda match: " " * len(match.group(0)),
             sanitized,
         )
+        normalized_residual_targets = self._normalized_variants(placeholder_stripped)
         partial: list[PartialMatch] = []
         for entity in redaction.entities:
-            if self._retained_normalized(entity.text, placeholder_stripped):
+            if self._retained_normalized(entity.text, normalized_residual_targets):
                 partial.append(
                     PartialMatch(
                         entity_type=entity.entity_type,
@@ -642,32 +643,26 @@ class PrivacyEngine:
         return restore_text(text, mapping)
 
     @staticmethod
-    def _retained_normalized(source: str, sanitized: str) -> bool:
-        normalized_source = normalize_for_detection(source, casefold=True).text
-        normalized_sanitized = normalize_for_detection(sanitized, casefold=True).text
-        variants = {
-            source,
-            source.casefold(),
-            normalized_source,
-            re.sub(r"\s+", " ", source).strip(),
-            re.sub(r"[\s._:/-]+", "", source).casefold(),
-            re.sub(r"[\s._:/-]+", "", normalized_source),
-            unquote(source),
-        }
-        targets = {
-            sanitized,
-            sanitized.casefold(),
-            normalized_sanitized,
-            re.sub(r"\s+", " ", sanitized).strip(),
-            re.sub(r"[\s._:/-]+", "", sanitized).casefold(),
-            re.sub(r"[\s._:/-]+", "", normalized_sanitized),
-            unquote(sanitized),
-        }
+    def _retained_normalized(source: str, targets: set[str]) -> bool:
+        variants = PrivacyEngine._normalized_variants(source)
         return any(
             variant and len(variant) >= 3 and variant in target
             for variant in variants
             for target in targets
         )
+
+    @staticmethod
+    def _normalized_variants(value: str) -> set[str]:
+        normalized = normalize_for_detection(value, casefold=True).text
+        return {
+            value,
+            value.casefold(),
+            normalized,
+            re.sub(r"\s+", " ", value).strip(),
+            re.sub(r"[\s._:/-]+", "", value).casefold(),
+            re.sub(r"[\s._:/-]+", "", normalized),
+            unquote(value),
+        }
 
     @staticmethod
     def _context(text: str, start: int, end: int, radius: int = 36) -> str:

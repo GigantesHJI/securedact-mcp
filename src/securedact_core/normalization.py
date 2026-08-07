@@ -186,6 +186,24 @@ def _collapse_whitespace(characters: list[_MappedCharacter]) -> list[_MappedChar
     return output
 
 
+def requires_detection_normalization(text: str) -> bool:
+    """Return whether the detector view would differ without case folding."""
+
+    if not unicodedata.is_normalized("NFKC", text):
+        return True
+    if HTML_ENTITY_PATTERN.search(text) or PERCENT_BYTE_PATTERN.search(text):
+        return True
+    previous_whitespace = False
+    for character in text:
+        if character in ZERO_WIDTH_CHARACTERS or character in PUNCTUATION_EQUIVALENTS:
+            return True
+        whitespace = character.isspace()
+        if whitespace and (character != " " or previous_whitespace):
+            return True
+        previous_whitespace = whitespace
+    return False
+
+
 def normalize_for_detection(text: str, *, casefold: bool = False) -> NormalizedText:
     """Normalize a detector-only view without losing original Python string offsets."""
 

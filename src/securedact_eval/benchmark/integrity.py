@@ -9,6 +9,10 @@ from hashlib import sha256
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from securedact_core import EntityType
+from securedact_core.detectors.regex_detector import iban_valid
+from securedact_core.taxonomy import CATEGORY_DEFINITIONS, SPECIAL_CATEGORY_TYPES
+
 from ..models import CorpusSample
 
 TOKEN = re.compile(r"\w+", re.UNICODE)
@@ -30,6 +34,10 @@ class IntegrityReport(BaseModel):
     provenance_errors: list[str] = Field(default_factory=list)
     overlap_errors: list[str] = Field(default_factory=list)
     transformation_errors: list[str] = Field(default_factory=list)
+    transformation_application_errors: list[str] = Field(default_factory=list)
+    negative_control_errors: list[str] = Field(default_factory=list)
+    semantic_errors: list[str] = Field(default_factory=list)
+    annotation_action_errors: list[str] = Field(default_factory=list)
 
 
 def normalize_text(text: str) -> str:
@@ -112,11 +120,26 @@ def validate_integrity(samples: list[CorpusSample]) -> IntegrityReport:
     provenance: list[str] = []
     overlaps: list[str] = []
     transformations: list[str] = []
+    transformation_applications: list[str] = []
+    negative_controls: list[str] = []
+    semantics: list[str] = []
+    annotation_actions: list[str] = []
     unicode_errors: list[str] = []
     sample_ids = {sample.id for sample in samples}
     for sample in samples:
-        if sample.text != unicodedata.normalize("NFC", sample.text):
+        if (
+            sample.text != unicodedata.normalize("NFC", sample.text)
+            and sample.transformation != "unicode-normalization"
+        ):
             unicode_errors.append(sample.id)
+        if not sample.entities and sample.transformation != "original":
+            negative_controls.append(sample.id)
+        if (
+            sample.entities
+            and sample.transformation != "original"
+            and not bool(sample.metadata.get("transformation_applied"))
+        ):
+            transformation_applications.append(sample.id)
         for number, entity in enumerate(sample.entities):
             if entity.end > len(sample.text) or (
                 entity.text is not None and sample.text[entity.start : entity.end] != entity.text
@@ -124,6 +147,22 @@ def validate_integrity(samples: list[CorpusSample]) -> IntegrityReport:
                 offsets.append(f"{sample.id}:{number}")
             if entity.text is None or not entity.provenance:
                 provenance.append(f"{sample.id}:{number}")
+            if (
+                entity.expected_action is not None
+                and entity.expected_action
+                != CATEGORY_DEFINITIONS[entity.entity_type].default_action
+            ):
+                annotation_actions.append(f"{sample.id}:{number}")
+            if entity.entity_type in SPECIAL_CATEGORY_TYPES and (
+                entity.text or ""
+            ).casefold().startswith("fictional "):
+                semantics.append(f"{sample.id}:{number}:placeholder_special_category")
+            if (
+                entity.entity_type == EntityType.IBAN
+                and sample.transformation_support == "supported"
+                and not iban_valid(entity.text or "")
+            ):
+                semantics.append(f"{sample.id}:{number}:invalid_iban")
         for left_index, left_entity in enumerate(sample.entities):
             for right_index, right_entity in enumerate(
                 sample.entities[left_index + 1 :], left_index + 1
@@ -154,6 +193,10 @@ def validate_integrity(samples: list[CorpusSample]) -> IntegrityReport:
             provenance,
             overlaps,
             transformations,
+            transformation_applications,
+            negative_controls,
+            semantics,
+            annotation_actions,
         )
     )
     return IntegrityReport(
@@ -169,4 +212,8 @@ def validate_integrity(samples: list[CorpusSample]) -> IntegrityReport:
         provenance_errors=provenance,
         overlap_errors=overlaps,
         transformation_errors=transformations,
+        transformation_application_errors=transformation_applications,
+        negative_control_errors=negative_controls,
+        semantic_errors=semantics,
+        annotation_action_errors=annotation_actions,
     )

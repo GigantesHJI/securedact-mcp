@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from securedact_core import EntityType, PrivacyEngine
+from securedact_core.detectors.regex_detector import iban_valid
+from securedact_core.taxonomy import CATEGORY_DEFINITIONS, SPECIAL_CATEGORY_TYPES
 from securedact_eval.benchmark import (
     BenchmarkManifest,
     generate_profile,
@@ -68,7 +70,7 @@ def test_committed_smoke_corpus_is_representative_and_integral() -> None:
     assert manifest.entity_count >= 250
     assert manifest.language_counts == {"en": 80, "nl": 80}
     assert manifest.negative_count >= 30
-    assert manifest.adversarial_count >= 140
+    assert manifest.adversarial_count >= 120
     assert set(manifest.assertion_type_counts) == {
         "current",
         "negated",
@@ -86,6 +88,51 @@ def test_committed_smoke_corpus_is_representative_and_integral() -> None:
     assert all(
         sample.split not in {"private_holdout", "private_release_gate"} for sample in samples
     )
+
+
+def test_smoke_generator_does_not_contaminate_scores_with_fixture_defects() -> None:
+    samples = load_jsonl(SMOKE / "corpus.jsonl")
+
+    negatives = [sample for sample in samples if not sample.entities]
+    assert negatives
+    assert all(sample.transformation == "original" for sample in negatives)
+    assert all(
+        sample.metadata.get("control_kind") in {"negative", "near_miss"} for sample in negatives
+    )
+
+    transformed = [
+        sample for sample in samples if sample.entities and sample.transformation != "original"
+    ]
+    assert transformed
+    assert all(sample.metadata.get("transformation_applied") is True for sample in transformed)
+
+    for sample in samples:
+        if "[synthetic-record:" in sample.text:
+            suffix = sample.text.rpartition("[synthetic-record:")[2]
+            assert not any(character.isdigit() for character in suffix)
+        for entity in sample.entities:
+            assert entity.expected_action == CATEGORY_DEFINITIONS[entity.entity_type].default_action
+            if entity.entity_type in SPECIAL_CATEGORY_TYPES:
+                assert not (entity.text or "").casefold().startswith("fictional ")
+            if (
+                entity.entity_type == EntityType.IBAN
+                and sample.transformation_support == "supported"
+            ):
+                assert iban_valid(entity.text or "")
+
+
+def test_unicode_normalization_challenges_are_applied_without_offset_damage() -> None:
+    samples = load_jsonl(SMOKE / "corpus.jsonl")
+    transformed = [sample for sample in samples if sample.transformation == "unicode-normalization"]
+
+    assert transformed
+    assert any(sample.text != unicodedata.normalize("NFC", sample.text) for sample in transformed)
+    assert all(
+        sample.text[entity.start : entity.end] == entity.text
+        for sample in transformed
+        for entity in sample.entities
+    )
+    assert validate_integrity(transformed).valid
 
 
 def test_generation_is_deterministic_and_profiles_meet_targets(tmp_path: Path) -> None:

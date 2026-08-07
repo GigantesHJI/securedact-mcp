@@ -1,5 +1,5 @@
 {
-  "adversarial_count": 152,
+  "adversarial_count": 122,
   "assertion_type_counts": {
     "current": 26,
     "family_history": 28,
@@ -13,23 +13,23 @@
     "uncertain": 27
   },
   "category_counts": {
-    "api_token": 18,
-    "biometric_data": 6,
-    "case_number": 14,
-    "customer_number": 18,
-    "email": 17,
-    "genetic_data": 6,
-    "health_data": 6,
-    "iban": 15,
-    "person": 78,
-    "phone": 15,
-    "political_opinion": 7,
-    "racial_or_ethnic_origin": 7,
-    "religious_or_philosophical_belief": 14,
-    "session_token": 17,
-    "sex_life": 6,
-    "sexual_orientation": 6,
-    "trade_union_membership": 6,
+    "api_token": 7,
+    "biometric_data": 2,
+    "case_number": 18,
+    "customer_number": 25,
+    "email": 73,
+    "genetic_data": 3,
+    "health_data": 2,
+    "iban": 9,
+    "person": 81,
+    "phone": 9,
+    "political_opinion": 3,
+    "racial_or_ethnic_origin": 4,
+    "religious_or_philosophical_belief": 5,
+    "session_token": 7,
+    "sex_life": 4,
+    "sexual_orientation": 2,
+    "trade_union_membership": 2,
     "unknown_sensitive": 5
   },
   "dependency_lock_digest": "aecc42aec359b744b3383f6cbd68932389784ed244d4f9748e299862ef7631bd",
@@ -49,7 +49,7 @@
   },
   "entity_count": 261,
   "files": {
-    "corpus.jsonl": "2b532096d4132da78f7931dce2931a68bd25c0dc89af160105f5fbbb307ede9d"
+    "corpus.jsonl": "589361605b60ccbbe973645d1eabdf8748e9938278c684924acfbd685d0beae2"
   },
   "generation": {
     "contains_raw_source_data": false,
@@ -57,7 +57,7 @@
     "faker_version": "40.35.0",
     "synthetic_only": true
   },
-  "generator_version": "2.5.1",
+  "generator_version": "2.6.0",
   "language_counts": {
     "en": 80,
     "nl": 80
@@ -99,26 +99,26 @@
   },
   "tier": "public",
   "transformation_counts": {
-    "apostrophe": 7,
-    "casing": 8,
-    "dutch-surname-prefix": 7,
-    "email-obfuscation": 7,
-    "fullwidth": 8,
-    "homoglyph": 8,
-    "html-entities": 8,
-    "hyphenation": 7,
-    "initials": 7,
-    "line-wrapping": 8,
-    "nested-overlap": 7,
-    "ocr-like": 8,
-    "original": 8,
-    "punctuation-spacing": 8,
-    "spaced-iban": 7,
-    "split-phone": 7,
-    "unicode-normalization": 8,
-    "url-encoding": 8,
-    "whitespace-insertion": 8,
-    "whitespace-removal": 8,
-    "zero-width": 8
+    "apostrophe": 5,
+    "casing": 7,
+    "dutch-surname-prefix": 6,
+    "email-obfuscation": 5,
+    "fullwidth": 7,
+    "homoglyph": 6,
+    "html-entities": 7,
+    "hyphenation": 6,
+    "initials": 5,
+    "line-wrapping": 6,
+    "nested-overlap": 5,
+    "ocr-like": 7,
+    "original": 38,
+    "punctuation-spacing": 6,
+    "spaced-iban": 6,
+    "split-phone": 6,
+    "unicode-normalization": 6,
+    "url-encoding": 7,
+    "whitespace-insertion": 7,
+    "whitespace-removal": 6,
+    "zero-width": 6
   }
 }

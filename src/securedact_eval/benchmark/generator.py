@@ -14,13 +14,14 @@ from urllib.parse import quote
 from faker import Faker
 
 from securedact_core import EntityType, PrivacyAction
+from securedact_core.taxonomy import CATEGORY_DEFINITIONS
 
 from ..models import Annotation, CorpusSample
 from .integrity import validate_integrity
 from .manifest import BenchmarkManifest, sha256_file, write_manifest
 from .profiles import BenchmarkProfile
 
-GENERATOR_VERSION = "2.5.1"
+GENERATOR_VERSION = "2.6.0"
 type AssertionType = Literal[
     "current",
     "negated",
@@ -107,18 +108,84 @@ NEGATIVE_TEXTS = (
     "A quotation mentioned an opinion but attributed it to a fictional novel.",
     "Family history is discussed without identifying any family member.",
 )
+CLEAN_NEGATIVE_TEXTS = (
+    "The office opens during normal business hours.",
+    "The report contains only aggregate statistics.",
+    "This synthetic note contains no contact details.",
+    "A public handbook describes the administrative process.",
+)
 
-SPECIAL_VALUES: tuple[tuple[str, EntityType], ...] = (
-    ("fictional ethnic heritage assertion", EntityType.RACIAL_OR_ETHNIC_ORIGIN),
-    ("fictional political opinion assertion", EntityType.POLITICAL_OPINION),
-    ("fictional religious belief assertion", EntityType.RELIGIOUS_OR_PHILOSOPHICAL_BELIEF),
-    ("fictional philosophical belief assertion", EntityType.RELIGIOUS_OR_PHILOSOPHICAL_BELIEF),
-    ("fictional trade-union membership assertion", EntityType.TRADE_UNION_MEMBERSHIP),
-    ("fictional genetic test assertion", EntityType.GENETIC_DATA),
-    ("fictional biometric identification assertion", EntityType.BIOMETRIC_DATA),
-    ("fictional health-status assertion", EntityType.HEALTH_DATA),
-    ("fictional sex-life assertion", EntityType.SEX_LIFE),
-    ("fictional sexual-orientation assertion", EntityType.SEXUAL_ORIENTATION),
+SPECIAL_VALUES: tuple[tuple[EntityType, str, str, str, str], ...] = (
+    (
+        EntityType.RACIAL_OR_ETHNIC_ORIGIN,
+        "Dutch-Moroccan",
+        "Dutch-Moroccan",
+        "{0} identifies as {1}; synthetic record.",
+        "{0} identificeert zich als {1}; synthetisch dossier.",
+    ),
+    (
+        EntityType.POLITICAL_OPINION,
+        "Green Party",
+        "GroenLinks",
+        "{0} supports {1}; synthetic record.",
+        "{0} steunt {1}; synthetisch dossier.",
+    ),
+    (
+        EntityType.RELIGIOUS_OR_PHILOSOPHICAL_BELIEF,
+        "Muslim",
+        "katholiek",
+        "{0} is {1}; synthetic record.",
+        "{0} is {1}; synthetisch dossier.",
+    ),
+    (
+        EntityType.RELIGIOUS_OR_PHILOSOPHICAL_BELIEF,
+        "secular humanism",
+        "seculier humanisme",
+        "{0} follows {1}; synthetic record.",
+        "{0} volgt {1}; synthetisch dossier.",
+    ),
+    (
+        EntityType.TRADE_UNION_MEMBERSHIP,
+        "Example Workers Union",
+        "vakbond",
+        "{0} is a member of the {1}; synthetic record.",
+        "{0} is lid van de {1}; synthetisch dossier.",
+    ),
+    (
+        EntityType.GENETIC_DATA,
+        "BRCA1",
+        "BRCA1",
+        "{0} has a {1} pathogenic variant; synthetic record.",
+        "{0} heeft een {1}-variant; synthetisch dossier.",
+    ),
+    (
+        EntityType.BIOMETRIC_DATA,
+        "BIO-FP-8821",
+        "BIO-FP-8821",
+        "{0}; fingerprint template: {1}; synthetic record.",
+        "{0}; vingerafdruksjabloon: {1}; synthetisch dossier.",
+    ),
+    (
+        EntityType.HEALTH_DATA,
+        "type 2 diabetes",
+        "diabetes type 2",
+        "{0} has {1}; synthetic record.",
+        "{0} heeft {1}; synthetisch dossier.",
+    ),
+    (
+        EntityType.SEX_LIFE,
+        "sexual activity",
+        "seksuele activiteit",
+        "{0}'s {1} is recorded; synthetic record.",
+        "{0}: {1} is vastgelegd; synthetisch dossier.",
+    ),
+    (
+        EntityType.SEXUAL_ORIENTATION,
+        "bisexual",
+        "biseksueel",
+        "{0} identifies as {1}; synthetic record.",
+        "{0} identificeert zich als {1}; synthetisch dossier.",
+    ),
 )
 
 
@@ -138,13 +205,10 @@ def _annotated_text(
     sample_id: str,
     nested: bool = False,
 ) -> tuple[str, list[Annotation]]:
-    normalized_values = [(unicodedata.normalize("NFC", value), kind) for value, kind in values]
-    text = unicodedata.normalize(
-        "NFC", template.format(*[value for value, _kind in normalized_values])
-    )
+    text = template.format(*[value for value, _kind in values])
     entities: list[Annotation] = []
     cursor = 0
-    for number, (value, kind) in enumerate(normalized_values):
+    for number, (value, kind) in enumerate(values):
         start = text.index(value, cursor)
         end = start + len(value)
         cursor = end
@@ -154,7 +218,7 @@ def _annotated_text(
                 end=end,
                 text=value,
                 entity_type=kind,
-                expected_action=PrivacyAction.REDACT,
+                expected_action=CATEGORY_DEFINITIONS[kind].default_action,
                 assertion_type=assertion_type,
                 provenance={
                     "source": "faker-40.35.0",
@@ -262,7 +326,6 @@ def _obfuscated(value: str) -> str:
 
 
 VALUE_TRANSFORMERS: dict[str, Callable[[str], str]] = {
-    "apostrophe": _apostrophe,
     "casing": str.swapcase,
     "dutch-surname-prefix": _surname_prefix,
     "email-obfuscation": _obfuscated,
@@ -286,15 +349,56 @@ def _transform(
     template: str,
     values: list[tuple[str, EntityType]],
     transformation: str,
-) -> tuple[str, list[tuple[str, EntityType]]]:
+) -> tuple[str, list[tuple[str, EntityType]], bool]:
     transform_value = VALUE_TRANSFORMERS.get(transformation, _identity)
+    original_template = template
     if transformation == "casing":
         template = template.swapcase()
     elif transformation == "line-wrapping":
-        template = template.replace(" | ", "\n").replace("; ", ";\n")
+        template = (
+            template.replace(" | ", "\n")
+            .replace("; ", ";\n")
+            .replace(" [synthetic-record:", "\n[synthetic-record:")
+        )
     elif transformation == "punctuation-spacing":
         template = template.replace(":", " : ").replace("=", " = ")
-    return template, [(transform_value(value), kind) for value, kind in values]
+    elif transformation == "apostrophe":
+        # The possessive suffix is context, not part of the entity span.
+        template = template.replace("{0}", "{0}'s", 1)
+
+    category_scoped = {
+        "dutch-surname-prefix": {EntityType.PERSON},
+        "email-obfuscation": {EntityType.EMAIL},
+        "hyphenation": {EntityType.PERSON},
+        "initials": {EntityType.PERSON},
+        "spaced-iban": {EntityType.IBAN},
+        "split-phone": {EntityType.PHONE},
+    }
+    eligible = category_scoped.get(transformation)
+    transformed = [
+        (transform_value(value) if eligible is None or kind in eligible else value, kind)
+        for value, kind in values
+    ]
+    applied = template != original_template or any(
+        before[0] != after[0] for before, after in zip(values, transformed, strict=True)
+    )
+    return template, transformed, applied
+
+
+def _letter_token(value: str) -> str:
+    """Encode a hexadecimal digest without phone-like digit runs."""
+
+    return "".join(chr(ord("a") + int(character, 16)) for character in value)
+
+
+def _valid_test_iban(index: int, seed: int) -> str:
+    account = f"{(seed * 10_000 + index) % 10_000_000_000:010d}"
+    provisional = f"NL00TEST{account}"
+    rearranged = provisional[4:] + provisional[:4]
+    numeric = "".join(str(ord(char) - 55) if char.isalpha() else char for char in rearranged)
+    check_digits = 98 - (int(numeric) % 97)
+    compact = f"NL{check_digits:02d}TEST{account}"
+    return " ".join(compact[offset : offset + 4] for offset in range(0, len(compact), 4))
 
 
 def _sample(index: int, profile: BenchmarkProfile, *, language: str) -> CorpusSample:
@@ -310,7 +414,9 @@ def _sample(index: int, profile: BenchmarkProfile, *, language: str) -> CorpusSa
     split = _split_for_template(template_number)
 
     if index % 5 == 0:
-        negative = NEGATIVE_TEXTS[(index // 5) % len(NEGATIVE_TEXTS)]
+        control_kind = "near_miss" if (index // 5) % 2 else "negative"
+        controls = NEGATIVE_TEXTS if control_kind == "near_miss" else CLEAN_NEGATIVE_TEXTS
+        negative = controls[(index // 5) % len(controls)]
         clean = (
             f"Algemene procesnotitie {index}: {negative}"
             if language == "nl"
@@ -318,7 +424,7 @@ def _sample(index: int, profile: BenchmarkProfile, *, language: str) -> CorpusSa
         )
         fingerprint = sha256(f"{profile.seed}:{index}:negative".encode()).hexdigest()
         clean += " synthetic markers " + " ".join(
-            fingerprint[offset : offset + 8] for offset in range(0, 32, 8)
+            _letter_token(fingerprint[offset : offset + 8]) for offset in range(0, 32, 8)
         )
         return CorpusSample(
             id=sample_id,
@@ -330,17 +436,20 @@ def _sample(index: int, profile: BenchmarkProfile, *, language: str) -> CorpusSa
             tier=profile.tier,
             format=document_format,
             split=split,
-            transformation=transformation,
-            transformation_chain=(
-                ["original"] if transformation == "original" else ["original", transformation]
-            ),
-            transformation_support=support,
+            transformation="original",
+            transformation_chain=["original"],
+            transformation_support="supported",
             template_group=f"negative-{language}-{template_number}",
             source_record_group=sample_id,
             source_document_group=sample_id,
             entity_value_group=sample_id,
             seed_group=sample_id,
-            metadata={"synthetic": True, "negative": True},
+            metadata={
+                "synthetic": True,
+                "negative": True,
+                "control_kind": control_kind,
+                "transformation_applied": False,
+            },
         )
 
     person = fake.name()
@@ -356,13 +465,41 @@ def _sample(index: int, profile: BenchmarkProfile, *, language: str) -> CorpusSa
         (phone, EntityType.PHONE),
         (f"sk-test-benchmark-{profile.seed + index:016d}", EntityType.API_TOKEN),
         (f"session_test_{profile.seed + index:016d}", EntityType.SESSION_TOKEN),
-        (f"NL00 TEST {index:04d} {profile.seed % 10000:04d}", EntityType.IBAN),
+        (_valid_test_iban(index, profile.seed), EntityType.IBAN),
     )
-    if index % 2 == 0:
+    transformation_values: dict[str, list[tuple[str, EntityType]]] = {
+        "apostrophe": [(person, EntityType.PERSON), (email, EntityType.EMAIL)],
+        "dutch-surname-prefix": [(person, EntityType.PERSON), (email, EntityType.EMAIL)],
+        "email-obfuscation": [(email, EntityType.EMAIL), (customer, EntityType.CUSTOMER_NUMBER)],
+        "hyphenation": [(person, EntityType.PERSON), (case, EntityType.CASE_NUMBER)],
+        "initials": [(person, EntityType.PERSON), (email, EntityType.EMAIL)],
+        "spaced-iban": [
+            (_valid_test_iban(index, profile.seed).replace(" ", ""), EntityType.IBAN),
+            (case, EntityType.CASE_NUMBER),
+        ],
+        "split-phone": [(phone, EntityType.PHONE), (email, EntityType.EMAIL)],
+        "unicode-normalization": [
+            ("Zoë Voorbeeld" if language == "nl" else "Zoë Example", EntityType.PERSON),
+            (email, EntityType.EMAIL),
+        ],
+        "url-encoding": [(person, EntityType.PERSON), (email, EntityType.EMAIL)],
+        "html-entities": [(email, EntityType.EMAIL), (person, EntityType.PERSON)],
+        "homoglyph": [(email, EntityType.EMAIL), (customer, EntityType.CUSTOMER_NUMBER)],
+        "ocr-like": [(email, EntityType.EMAIL), (customer, EntityType.CUSTOMER_NUMBER)],
+        "whitespace-removal": [(person, EntityType.PERSON), (email, EntityType.EMAIL)],
+    }
+    special_template: str | None = None
+    if transformation in transformation_values:
+        first, second = transformation_values[transformation]
+    elif index % 2 == 0:
         first = (person, EntityType.PERSON)
         special_index = index // 2
         special_rank = special_index - special_index // 5 - 1
-        second = SPECIAL_VALUES[special_rank % len(SPECIAL_VALUES)]
+        kind, english, dutch, english_template, dutch_template = SPECIAL_VALUES[
+            special_rank % len(SPECIAL_VALUES)
+        ]
+        second = (dutch if language == "nl" else english, kind)
+        special_template = dutch_template if language == "nl" else english_template
     else:
         first = choices[(index + template_number) % len(choices)]
         second = choices[(index + template_number + 3) % len(choices)]
@@ -410,11 +547,17 @@ def _sample(index: int, profile: BenchmarkProfile, *, language: str) -> CorpusSa
         )
     # Stable fictional record references prevent accidental cross-template near duplicates.
     fingerprint = sha256(f"{profile.seed}:{index}:positive".encode()).hexdigest()
-    reference = "-".join(fingerprint[offset : offset + 8] for offset in range(0, 32, 8))
-    suffix = f" [synthetic-record:{index:08d}:{reference}]"
-    selected_template, selected_values = _transform(
-        formats[template_number] + suffix, [first, second], transformation
+    reference = "-".join(
+        _letter_token(fingerprint[offset : offset + 8]) for offset in range(0, 32, 8)
     )
+    suffix = f" [synthetic-record:{reference}]"
+    selected_template, selected_values, transformation_applied = _transform(
+        (special_template or formats[template_number]) + suffix,
+        [first, second],
+        transformation,
+    )
+    if transformation == "nested-overlap":
+        transformation_applied = True
     text, entities = _annotated_text(
         selected_template,
         selected_values,
@@ -451,7 +594,7 @@ def _sample(index: int, profile: BenchmarkProfile, *, language: str) -> CorpusSa
             "locale": locale,
             "template": template_number,
             "unsupported_example_retained": support == "deliberately_unsupported",
-            "transformation_applied": True,
+            "transformation_applied": transformation_applied,
             "slug": _safe_slug(person),
         },
     )

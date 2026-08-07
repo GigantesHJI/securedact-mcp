@@ -30,7 +30,31 @@ def test_duplicate_nested_wrong_label_missing_and_extra_predictions() -> None:
     assert result.exact.false_positives == 3
     assert result.exact.false_negatives == 1
     assert result.relaxed.true_positives == 1
+    assert result.category_accuracy == 1.0
+    assert result.category_correct == 1
+    assert result.category_total == 1
+
+
+def test_exact_duplicate_prediction_is_diagnostic_not_a_false_positive() -> None:
+    truth = [Span(0, 5, "email")]
+    duplicate = Span(0, 5, "email")
+
+    result = evaluate_spans(truth, [duplicate, duplicate])
+
+    assert result.exact.true_positives == 1
+    assert result.exact.false_positives == 0
+    assert result.duplicate_predictions == 1
+
+
+def test_category_only_correctness_uses_overlap_and_one_to_one_matching() -> None:
+    result = evaluate_spans(
+        [Span(0, 10, "person"), Span(20, 30, "email")],
+        [Span(2, 10, "person"), Span(20, 30, "organization")],
+    )
+
     assert result.category_accuracy == 0.5
+    assert result.category_correct == 1
+    assert result.category_total == 2
 
 
 def test_action_accuracy_uses_matched_annotated_spans() -> None:

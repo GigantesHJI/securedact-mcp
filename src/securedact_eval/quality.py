@@ -200,10 +200,11 @@ def _aggregate(
 ) -> SpanEvaluation:
     exact_counts = [0, 0, 0, 0]
     relaxed_counts = [0, 0, 0, 0]
-    category_correct = 0.0
+    category_correct = 0
     category_total = 0
-    action_correct = 0.0
+    action_correct = 0
     action_total = 0
+    duplicate_predictions = 0
     for loaded in items:
         expected = _spans(loaded.sample)
         predicted = predictions[loaded.sample.id]
@@ -219,17 +220,21 @@ def _aggregate(
             target[1] += metric.false_positives
             target[2] += metric.true_negatives
             target[3] += metric.false_negatives
-        if evaluation.category_accuracy is not None:
-            category_correct += evaluation.category_accuracy
-            category_total += 1
-        if evaluation.action_accuracy is not None:
-            action_correct += evaluation.action_accuracy
-            action_total += 1
+        category_correct += evaluation.category_correct
+        category_total += evaluation.category_total
+        action_correct += evaluation.action_correct
+        action_total += evaluation.action_total
+        duplicate_predictions += evaluation.duplicate_predictions
     return SpanEvaluation(
         exact=metric_from_counts(*exact_counts),
         relaxed=metric_from_counts(*relaxed_counts),
         category_accuracy=category_correct / category_total if category_total else None,
         action_accuracy=action_correct / action_total if action_total else None,
+        category_correct=category_correct,
+        category_total=category_total,
+        action_correct=action_correct,
+        action_total=action_total,
+        duplicate_predictions=duplicate_predictions,
     )
 
 

@@ -33,6 +33,7 @@ uv run securedact-eval generate --profile public-medium
 uv run securedact-eval generate --profile benchmark-v0.2
 uv run securedact-eval validate --dataset "$env:SECUREDACT_BENCHMARK_DATA_DIR\generated\benchmark-v0.2"
 uv run securedact-eval quality --corpus "$env:SECUREDACT_BENCHMARK_DATA_DIR\generated\benchmark-v0.2" --aggregate-only
+uv run securedact-eval audit --corpus benchmarks\fixtures\smoke --clean-corpus benchmarks\corpora --thresholds benchmarks\adversarial_thresholds.json --output-dir build\adversarial-audit
 ```
 
 `smoke` has 160 committed records. `public-medium` has 5,000 generated records.
@@ -42,6 +43,20 @@ are provisioned. Generated manifests record the generator and pinned Faker versi
 digest, file hashes, languages, categories, domains, sources, splits, assertion contexts,
 transformations, and template families. A matching code revision, lockfile, profile, and seed yields
 byte-identical JSONL and hashes.
+
+## Adversarial release scores
+
+The adversarial audit keeps the overall aggregate as a diagnostic only. The primary report has
+five mutually exclusive groups: `standard_clean`, `negative_controls`, `supported_adversarial`,
+`partially_supported_adversarial`, and `unsupported_challenge`. Unsupported records are always
+reported and are informational only. Partial support remains visible but is not silently mixed into
+a release gate.
+
+`adversarial_thresholds.json` gates only the curated standard-clean reference and the supported
+adversarial group. Its initial values were recorded after measuring the corrected generator 2.6.0
+baseline; they were not lowered to reinterpret unsupported challenges as supported behavior. A
+locally configured real Flair model is reported separately. The annotation-backed contextual mock
+only verifies evaluation plumbing and is prominently marked as non-quality evidence.
 
 ## Coverage and integrity
 

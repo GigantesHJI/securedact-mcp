@@ -13,6 +13,11 @@ from .benchmark.manifest import verify_benchmark
 from .benchmark.profiles import load_profiles
 from .benchmark.registry import load_registry, verify_source_file
 from .benchmark.workspace import resolve_workspace
+from .diagnostics import (
+    adversarial_audit_markdown,
+    run_adversarial_audit,
+    write_adversarial_audit_outputs,
+)
 from .gates import evaluate_performance_gate, evaluate_quality_gate, load_thresholds
 from .performance import cold_worker, run_performance_evaluation
 from .quality import EvaluationConfigurationError, run_quality_evaluation
@@ -36,6 +41,13 @@ def _parser() -> argparse.ArgumentParser:
     quality.add_argument("--thresholds", type=Path, default=Path("benchmarks/thresholds.json"))
     quality.add_argument("--baseline", type=Path)
     quality.add_argument("--aggregate-only", action="store_true")
+
+    audit = subparsers.add_parser("audit")
+    audit.add_argument("--corpus", type=Path, default=Path("benchmarks/fixtures/smoke"))
+    audit.add_argument("--clean-corpus", type=Path, default=Path("benchmarks/corpora"))
+    audit.add_argument("--thresholds", type=Path)
+    audit.add_argument("--output-dir", type=Path)
+    audit.add_argument("--format", choices=("json", "markdown"), default="markdown")
 
     performance = subparsers.add_parser("performance")
     performance.add_argument("--mode", choices=("deterministic", "flair"), default="deterministic")
@@ -106,6 +118,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 quality_markdown(quality)
                 if arguments.format == "markdown"
                 else quality.model_dump_json(indent=2)
+            )
+        elif arguments.command == "audit":
+            threshold_payload = (
+                json.loads(arguments.thresholds.read_text(encoding="utf-8"))
+                if arguments.thresholds is not None
+                else None
+            )
+            audit_report = run_adversarial_audit(
+                arguments.corpus,
+                clean_root=arguments.clean_corpus,
+                thresholds=threshold_payload,
+            )
+            if arguments.output_dir is not None:
+                write_adversarial_audit_outputs(audit_report, arguments.output_dir)
+            output = (
+                adversarial_audit_markdown(audit_report)
+                if arguments.format == "markdown"
+                else audit_report.model_dump_json(indent=2)
             )
         elif arguments.command == "performance":
             performance = run_performance_evaluation(

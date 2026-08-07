@@ -1,0 +1,43 @@
+{
+  "threshold_version": 1,
+  "baseline_profile": "smoke",
+  "baseline_generator_version": "2.6.0",
+  "mode": "deterministic-only",
+  "overall_aggregate_is_primary": false,
+  "release_groups": {
+    "standard_clean": {
+      "metric_source": "curated_clean_reference",
+      "baseline_exact_precision": 0.967741935483871,
+      "baseline_exact_recall": 0.9375,
+      "baseline_exact_f1": 0.9523809523809523,
+      "minimum_exact_precision": 0.95,
+      "minimum_exact_recall": 0.90,
+      "minimum_exact_f1": 0.92,
+      "release_threshold": true
+    },
+    "negative_controls": {
+      "release_threshold": false,
+      "reporting_only": true
+    },
+    "supported_adversarial": {
+      "metric_source": "corrected_smoke_supported_adversarial",
+      "baseline_exact_precision": 0.98,
+      "baseline_exact_recall": 0.5833333333333334,
+      "baseline_exact_f1": 0.7313432835820896,
+      "minimum_exact_precision": 0.95,
+      "minimum_exact_recall": 0.55,
+      "minimum_exact_f1": 0.70,
+      "release_threshold": true
+    },
+    "partially_supported_adversarial": {
+      "release_threshold": false,
+      "reporting_only": true
+    },
+    "unsupported_challenge": {
+      "release_threshold": false,
+      "reporting_only": true,
+      "informational_only": true
+    }
+  },
+  "notes": "Initial thresholds were established only after measuring the corrected baseline. They lock in current deterministic behavior without treating partial or unsupported challenges as release gates."
+}

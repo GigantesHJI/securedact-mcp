@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from ..models import Detection, DetectionSource, EntityType
+from ..normalization import NormalizedText, normalize_for_detection
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +130,21 @@ class CredentialsDetector:
         self.rules = rules
 
     def detect(self, text: str) -> list[Detection]:
+        output = self._detect_view(text)
+        normalized = normalize_for_detection(text)
+        if normalized.text != text:
+            for detection in self._detect_view(normalized.text).values():
+                mapped = self._map_to_original(normalized, detection)
+                key = (mapped.start, mapped.end, mapped.entity_type)
+                current = output.get(key)
+                if current is None or mapped.precedence > current.precedence:
+                    output[key] = mapped
+        return sorted(
+            output.values(),
+            key=lambda item: (item.start, item.end, item.entity_type.value),
+        )
+
+    def _detect_view(self, text: str) -> dict[tuple[int, int, EntityType], Detection]:
         output: dict[tuple[int, int, EntityType], Detection] = {}
         for rule in self.rules:
             for match in rule.pattern.finditer(text):
@@ -152,9 +168,16 @@ class CredentialsDetector:
                 current = output.get(key)
                 if current is None or detection.precedence > current.precedence:
                     output[key] = detection
-        return sorted(
-            output.values(),
-            key=lambda item: (item.start, item.end, item.entity_type.value),
+        return output
+
+    @staticmethod
+    def _map_to_original(view: NormalizedText, detection: Detection) -> Detection:
+        start, end = view.original_span(detection.start, detection.end)
+        return Detection(
+            **detection.model_dump(exclude={"id", "start", "end", "text"}),
+            start=start,
+            end=end,
+            text=view.original[start:end],
         )
 
     @staticmethod

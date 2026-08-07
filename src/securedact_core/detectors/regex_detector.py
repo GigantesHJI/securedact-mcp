@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from ..models import Detection, DetectionSource, EntityType
+from ..normalization import NormalizedText, normalize_for_detection
 
 Validator = Callable[[str], bool]
 
@@ -674,6 +675,16 @@ class RegexDetector:
         self._compiled_label_rules = tuple((rule, rule.compile()) for rule in label_rules)
 
     def detect(self, text: str) -> list[Detection]:
+        results = self._detect_view(text)
+        normalized = normalize_for_detection(text)
+        if normalized.text != text:
+            results.extend(
+                self._map_to_original(normalized, detection)
+                for detection in self._detect_view(normalized.text)
+            )
+        return self._deduplicate(results)
+
+    def _detect_view(self, text: str) -> list[Detection]:
         results: list[Detection] = []
         results.extend(self._detect_labels(text))
         results.extend(self._detect_prefixes(text))
@@ -700,6 +711,16 @@ class RegexDetector:
                 )
             )
         return self._deduplicate(results)
+
+    @staticmethod
+    def _map_to_original(view: NormalizedText, detection: Detection) -> Detection:
+        start, end = view.original_span(detection.start, detection.end)
+        return Detection(
+            **detection.model_dump(exclude={"id", "start", "end", "text"}),
+            start=start,
+            end=end,
+            text=view.original[start:end],
+        )
 
     def _detect_labels(self, text: str) -> list[Detection]:
         candidates: list[tuple[Detection, int]] = []

@@ -59,3 +59,22 @@ def test_strict_external_ai_blocks_credentials() -> None:
     assert result.status == "blocked"
     assert result.counts == {"access_token": 1}
     assert result.sanitized_text is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "ghp_ABCDEFGHIJ\u200bKLMNOPQRSTUVWXYZ123456",
+        "ghp%5FABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+        "ghp&#95;ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+    ],
+)
+def test_normalized_credentials_map_back_to_the_full_source(value: str) -> None:
+    text = f"token={value}"
+
+    detection = next(
+        item for item in CredentialsDetector().detect(text) if item.entity_type == EntityType.API_TOKEN
+    )
+
+    assert detection.text == value
+    assert text[detection.start : detection.end] == value

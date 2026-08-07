@@ -43,3 +43,31 @@ def test_offsets_point_to_the_exact_original_text() -> None:
     text = "Reach me through hello@example.test tomorrow."
     detection = RegexDetector().detect(text)[0]
     assert text[detection.start : detection.end] == detection.text
+
+
+@pytest.mark.parametrize(
+    ("value", "expected", "entity_type"),
+    [
+        ("user\u200b@example.test", "user\u200b@example.test", EntityType.EMAIL),
+        ("user%40example%2Etest", "user%40example%2Etest", EntityType.EMAIL),
+        ("user&#64;example.test", "user&#64;example.test", EntityType.EMAIL),
+        (
+            "\uff2e\uff2c\uff19\uff11\u3000\uff21\uff22\uff2e\uff21\u3000"
+            "\uff10\uff14\uff11\uff17\u3000\uff11\uff16\uff14\uff13\u3000\uff10\uff10",
+            "\uff2e\uff2c\uff19\uff11\u3000\uff21\uff22\uff2e\uff21\u3000"
+            "\uff10\uff14\uff11\uff17\u3000\uff11\uff16\uff14\uff13\u3000\uff10\uff10",
+            EntityType.IBAN,
+        ),
+    ],
+)
+def test_normalized_detection_maps_back_to_exact_source_offsets(
+    value: str,
+    expected: str,
+    entity_type: EntityType,
+) -> None:
+    text = f"before {value} after"
+
+    detection = next(item for item in RegexDetector().detect(text) if item.entity_type == entity_type)
+
+    assert detection.text == expected
+    assert text[detection.start : detection.end] == expected

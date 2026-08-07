@@ -25,13 +25,13 @@ NAME_WORD = (
 NAME_PARTICLES = r"(?:(?:de|den|der|van|von|al|el)\s+)"
 NAME_PATTERN = re.compile(
     rf"\b(?:{NAME_PARTICLES}){{0,3}}{NAME_WORD}"
-    rf"(?:\s+(?:{NAME_PARTICLES}){{0,3}}{NAME_WORD}){{0,3}}\b"
+    rf"(?:\s+(?:{NAME_PARTICLES}){{0,3}}{NAME_WORD}){{0,3}}(?!\w)"
 )
 SELF_NAME_WORD = NAME_WORD
 SELF_NAME_PATTERN = re.compile(
     r"(?i:\b(?:my name is|mijn naam is)\s+)"
     rf"(?P<name>(?:{NAME_PARTICLES}){{0,3}}{SELF_NAME_WORD}"
-    rf"(?:\s+(?:{NAME_PARTICLES}){{0,3}}{SELF_NAME_WORD}){{0,3}})\b"
+    rf"(?:\s+(?:{NAME_PARTICLES}){{0,3}}{SELF_NAME_WORD}){{0,3}})(?!\w)"
 )
 PRONOUN_PATTERN = re.compile(
     r"\b(?:she|he|her|his|they|their|the patient|patient|zij|ze|hij|haar|zijn|de patiënt)\b",

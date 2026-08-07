@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
@@ -9,6 +10,7 @@ from typing import Any
 
 from ..models import Detection, DetectionSource, EntityType
 from ..normalization import NormalizedText, normalize_for_detection
+from .contextual_detector import NAME_PATTERN
 
 DEFAULT_TAG_MAP: dict[str, EntityType] = {
     "PER": EntityType.PERSON,
@@ -123,6 +125,8 @@ class FlairDetector:
                 continue
             start = int(span.start_position)
             end = int(span.end_position)
+            if entity_type == EntityType.PERSON:
+                start, end = self._person_boundaries(text, start, end)
             detections.append(
                 Detection(
                     start=start,
@@ -134,7 +138,50 @@ class FlairDetector:
                     rule=f"flair:{label.value}",
                 )
             )
-        return detections
+        return self._deduplicate(detections)
+
+    @staticmethod
+    def _person_boundaries(text: str, start: int, end: int) -> tuple[int, int]:
+        window_start = max(0, start - 48)
+        positions = {
+            window_start + match.start()
+            for match in re.finditer(r"\b", text[window_start : start + 1])
+        }
+        candidates = []
+        for position in positions:
+            match = NAME_PATTERN.match(text, position)
+            if match and match.start() <= start < match.end() and end <= match.end():
+                candidates.append(match)
+        if not candidates:
+            return start, end
+        match = min(
+            candidates,
+            key=lambda item: (
+                item.start() != start,
+                item.end() - item.start(),
+            ),
+        )
+        expanded_start = match.start()
+        particle_prefix = re.search(
+            r"(?i)(?<!\w)(?:(?:de|den|der|van|von|al|el)\s+){1,3}$",
+            text[max(0, expanded_start - 32) : expanded_start],
+        )
+        if particle_prefix:
+            expanded_start = max(0, expanded_start - 32) + particle_prefix.start()
+        expanded_end = match.end()
+        if match.group(0).casefold().endswith(("'s", "\u2019s")):
+            expanded_end -= 2
+        return expanded_start, expanded_end
+
+    @staticmethod
+    def _deduplicate(detections: list[Detection]) -> list[Detection]:
+        output: dict[tuple[int, int, EntityType], Detection] = {}
+        for detection in detections:
+            key = (detection.start, detection.end, detection.entity_type)
+            current = output.get(key)
+            if current is None or detection.confidence > current.confidence:
+                output[key] = detection
+        return list(output.values())
 
     @staticmethod
     def _map_to_original(view: NormalizedText, detection: Detection) -> Detection:

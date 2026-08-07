@@ -41,7 +41,7 @@ def test_flair_adapter_maps_tags_confidence_and_character_offsets() -> None:
     result = detector.detect(text)[0]
     assert result.entity_type == EntityType.PERSON
     assert result.confidence == 0.73
-    assert result.text == "Ada Lovela"
+    assert result.text == "Ada Lovelace"
     assert text[result.start : result.end] == result.text
 
 
@@ -71,6 +71,43 @@ def test_flair_adapter_normalizes_input_and_maps_back_to_source_offsets() -> Non
 
     assert result.text == "Ada%20Lovelace"
     assert text[result.start : result.end] == result.text
+
+
+def test_flair_person_span_expands_to_an_enclosing_validated_name_phrase() -> None:
+    class PartialPersonSentence(FakeSentence):
+        def get_spans(self, _name: str) -> list[Span]:
+            span = Span()
+            span.start_position = self.text.index("Zoë")
+            span.end_position = span.start_position + len("Zoë")
+            return [span]
+
+    detector = FlairDetector("unused")
+    detector._tagger = FakeTagger()
+    detector._sentence_type = PartialPersonSentence
+    text = "Contact Zoe\u0308 Voorbeeld today."
+
+    result = detector.detect(text)[0]
+
+    assert result.text == "Zoe\u0308 Voorbeeld"
+    assert text[result.start : result.end] == result.text
+
+
+def test_flair_person_span_joins_initials_without_absorbing_possessive() -> None:
+    class InitialSentence(FakeSentence):
+        def get_spans(self, _name: str) -> list[Span]:
+            span = Span()
+            span.start_position = self.text.index("G")
+            span.end_position = span.start_position + 1
+            return [span]
+
+    detector = FlairDetector("unused")
+    detector._tagger = FakeTagger()
+    detector._sentence_type = InitialSentence
+    text = "G. F.'s record"
+
+    result = detector.detect(text)[0]
+
+    assert result.text == "G. F."
 
 
 def _install_fake_flair_modules(

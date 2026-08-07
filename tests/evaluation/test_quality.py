@@ -14,6 +14,7 @@ from securedact_eval.gates import (
 )
 from securedact_eval.quality import (
     EvaluationConfigurationError,
+    _engine_for_mode,
     load_evaluation_corpus,
     run_quality_evaluation,
 )
@@ -118,3 +119,33 @@ def test_manifest_tampering_and_schema_failure_are_rejected(tmp_path: Path) -> N
     )
     with pytest.raises(EvaluationConfigurationError, match="corpus_schema_invalid"):
         load_evaluation_corpus(invalid)
+
+
+def test_flair_mode_accepts_language_specific_model_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ReadyFlair:
+        name = "fake_flair"
+        contextual = True
+        ready = True
+
+        def __init__(self, model_path: str) -> None:
+            self.model_path = model_path
+
+        def load(self) -> None:
+            return None
+
+        def detect(self, text: str) -> list[object]:
+            return []
+
+    monkeypatch.setenv("SECUREDACT_EVAL_FLAIR_MODEL_EN", "english.bin")
+    monkeypatch.setenv("SECUREDACT_EVAL_FLAIR_MODEL_NL", "dutch.bin")
+    monkeypatch.delenv("SECUREDACT_EVAL_FLAIR_MODEL", raising=False)
+    monkeypatch.setattr("securedact_eval.quality.FlairDetector", ReadyFlair)
+
+    engine, identifier = _engine_for_mode("flair")
+
+    assert engine.full_ready()
+    assert identifier == "configured-flair-en+nl"
+    router = next(detector for detector in engine.detectors if detector.contextual)
+    assert set(router.detectors) == {"en", "nl"}

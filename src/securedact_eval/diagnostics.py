@@ -295,7 +295,7 @@ def _failure_types(sample: CorpusSample, expected: list[Span], predicted: list[S
 def _run_records(samples: list[CorpusSample], engine: PrivacyEngine) -> list[_Record]:
     rows: list[_Record] = []
     for sample in samples:
-        analysis = engine.analyze(sample.text, "gdpr")
+        analysis = engine.analyze(sample.text, "gdpr", language=sample.language)
         expected = [_span(entity) for entity in sample.entities]
         predicted = [_span(entity) for entity in analysis.entities]
         evaluation = evaluate_spans(expected, predicted)
@@ -673,7 +673,15 @@ def run_adversarial_audit(
         "deterministic_only": deterministic,
         "mocked_contextual": mocked,
     }
-    if os.getenv("SECUREDACT_EVAL_FLAIR_MODEL"):
+    configured_flair = any(
+        os.getenv(name)
+        for name in (
+            "SECUREDACT_EVAL_FLAIR_MODEL",
+            "SECUREDACT_EVAL_FLAIR_MODEL_EN",
+            "SECUREDACT_EVAL_FLAIR_MODEL_NL",
+        )
+    )
+    if configured_flair:
         try:
             flair_engine, flair_model = _engine_for_mode("flair")
             modes["real_flair"] = _mode_diagnostics(
@@ -696,7 +704,7 @@ def run_adversarial_audit(
             status="not_provisioned",
             label="real locally provisioned Flair",
             quality_claim=True,
-            unavailable_reason="SECUREDACT_EVAL_FLAIR_MODEL is unset",
+            unavailable_reason="no SECUREDACT_EVAL_FLAIR_MODEL variable is set",
         )
 
     if deterministic.aggregate is None or deterministic.clean_reference is None:

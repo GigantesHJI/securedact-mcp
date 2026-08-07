@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from securedact_core import Detection, build_production_engine
 from securedact_eval.diagnostics import (
     ERROR_TAXONOMY,
     AdversarialAuditReport,
@@ -12,6 +13,7 @@ from securedact_eval.diagnostics import (
     run_adversarial_audit,
     write_adversarial_audit_outputs,
 )
+from securedact_eval.models import CorpusSample
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -79,3 +81,45 @@ def test_integrity_audit_and_content_safe_outputs(
     assert all(
         "text" not in record for record in payload["modes"]["deterministic_only"]["failed_records"]
     )
+
+
+def test_adversarial_diagnostics_route_the_annotated_language() -> None:
+    from securedact_eval.diagnostics import _run_records
+
+    class CapturingContextualDetector:
+        name = "capturing_contextual"
+        contextual = True
+        ready = True
+
+        def __init__(self) -> None:
+            self.languages: list[str] = []
+
+        def detect_for_language(self, text: str, language: str) -> list[Detection]:
+            self.languages.append(language)
+            return []
+
+        def detect(self, text: str) -> list[Detection]:
+            raise AssertionError("explicit benchmark language must be used")
+
+    detector = CapturingContextualDetector()
+    engine = build_production_engine([detector], require_contextual=True)
+    samples = [
+        CorpusSample(
+            id="synthetic-en",
+            language="en",
+            domain="general",
+            text="No sensitive value.",
+            entities=[],
+        ),
+        CorpusSample(
+            id="synthetic-nl",
+            language="nl",
+            domain="general",
+            text="Geen gevoelig gegeven.",
+            entities=[],
+        ),
+    ]
+
+    _run_records(samples, engine)
+
+    assert detector.languages[::2] == ["en", "nl"]

@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from securedact_core import PrivacyAction, PrivacyEngine, build_production_engine
-from securedact_core.detectors import FlairDetector
+from securedact_core.detectors import FlairDetector, LanguageAwareFlairDetector
 
 from .benchmark.generator import load_jsonl
 from .benchmark.manifest import verify_benchmark
@@ -170,14 +170,33 @@ def _engine_for_mode(mode: str) -> tuple[PrivacyEngine, str]:
     if mode != "flair":
         raise EvaluationConfigurationError("evaluation_mode_invalid")
     model_path = os.getenv("SECUREDACT_EVAL_FLAIR_MODEL")
-    if not model_path:
+    language_paths = {
+        language: path
+        for language, path in (
+            ("en", os.getenv("SECUREDACT_EVAL_FLAIR_MODEL_EN")),
+            ("nl", os.getenv("SECUREDACT_EVAL_FLAIR_MODEL_NL")),
+        )
+        if path
+    }
+    if model_path and language_paths:
+        raise EvaluationConfigurationError("flair_model_configuration_ambiguous")
+    if not model_path and not language_paths:
         raise EvaluationConfigurationError("flair_model_not_configured")
-    detector = FlairDetector(model_path)
+    detector = (
+        LanguageAwareFlairDetector(
+            {language: FlairDetector(path) for language, path in language_paths.items()}
+        )
+        if language_paths
+        else FlairDetector(cast(str, model_path))
+    )
     engine = build_production_engine([detector], require_contextual=True)
     engine.startup()
     if not engine.full_ready():
         raise EvaluationConfigurationError("flair_model_unavailable")
-    return engine, os.getenv("SECUREDACT_EVAL_MODEL_ID", "configured-flair")
+    default_identifier = (
+        "configured-flair-en+nl" if set(language_paths) == {"en", "nl"} else "configured-flair"
+    )
+    return engine, os.getenv("SECUREDACT_EVAL_MODEL_ID", default_identifier)
 
 
 def _spans(sample: CorpusSample) -> list[Span]:

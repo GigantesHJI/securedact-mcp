@@ -54,3 +54,11 @@ def test_equal_rank_tie_breaks_lexically_and_adjacent_spans_survive() -> None:
         lexical_winner,
         adjacent,
     ]
+
+
+def test_sensitive_url_scope_wins_over_decoded_nested_credentials() -> None:
+    url = detection(0, 80, DetectionSource.REGEX, EntityType.SENSITIVE_URL_PARAMETER)
+    token = detection(30, 55, DetectionSource.CREDENTIALS, EntityType.API_TOKEN)
+    email = detection(58, 75, DetectionSource.REGEX, EntityType.EMAIL)
+
+    assert merge_detections([email, token, url]) == [url]

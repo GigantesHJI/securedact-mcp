@@ -116,3 +116,26 @@ def test_structured_phone_spacing_is_supported(value: str) -> None:
     )
 
     assert detection.text == value
+
+
+def test_normalized_view_does_not_join_label_values_across_lines() -> None:
+    text = "Password: [PASSWORD_1]\nstatus=failed"
+
+    findings = RegexDetector().detect(text)
+
+    assert all(item.text != "status=failed" for item in findings)
+
+
+def test_normalized_view_does_not_absorb_subsequent_structured_fields() -> None:
+    text = (
+        "Address: Keizersgracht 123, 1015 CJ Amsterdam, Netherlands\n"
+        "Email: user%40example.test\n"
+        "Phone: +31 6 12345678"
+    )
+
+    findings = RegexDetector().detect(text)
+    address = next(item for item in findings if item.entity_type == EntityType.ADDRESS)
+    email = next(item for item in findings if item.entity_type == EntityType.EMAIL)
+
+    assert address.text == "Keizersgracht 123, 1015 CJ Amsterdam, Netherlands"
+    assert email.text == "user%40example.test"

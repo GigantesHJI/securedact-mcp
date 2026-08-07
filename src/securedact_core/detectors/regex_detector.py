@@ -687,13 +687,14 @@ class RegexDetector:
         normalized = normalize_for_detection(text)
         results.extend(
             self._map_to_original(normalized, detection)
-            for detection in self._detect_view(normalized.text)
+            for detection in self._detect_view(normalized.text, include_labels=False)
         )
         return self._deduplicate(results)
 
-    def _detect_view(self, text: str) -> list[Detection]:
+    def _detect_view(self, text: str, *, include_labels: bool = True) -> list[Detection]:
         results: list[Detection] = []
-        results.extend(self._detect_labels(text))
+        if include_labels:
+            results.extend(self._detect_labels(text))
         results.extend(self._detect_prefixes(text))
         results.extend(self._detect_urls(text))
         results.extend(self._detect_common_secrets(text))

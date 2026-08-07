@@ -15,8 +15,8 @@ SOURCE_PRIORITY = {
 TYPE_PRIORITY = {
     EntityType.ADDRESS: 100,
     EntityType.SPECIAL_CATEGORY_CONTEXT: 100,
-    EntityType.SENSITIVE_URL_PARAMETER: 95,
-    EntityType.INTERNAL_URL: 95,
+    EntityType.SENSITIVE_URL_PARAMETER: 130,
+    EntityType.INTERNAL_URL: 130,
     EntityType.PRIVATE_KEY: 95,
     EntityType.API_TOKEN: 90,
     EntityType.ACCESS_TOKEN: 90,
@@ -56,7 +56,13 @@ def _rank(item: Detection) -> tuple[int, int, int, int, float, int, str, str, st
     # Policy-selected assertion/sentence replacement is an explicit privacy
     # decision, not a statistical guess. It must cover nested deterministic
     # findings when the policy calls for the entire assertion to be removed.
-    policy_scope = 0 if item.rule in {"full_sensitive_assertion", "full_sentence"} else 1
+    policy_scope = (
+        0
+        if item.rule in {"full_sensitive_assertion", "full_sentence"}
+        else 1
+        if item.entity_type in {EntityType.SENSITIVE_URL_PARAMETER, EntityType.INTERNAL_URL}
+        else 2
+    )
     return (
         policy_scope,
         SOURCE_PRIORITY[item.source],

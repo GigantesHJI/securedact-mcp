@@ -133,11 +133,10 @@ class ContextualPrivacyDetector:
             return self._analyze_view(text)
         normalized = normalize_for_detection(text)
         detections, assertions = self._analyze_view(normalized.text)
-        mapped_detections = [
-            self._map_detection(normalized, detection) for detection in detections
-        ]
+        mapped_detections = [self._map_detection(normalized, detection) for detection in detections]
         id_map = {
-            source.id: mapped.id for source, mapped in zip(detections, mapped_detections, strict=True)
+            source.id: mapped.id
+            for source, mapped in zip(detections, mapped_detections, strict=True)
         }
         mapped_assertions = [
             self._map_assertion(normalized, assertion, id_map) for assertion in assertions

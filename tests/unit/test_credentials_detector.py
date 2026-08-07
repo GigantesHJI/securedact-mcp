@@ -73,7 +73,9 @@ def test_normalized_credentials_map_back_to_the_full_source(value: str) -> None:
     text = f"token={value}"
 
     detection = next(
-        item for item in CredentialsDetector().detect(text) if item.entity_type == EntityType.API_TOKEN
+        item
+        for item in CredentialsDetector().detect(text)
+        if item.entity_type == EntityType.API_TOKEN
     )
 
     assert detection.text == value

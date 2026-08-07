@@ -133,9 +133,9 @@ def test_flair_organization_explicitly_marked_public_is_suppressed() -> None:
     detector._tagger = FakeTagger()
     detector._sentence_type = OrganizationSentence
 
-    assert detector.detect(
-        "The public organization Example Research Foundation opens at nine."
-    ) == []
+    assert (
+        detector.detect("The public organization Example Research Foundation opens at nine.") == []
+    )
     assert detector.detect("Contact Example Research Foundation privately.")
 
 

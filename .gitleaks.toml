@@ -8,3 +8,12 @@ paths = [
   '''benchmarks/corpora/.*''',
   '''examples/synthetic-test-prompts\.md''',
 ]
+
+[[allowlists]]
+description = "Synthetic GitHub PAT fixture used to test residual credential detection"
+paths = [
+  '''tests/privacy/test_policy_storage_and_audit\.py''',
+]
+regexes = [
+  '''ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456''',
+]

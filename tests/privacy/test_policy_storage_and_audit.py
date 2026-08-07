@@ -201,9 +201,7 @@ def test_residual_scan_catches_normalized_remnants_and_malformed_placeholders() 
 
 
 def test_residual_scan_reruns_credentials_and_contextual_rules() -> None:
-    engine = PrivacyEngine(
-        [CredentialsDetector(), RegexDetector(), ContextualPrivacyDetector()]
-    )
+    engine = PrivacyEngine([CredentialsDetector(), RegexDetector(), ContextualPrivacyDetector()])
     empty_analysis = AnalysisResult(entities=[], requires_review=False)
 
     for source, expected_type in (

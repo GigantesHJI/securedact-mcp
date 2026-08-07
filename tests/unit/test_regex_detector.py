@@ -67,7 +67,9 @@ def test_normalized_detection_maps_back_to_exact_source_offsets(
 ) -> None:
     text = f"before {value} after"
 
-    detection = next(item for item in RegexDetector().detect(text) if item.entity_type == entity_type)
+    detection = next(
+        item for item in RegexDetector().detect(text) if item.entity_type == entity_type
+    )
 
     assert detection.text == expected
     assert text[detection.start : detection.end] == expected
@@ -82,7 +84,9 @@ def test_normalized_detection_maps_back_to_exact_source_offsets(
     ],
 )
 def test_email_does_not_absorb_a_surrounding_quote(text: str) -> None:
-    detection = next(item for item in RegexDetector().detect(text) if item.entity_type == EntityType.EMAIL)
+    detection = next(
+        item for item in RegexDetector().detect(text) if item.entity_type == EntityType.EMAIL
+    )
 
     assert not detection.text.startswith("'")
     assert detection.text.endswith("example.invalid")

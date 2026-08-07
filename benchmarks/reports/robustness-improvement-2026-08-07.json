@@ -1,0 +1,151 @@
+{
+  "report_version": 1,
+  "date": "2026-08-07",
+  "scope": "aggregate-only robustness improvement report",
+  "privacy": {
+    "synthetic_data_only": true,
+    "contains_record_text": false,
+    "contains_real_personal_data": false
+  },
+  "frozen_inputs": {
+    "smoke_corpus_sha256": "589361605b60ccbbe973645d1eabdf8748e9938278c684924acfbd685d0beae2",
+    "thresholds_sha256": "85a194edf27eb2bb495ead1911d9d4986c77e1a3bbb298a7620a4f126bd23bbf",
+    "thresholds_changed": false,
+    "detector_tuning_after_unseen_seed": false
+  },
+  "source_reports": {
+    "corrected_before": "build/improvement/before-real/adversarial-audit.json",
+    "final_after": "build/improvement/after/adversarial-audit.json",
+    "fresh_unseen_seed": "build/improvement/unseen-results/adversarial-audit.json",
+    "metric_coverage": [
+      "clean and non-adversarial records",
+      "negative and near-miss records",
+      "supported, partially supported, and unsupported transformations",
+      "English and Dutch",
+      "every entity category",
+      "every document domain",
+      "every transformation",
+      "single-entity, mixed-entity, and negative documents",
+      "deterministic-only",
+      "real locally provisioned Flair",
+      "mocked contextual mode"
+    ],
+    "metrics_per_group": [
+      "documents",
+      "support",
+      "true positives",
+      "false positives",
+      "false negatives",
+      "exact precision",
+      "exact recall",
+      "exact F1",
+      "relaxed-overlap precision",
+      "relaxed-overlap recall",
+      "relaxed-overlap F1",
+      "category-only correctness",
+      "document-level unsafe detection",
+      "approved-output residual-leak rate"
+    ]
+  },
+  "original_reported_result": {
+    "exact_precision": 0.2646,
+    "exact_recall": 0.2261,
+    "exact_f1": 0.2438,
+    "valid_primary_quality_score": false,
+    "primary_cause": "generator suffix contamination produced 151 phone false positives"
+  },
+  "corrected_frozen_before": {
+    "deterministic_only": {
+      "aggregate": {"support": 261, "tp": 109, "fp": 15, "fn": 152, "exact_f1": 0.566234, "relaxed_f1": 0.618182, "residual_leak_rate": 0.0},
+      "clean_reference": {"support": 32, "tp": 30, "fp": 1, "fn": 2, "exact_f1": 0.952381, "relaxed_f1": 0.952381},
+      "standard_clean": {"support": 12, "tp": 8, "fp": 1, "fn": 4, "exact_f1": 0.761905, "relaxed_f1": 0.857143},
+      "negative_controls": {"support": 0, "tp": 0, "fp": 0, "fn": 0, "residual_leak_rate": 0.0},
+      "supported_adversarial": {"support": 84, "tp": 49, "fp": 1, "fn": 35, "exact_f1": 0.731343, "relaxed_f1": 0.746269},
+      "partially_supported_adversarial": {"support": 117, "tp": 34, "fp": 13, "fn": 83, "exact_f1": 0.414634, "relaxed_f1": 0.512195},
+      "unsupported_challenge": {"support": 48, "tp": 18, "fp": 0, "fn": 30, "exact_f1": 0.545455, "relaxed_f1": 0.545455}
+    },
+    "real_flair": {
+      "model_identifier": "english-large@e2b1caab+dutch-large@44c28591",
+      "aggregate": {"support": 261, "tp": 144, "fp": 55, "fn": 117, "exact_f1": 0.626087, "relaxed_f1": 0.747826, "residual_leak_rate": 0.0},
+      "clean_reference": {"support": 32, "tp": 32, "fp": 4, "fn": 0, "exact_f1": 0.941176, "relaxed_f1": 0.941176},
+      "standard_clean": {"support": 12, "tp": 11, "fp": 1, "fn": 1, "exact_f1": 0.916667, "relaxed_f1": 1.0},
+      "negative_controls": {"support": 0, "tp": 0, "fp": 3, "fn": 0, "residual_leak_rate": 0.0},
+      "supported_adversarial": {"support": 84, "tp": 66, "fp": 12, "fn": 18, "exact_f1": 0.814815, "relaxed_f1": 0.901235},
+      "partially_supported_adversarial": {"support": 117, "tp": 49, "fp": 32, "fn": 68, "exact_f1": 0.494949, "relaxed_f1": 0.666667},
+      "unsupported_challenge": {"support": 48, "tp": 18, "fp": 7, "fn": 30, "exact_f1": 0.493151, "relaxed_f1": 0.575342}
+    }
+  },
+  "final_after": {
+    "deterministic_only": {
+      "aggregate": {"support": 261, "tp": 166, "fp": 0, "fn": 95, "exact_precision": 1.0, "exact_recall": 0.636015, "exact_f1": 0.777518, "relaxed_f1": 0.777518, "residual_leak_rate": 0.0},
+      "clean_reference": {"support": 32, "tp": 30, "fp": 1, "fn": 2, "exact_f1": 0.952381, "relaxed_f1": 0.952381},
+      "standard_clean": {"support": 12, "tp": 9, "fp": 0, "fn": 3, "exact_f1": 0.857143, "relaxed_f1": 0.857143},
+      "negative_controls": {"support": 0, "tp": 0, "fp": 0, "fn": 0, "residual_leak_rate": 0.0},
+      "supported_adversarial": {"support": 84, "tp": 59, "fp": 0, "fn": 25, "exact_f1": 0.825175, "relaxed_f1": 0.825175},
+      "partially_supported_adversarial": {"support": 117, "tp": 69, "fp": 0, "fn": 48, "exact_f1": 0.741935, "relaxed_f1": 0.741935},
+      "unsupported_challenge": {"support": 48, "tp": 29, "fp": 0, "fn": 19, "exact_f1": 0.753247, "relaxed_f1": 0.753247}
+    },
+    "real_flair": {
+      "model_identifier": "english-large@e2b1caab+dutch-large@44c28591",
+      "aggregate": {"support": 261, "tp": 203, "fp": 19, "fn": 58, "exact_precision": 0.914414, "exact_recall": 0.777778, "exact_f1": 0.840580, "relaxed_precision": 0.941441, "relaxed_recall": 0.800766, "relaxed_f1": 0.865424, "residual_leak_rate": 0.0},
+      "clean_reference": {"support": 32, "tp": 32, "fp": 4, "fn": 0, "exact_f1": 0.941176, "relaxed_f1": 0.941176},
+      "standard_clean": {"support": 12, "tp": 12, "fp": 0, "fn": 0, "exact_f1": 1.0, "relaxed_f1": 1.0},
+      "negative_controls": {"support": 0, "tp": 0, "fp": 0, "fn": 0, "residual_leak_rate": 0.0},
+      "supported_adversarial": {"support": 84, "tp": 73, "fp": 8, "fn": 11, "exact_f1": 0.884848, "relaxed_f1": 0.945455},
+      "partially_supported_adversarial": {"support": 117, "tp": 89, "fp": 8, "fn": 28, "exact_f1": 0.831776, "relaxed_f1": 0.841121},
+      "unsupported_challenge": {"support": 48, "tp": 29, "fp": 3, "fn": 19, "exact_f1": 0.725, "relaxed_f1": 0.725},
+      "languages": {
+        "en": {"support": 131, "tp": 101, "fp": 10, "fn": 30, "exact_f1": 0.834711, "relaxed_f1": 0.851240, "residual_leak_rate": 0.0},
+        "nl": {"support": 130, "tp": 102, "fp": 9, "fn": 28, "exact_f1": 0.846473, "relaxed_f1": 0.879668, "residual_leak_rate": 0.0}
+      },
+      "largest_false_positive_categories": {"organization": 9, "person": 8, "location": 2},
+      "largest_false_negative_categories": {"person": 26, "email": 18, "unknown_sensitive": 5, "iban": 2},
+      "error_taxonomy_counts": {"missed_entity": 33, "normalization_failure": 29, "overlapping_prediction_conflict": 21, "oversized_span": 6, "unexpected_false_positive": 2, "unsupported_transformation": 19, "wrong_category": 15}
+    },
+    "mocked_contextual": {
+      "quality_claim": false,
+      "label": "MOCKED annotation-backed contextual mode",
+      "aggregate": {"support": 261, "tp": 229, "fp": 0, "fn": 32, "exact_f1": 0.934694, "relaxed_f1": 0.934694, "residual_leak_rate": 0.0}
+    }
+  },
+  "fresh_unseen_seed": {
+    "seed": 20260807,
+    "documents": 160,
+    "entities": 261,
+    "languages": {"en": 80, "nl": 80},
+    "generated_after_implementation": true,
+    "deterministic_only": {"tp": 165, "fp": 2, "fn": 96, "exact_f1": 0.771028, "relaxed_f1": 0.775701, "residual_leak_rate": 0.0},
+    "real_flair": {"tp": 200, "fp": 24, "fn": 61, "exact_f1": 0.824742, "relaxed_f1": 0.857732, "residual_leak_rate": 0.0}
+  },
+  "external_validation": {
+    "multiconer_registered": true,
+    "multiconer_local_files_available": false,
+    "download_attempted": false,
+    "status": "not run"
+  },
+  "performance": {
+    "hardware": "Windows 11, Intel64 CPU, no CUDA GPU",
+    "deterministic_before": {"warm_p95_ms": 3.0090, "medium_median_ms": 41.9938, "long_median_ms": 707.2293, "rss_bytes": 39735296},
+    "deterministic_after": {"warm_p95_ms": 5.1831, "medium_median_ms": 65.8550, "long_median_ms": 764.9629, "rss_bytes": 52973568},
+    "real_flair_after": {"cold_total_ms": 44332.9056, "warm_p95_ms": 433.5028, "medium_median_ms": 2442.1262, "long_median_ms": 38312.6387, "rss_bytes": 7195725824},
+    "gpu_available": false
+  },
+  "validation": {
+    "pytest": "530 passed, 2 skipped",
+    "ruff": "passed",
+    "mypy_strict": "passed (47 source files)",
+    "release_artifact_validator": "passed",
+    "twine_check": "passed",
+    "wheel_sha256": "4f202c4dbaf194f377276b0d0aa4d9381f392aa15ec8f7ff9d454a0871681b72",
+    "sdist_sha256": "2f1950e458adacc7c3e64315ee0ac9b3d6ad582eb0bb9bf0e08013500b0ac0ca"
+  },
+  "conclusions": {
+    "normal_clean_regressed": false,
+    "low_f1_primarily_unsupported_transformations": false,
+    "exact_materially_below_relaxed": "yes for real Flair supported adversarial (0.884848 versus 0.945455); no for deterministic-only",
+    "supported_failures": ["casing", "Dutch surname prefix exact boundaries", "line wrapping exact boundaries", "punctuation spacing exact boundaries", "unicode normalization"],
+    "status_ok_with_expected_sensitive_value_count": 0,
+    "benchmark_or_evaluator_defects_found": true,
+    "later_priorities": ["Flair person/category calibration", "partially supported email and whitespace obfuscation", "unknown-sensitive handling", "long-input contextual performance"]
+  }
+}

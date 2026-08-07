@@ -110,6 +110,35 @@ def test_flair_person_span_joins_initials_without_absorbing_possessive() -> None
     assert result.text == "G. F."
 
 
+def test_flair_organization_explicitly_marked_public_is_suppressed() -> None:
+    class OrganizationLabel:
+        value = "ORG"
+        score = 0.99
+
+    class OrganizationSpan:
+        def __init__(self, start: int, end: int) -> None:
+            self.start_position = start
+            self.end_position = end
+
+        def get_label(self, _name: str) -> OrganizationLabel:
+            return OrganizationLabel()
+
+    class OrganizationSentence(FakeSentence):
+        def get_spans(self, _name: str) -> list[OrganizationSpan]:
+            value = "Example Research Foundation"
+            start = self.text.index(value)
+            return [OrganizationSpan(start, start + len(value))]
+
+    detector = FlairDetector("unused")
+    detector._tagger = FakeTagger()
+    detector._sentence_type = OrganizationSentence
+
+    assert detector.detect(
+        "The public organization Example Research Foundation opens at nine."
+    ) == []
+    assert detector.detect("Contact Example Research Foundation privately.")
+
+
 def _install_fake_flair_modules(
     monkeypatch: pytest.MonkeyPatch,
     sequence_tagger: type,

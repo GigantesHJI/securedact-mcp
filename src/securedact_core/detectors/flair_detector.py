@@ -24,6 +24,11 @@ DEFAULT_TAG_MAP: dict[str, EntityType] = {
     "MEDICAL": EntityType.MEDICAL,
     "DISEASE": EntityType.MEDICAL,
 }
+PUBLIC_ORGANIZATION_CONTEXT = re.compile(
+    r"(?:public|publieke|openbare)\s+"
+    r"(?:organization|organisation|organisatie|institution|instelling|company|bedrijf)\s+$",
+    re.IGNORECASE,
+)
 
 
 class FlairDetector:
@@ -125,6 +130,10 @@ class FlairDetector:
                 continue
             start = int(span.start_position)
             end = int(span.end_position)
+            if entity_type == EntityType.ORGANIZATION and PUBLIC_ORGANIZATION_CONTEXT.search(
+                text[max(0, start - 64) : start]
+            ):
+                continue
             if entity_type == EntityType.PERSON:
                 start, end = self._person_boundaries(text, start, end)
             detections.append(

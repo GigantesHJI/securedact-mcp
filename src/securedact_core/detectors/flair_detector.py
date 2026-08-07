@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models import Detection, DetectionSource, EntityType
+from ..normalization import NormalizedText, normalize_for_detection
 
 DEFAULT_TAG_MAP: dict[str, EntityType] = {
     "PER": EntityType.PERSON,
@@ -99,6 +100,15 @@ class FlairDetector:
                 self._on_ready()
 
     def detect(self, text: str) -> list[Detection]:
+        normalized = normalize_for_detection(text)
+        if normalized.text == text:
+            return self._detect_view(text)
+        return [
+            self._map_to_original(normalized, detection)
+            for detection in self._detect_view(normalized.text)
+        ]
+
+    def _detect_view(self, text: str) -> list[Detection]:
         self.load()
         assert self._tagger is not None and self._sentence_type is not None
         sentence = self._sentence_type(text)
@@ -125,3 +135,13 @@ class FlairDetector:
                 )
             )
         return detections
+
+    @staticmethod
+    def _map_to_original(view: NormalizedText, detection: Detection) -> Detection:
+        start, end = view.original_span(detection.start, detection.end)
+        return Detection(
+            **detection.model_dump(exclude={"id", "start", "end", "text"}),
+            start=start,
+            end=end,
+            text=view.original[start:end],
+        )

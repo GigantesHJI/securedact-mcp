@@ -13,6 +13,7 @@ from ..models import (
     SensitiveAssertion,
     TextSpan,
 )
+from ..normalization import NormalizedText, normalize_for_detection
 
 LEXICON_PATH = Path(__file__).with_name("lexicons") / "special_categories.v1.json"
 
@@ -123,6 +124,22 @@ class ContextualPrivacyDetector:
         return assertions
 
     def _analyze(self, text: str) -> tuple[list[Detection], list[SensitiveAssertion]]:
+        normalized = normalize_for_detection(text)
+        if normalized.text == text:
+            return self._analyze_view(text)
+        detections, assertions = self._analyze_view(normalized.text)
+        mapped_detections = [
+            self._map_detection(normalized, detection) for detection in detections
+        ]
+        id_map = {
+            source.id: mapped.id for source, mapped in zip(detections, mapped_detections, strict=True)
+        }
+        mapped_assertions = [
+            self._map_assertion(normalized, assertion, id_map) for assertion in assertions
+        ]
+        return mapped_detections, mapped_assertions
+
+    def _analyze_view(self, text: str) -> tuple[list[Detection], list[SensitiveAssertion]]:
         detections: list[Detection] = []
         assertions: list[SensitiveAssertion] = []
         known_people: list[Detection] = []
@@ -358,6 +375,63 @@ class ContextualPrivacyDetector:
         } | relationship_person_ids
         detections.extend(person for person in known_people if person.id in linked_ids)
         return self._deduplicate(detections), self._deduplicate_assertions(assertions)
+
+    @staticmethod
+    def _map_detection(view: NormalizedText, detection: Detection) -> Detection:
+        start, end = view.original_span(detection.start, detection.end)
+        return Detection(
+            **detection.model_dump(exclude={"id", "start", "end", "text"}),
+            start=start,
+            end=end,
+            text=view.original[start:end],
+        )
+
+    @staticmethod
+    def _map_assertion(
+        view: NormalizedText,
+        assertion: SensitiveAssertion,
+        subject_ids: dict[str, str],
+    ) -> SensitiveAssertion:
+        full_start, full_end = view.original_span(
+            assertion.full_span_start,
+            assertion.full_span_end,
+        )
+        sentence_start, sentence_end = view.original_span(
+            assertion.sentence_start,
+            assertion.sentence_end,
+        )
+        evidence_spans: list[TextSpan] = []
+        for evidence in assertion.evidence_spans:
+            evidence_start, evidence_end = view.original_span(evidence.start, evidence.end)
+            evidence_spans.append(
+                TextSpan(
+                    start=evidence_start,
+                    end=evidence_end,
+                    text=view.original[evidence_start:evidence_end],
+                )
+            )
+        return SensitiveAssertion(
+            **assertion.model_dump(
+                exclude={
+                    "id",
+                    "subject_entity_ids",
+                    "full_span_start",
+                    "full_span_end",
+                    "sentence_start",
+                    "sentence_end",
+                    "evidence_spans",
+                }
+            ),
+            subject_entity_ids=[
+                subject_ids.get(subject_id, subject_id)
+                for subject_id in assertion.subject_entity_ids
+            ],
+            full_span_start=full_start,
+            full_span_end=full_end,
+            sentence_start=sentence_start,
+            sentence_end=sentence_end,
+            evidence_spans=evidence_spans,
+        )
 
     @staticmethod
     def _medical_findings(

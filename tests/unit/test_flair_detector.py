@@ -45,6 +45,34 @@ def test_flair_adapter_maps_tags_confidence_and_character_offsets() -> None:
     assert text[result.start : result.end] == result.text
 
 
+def test_flair_adapter_normalizes_input_and_maps_back_to_source_offsets() -> None:
+    class DynamicSpan:
+        def __init__(self, start: int, end: int) -> None:
+            self.start_position = start
+            self.end_position = end
+
+        def get_label(self, _name: str) -> Label:
+            return Label()
+
+    class DynamicSentence(FakeSentence):
+        def get_spans(self, _name: str) -> list[DynamicSpan]:
+            value = "Ada Lovelace"
+            if value not in self.text:
+                return []
+            start = self.text.index(value)
+            return [DynamicSpan(start, start + len(value))]
+
+    detector = FlairDetector("unused")
+    detector._tagger = FakeTagger()
+    detector._sentence_type = DynamicSentence
+    text = "Hello Ada%20Lovelace"
+
+    result = detector.detect(text)[0]
+
+    assert result.text == "Ada%20Lovelace"
+    assert text[result.start : result.end] == result.text
+
+
 def _install_fake_flair_modules(
     monkeypatch: pytest.MonkeyPatch,
     sequence_tagger: type,

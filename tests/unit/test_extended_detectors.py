@@ -150,3 +150,31 @@ def test_biometric_field_uses_identifier_value_instead_of_natural_language_label
 
     assert [item.text for item in biometric_detections] == ["FACE-77A91B"]
     assert [span.text for span in assertion.evidence_spans] == ["FACE-77A91B"]
+
+
+@pytest.mark.parametrize(
+    ("text", "person", "evidence"),
+    [
+        ("Emma%20Stone has BRCA1.", "Emma%20Stone", "BRCA1"),
+        ("Emma\u200b Stone has BRCA1.", "Emma\u200b Stone", "BRCA1"),
+        ("Emma Stone has\nBRCA1.", "Emma Stone", "BRCA1"),
+        (
+            "\uff25\uff4d\uff4d\uff41 \uff33\uff54\uff4f\uff4e\uff45 has "
+            "\uff22\uff32\uff23\uff21\uff11.",
+            "\uff25\uff4d\uff4d\uff41 \uff33\uff54\uff4f\uff4e\uff45",
+            "\uff22\uff32\uff23\uff21\uff11",
+        ),
+    ],
+)
+def test_normalized_assertions_preserve_original_person_and_evidence_offsets(
+    text: str,
+    person: str,
+    evidence: str,
+) -> None:
+    detector = ContextualPrivacyDetector()
+    detections = detector.detect(text)
+    assertion = detector.detect_assertions(text)[0]
+
+    assert any(item.entity_type == EntityType.PERSON and item.text == person for item in detections)
+    assert assertion.evidence_spans[0].text == evidence
+    assert text[assertion.evidence_spans[0].start : assertion.evidence_spans[0].end] == evidence

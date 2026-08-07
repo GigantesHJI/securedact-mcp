@@ -26,6 +26,7 @@ from .models import (
     SanitizationAudit,
     SensitiveAssertion,
 )
+from .normalization import normalize_for_detection
 from .policies import Policy, PolicyRegistry
 from .redaction import redact_text, restore_text
 from .taxonomy import CATEGORY_DEFINITIONS, CRITICAL_TYPES, SPECIAL_CATEGORY_TYPES, mask_preview
@@ -482,7 +483,7 @@ class PrivacyEngine:
         # visible to the detector and the explicit malformed-output check.
         residual_input = placeholder_stripped
         for detector in self.detectors:
-            if detector.name != "regex":
+            if detector.contextual:
                 continue
             try:
                 findings = detector.detect(residual_input)
@@ -501,6 +502,8 @@ class PrivacyEngine:
                 action = actions[finding.entity_type]
                 if action != PrivacyAction.ALLOW:
                     residual.append(finding)
+
+        residual = merge_detections(residual)
 
         malformed = [
             value
@@ -640,18 +643,24 @@ class PrivacyEngine:
 
     @staticmethod
     def _retained_normalized(source: str, sanitized: str) -> bool:
+        normalized_source = normalize_for_detection(source, casefold=True).text
+        normalized_sanitized = normalize_for_detection(sanitized, casefold=True).text
         variants = {
             source,
             source.casefold(),
+            normalized_source,
             re.sub(r"\s+", " ", source).strip(),
             re.sub(r"[\s._:/-]+", "", source).casefold(),
+            re.sub(r"[\s._:/-]+", "", normalized_source),
             unquote(source),
         }
         targets = {
             sanitized,
             sanitized.casefold(),
+            normalized_sanitized,
             re.sub(r"\s+", " ", sanitized).strip(),
             re.sub(r"[\s._:/-]+", "", sanitized).casefold(),
+            re.sub(r"[\s._:/-]+", "", normalized_sanitized),
             unquote(sanitized),
         }
         return any(

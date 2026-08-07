@@ -17,7 +17,11 @@ from securedact_core import (
     RedactionResult,
     SecuredactPaths,
 )
-from securedact_core.detectors import ContextualPrivacyDetector, RegexDetector
+from securedact_core.detectors import (
+    ContextualPrivacyDetector,
+    CredentialsDetector,
+    RegexDetector,
+)
 
 
 def test_every_entity_has_exactly_one_canonical_group() -> None:
@@ -194,3 +198,53 @@ def test_residual_scan_catches_normalized_remnants_and_malformed_placeholders() 
     )
     assert not malformed_result.safe_to_send
     assert malformed_result.malformed_placeholders == ["[bad placeholder]"]
+
+
+def test_residual_scan_reruns_credentials_and_contextual_rules() -> None:
+    engine = PrivacyEngine(
+        [CredentialsDetector(), RegexDetector(), ContextualPrivacyDetector()]
+    )
+    empty_analysis = AnalysisResult(entities=[], requires_review=False)
+
+    for source, expected_type in (
+        ("token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456", EntityType.API_TOKEN),
+        ("Emma Stone has BRCA1.", EntityType.GENETIC_DATA),
+    ):
+        leaked = RedactionResult(
+            sanitized_text=source,
+            mapping={},
+            entities=[],
+            entity_counts={},
+        )
+
+        residual = engine.scan_residual(
+            source,
+            leaked,
+            empty_analysis,
+            "gdpr_strict",
+        )
+
+        assert not residual.safe_to_send
+        assert expected_type in {item.entity_type for item in residual.residual_findings}
+
+
+def test_residual_normalization_catches_encoded_sensitive_values() -> None:
+    engine = PrivacyEngine([RegexDetector()])
+    source = "user@example.test"
+    finding = engine.analyze(source, "gdpr_strict").entities[0]
+    leaked = RedactionResult(
+        sanitized_text="user%40example.test",
+        mapping={},
+        entities=[finding],
+        entity_counts={finding.entity_type.value: 1},
+    )
+
+    residual = engine.scan_residual(
+        source,
+        leaked,
+        AnalysisResult(entities=[finding], requires_review=False),
+        "gdpr_strict",
+    )
+
+    assert not residual.safe_to_send
+    assert residual.partial_match_findings

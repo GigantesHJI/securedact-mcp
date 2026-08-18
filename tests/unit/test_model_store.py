@@ -163,9 +163,7 @@ def test_model_root_inside_git_repository_is_rejected(
         _validate_model_root(repository / "models", cwd=working_directory)
 
 
-def test_temporary_model_root_is_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_temporary_model_root_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     working_directory = tmp_path / "user"
     temporary_root = tmp_path / "temporary"
     working_directory.mkdir()

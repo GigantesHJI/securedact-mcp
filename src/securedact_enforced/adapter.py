@@ -71,7 +71,9 @@ class PrivacyEnforcer:
         except RuntimeLoadFailure as exc:
             return cls(SecuredactEngine(runtime.engine, configuration_error=exc.failure_code))
         except Exception:
-            return cls(SecuredactEngine(runtime.engine, configuration_error="contextual_model_load_failed"))
+            return cls(
+                SecuredactEngine(runtime.engine, configuration_error="contextual_model_load_failed")
+            )
         if not runtime.engine.full_ready():
             return cls(
                 SecuredactEngine(
@@ -114,7 +116,12 @@ class PrivacyEnforcer:
     def _inspect_payload(self, payload: object) -> tuple[EnforcementResult, object | None]:
         if isinstance(payload, str):
             result = self.inspect_text(payload)
-            return result, result.sanitized_text if result.outcome == EnforcementOutcome.SANITIZED else payload
+            return (
+                result,
+                result.sanitized_text
+                if result.outcome == EnforcementOutcome.SANITIZED
+                else payload,
+            )
         if isinstance(payload, Mapping):
             sanitized: dict[object, object] = {}
             changed = False
@@ -127,7 +134,9 @@ class PrivacyEnforcer:
                 sanitized[key] = replacement
                 changed = changed or result.outcome == EnforcementOutcome.SANITIZED
             return (
-                EnforcementResult(EnforcementOutcome.SANITIZED) if changed else EnforcementResult(EnforcementOutcome.ALLOW),
+                EnforcementResult(EnforcementOutcome.SANITIZED)
+                if changed
+                else EnforcementResult(EnforcementOutcome.ALLOW),
                 sanitized,
             )
         if isinstance(payload, list):
@@ -140,7 +149,9 @@ class PrivacyEnforcer:
                 sanitized_items.append(replacement)
                 changed = changed or result.outcome == EnforcementOutcome.SANITIZED
             return (
-                EnforcementResult(EnforcementOutcome.SANITIZED) if changed else EnforcementResult(EnforcementOutcome.ALLOW),
+                EnforcementResult(EnforcementOutcome.SANITIZED)
+                if changed
+                else EnforcementResult(EnforcementOutcome.ALLOW),
                 sanitized_items,
             )
         if payload is None or isinstance(payload, bool | int | float):

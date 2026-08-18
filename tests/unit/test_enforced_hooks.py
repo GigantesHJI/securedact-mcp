@@ -12,6 +12,15 @@ import pytest
 from securedact_enforced.adapter import EnforcementOutcome, EnforcementResult, PrivacyEnforcer
 from securedact_enforced.provider_hook import handle_event
 
+CODEX_PLUGIN_ROOT = (
+    Path(__file__).resolve().parents[2] / "integrations" / "codex-enforced" / "securedact-enforced"
+)
+CODEX_PROMPT_WRAPPER = CODEX_PLUGIN_ROOT / "scripts" / "user_prompt_submit.py"
+requires_codex_plugin = pytest.mark.skipif(
+    not CODEX_PROMPT_WRAPPER.is_file(),
+    reason="Codex Enforced plugin is not part of this release.",
+)
+
 
 class RecordingEnforcer:
     def __init__(self, outcomes: dict[str, EnforcementOutcome] | None = None) -> None:
@@ -21,7 +30,9 @@ class RecordingEnforcer:
     def inspect_text(self, text: str) -> EnforcementResult:
         self.seen.append(text)
         outcome = self.outcomes.get(text, EnforcementOutcome.ALLOW)
-        return EnforcementResult(outcome, "[EMAIL_1]" if outcome == EnforcementOutcome.SANITIZED else None)
+        return EnforcementResult(
+            outcome, "[EMAIL_1]" if outcome == EnforcementOutcome.SANITIZED else None
+        )
 
     def inspect_payload(self, payload: object) -> tuple[EnforcementResult, object | None]:
         if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
@@ -37,15 +48,7 @@ def _factory(enforcer: RecordingEnforcer):
 
 
 def _load_codex_prompt_wrapper() -> ModuleType:
-    wrapper_path = (
-        Path(__file__).resolve().parents[2]
-        / "integrations"
-        / "codex-enforced"
-        / "securedact-enforced"
-        / "scripts"
-        / "user_prompt_submit.py"
-    )
-    spec = importlib.util.spec_from_file_location("test_codex_prompt_wrapper", wrapper_path)
+    spec = importlib.util.spec_from_file_location("test_codex_prompt_wrapper", CODEX_PROMPT_WRAPPER)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -122,7 +125,10 @@ def test_review_failure_and_malformed_prompts_fail_closed_without_raw_content() 
         "decision": "block",
         "reason": "SecuRedact requires local human review before this content can be sent.",
     }
-    for event in ({"hook_event_name": "UserPromptSubmit"}, {"unexpected": "synthetic@example.test"}):
+    for event in (
+        {"hook_event_name": "UserPromptSubmit"},
+        {"unexpected": "synthetic@example.test"},
+    ):
         output = handle_event("claude", event, enforcer_factory=_factory(failure))
         assert output is not None
         assert "synthetic@example.test" not in json.dumps(output)
@@ -131,11 +137,18 @@ def test_review_failure_and_malformed_prompts_fail_closed_without_raw_content() 
 
 def test_irrelevant_local_tool_is_untouched_and_outbound_payload_is_rewritten() -> None:
     enforcer = RecordingEnforcer({"synthetic@example.test": EnforcementOutcome.SANITIZED})
-    assert handle_event(
-        "codex",
-        {"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "tool_input": {"text": "x"}},
-        enforcer_factory=_factory(enforcer),
-    ) is None
+    assert (
+        handle_event(
+            "codex",
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "apply_patch",
+                "tool_input": {"text": "x"},
+            },
+            enforcer_factory=_factory(enforcer),
+        )
+        is None
+    )
     assert handle_event(
         "claude",
         {
@@ -193,6 +206,7 @@ def test_adapter_recursively_preserves_non_sensitive_payload_structure() -> None
     assert payload == {"nested": ["safe", {"email": "[EMAIL_1]"}], "count": 1}
 
 
+@requires_codex_plugin
 def test_codex_wrapper_keeps_allow_stdout_empty_and_receipt_prompt_free(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -212,7 +226,11 @@ def test_codex_wrapper_keeps_allow_stdout_empty_and_receipt_prompt_free(
     monkeypatch.setattr(wrapper, "_load_handle_event", lambda: fake_handle_event)
     monkeypatch.setenv("PLUGIN_DATA", str(marker_root))
     monkeypatch.setenv("PLUGIN_ROOT", str(tmp_path / "plugin-root"))
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": prompt})))
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": prompt})),
+    )
     stdout = io.StringIO()
     with pytest.MonkeyPatch.context() as isolated:
         isolated.setattr(sys, "stdout", stdout)
@@ -238,6 +256,7 @@ def test_codex_wrapper_keeps_allow_stdout_empty_and_receipt_prompt_free(
     }
 
 
+@requires_codex_plugin
 def test_codex_wrapper_uses_temp_fallback_and_emits_only_block_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -251,7 +270,11 @@ def test_codex_wrapper_uses_temp_fallback_and_emits_only_block_json(
     monkeypatch.setattr(wrapper, "_load_handle_event", lambda: fake_handle_event)
     monkeypatch.delenv("PLUGIN_DATA", raising=False)
     monkeypatch.setattr(wrapper.tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": "synthetic"})))
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": "synthetic"})),
+    )
     stdout = io.StringIO()
     with pytest.MonkeyPatch.context() as isolated:
         isolated.setattr(sys, "stdout", stdout)
@@ -263,7 +286,9 @@ def test_codex_wrapper_uses_temp_fallback_and_emits_only_block_json(
     }
     receipts = [
         json.loads(line)
-        for line in (tmp_path / "securedact-codex-hook.marker").read_text(encoding="utf-8").splitlines()
+        for line in (tmp_path / "securedact-codex-hook.marker")
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert receipts[-1]["enforcement_outcome"] == "blocked"
     assert receipts[-1]["stdout_emitted"] is True
@@ -271,6 +296,7 @@ def test_codex_wrapper_uses_temp_fallback_and_emits_only_block_json(
     assert receipts[-1]["exit_code"] == 0
 
 
+@requires_codex_plugin
 def test_codex_wrapper_malformed_input_fails_closed_without_persisting_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

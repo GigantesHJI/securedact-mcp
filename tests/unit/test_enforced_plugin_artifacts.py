@@ -3,15 +3,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
+CODEX_PLUGIN_ROOT = ROOT / "integrations" / "codex-enforced" / "securedact-enforced"
 
 
 def _read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.skipif(
+    not (CODEX_PLUGIN_ROOT / ".codex-plugin" / "plugin.json").is_file(),
+    reason="Codex Enforced plugin is not part of this release.",
+)
 def test_codex_plugin_has_discoverable_manifest_and_portable_hooks() -> None:
-    plugin_root = ROOT / "integrations" / "codex-enforced" / "securedact-enforced"
+    plugin_root = CODEX_PLUGIN_ROOT
     manifest = _read_json(plugin_root / ".codex-plugin" / "plugin.json")
     hooks = _read_json(plugin_root / "hooks" / "hooks.json")
 

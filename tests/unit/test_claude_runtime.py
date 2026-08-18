@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import socket
+import sys
 import threading
 import time
 from pathlib import Path
@@ -88,6 +89,7 @@ def test_session_start_launches_without_waiting_for_model_warmup(warmed_runtime)
     assert spawn_count() == 1
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process flags are Windows-only.")
 def test_windows_daemon_launch_is_detached_and_closes_all_host_handles() -> None:
     options = _daemon_popen_kwargs(is_windows=True)
 

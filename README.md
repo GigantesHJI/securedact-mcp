@@ -4,10 +4,13 @@ Securedact MCP is an Apache-2.0 local MCP server and reusable Python privacy
 engine. It detects sensitive text, applies versioned policies, redacts locally,
 and validates residual output before marking sanitized content approved.
 
-> MCP mode does not transparently intercept prompts: the host must invoke the
-> tool and send only `sanitized_text` when `status == "ok"`. A misconfigured or
-> malicious MCP host can bypass that mode. For deterministic provider lifecycle
-> enforcement, see [SecuRedact Enforced](docs/enforced.md).
+> MCP mode does not automatically intercept every prompt. The host must invoke
+> the tool and send only `sanitized_text` when `status == "ok"`; a misconfigured
+> or malicious MCP host can bypass that ordinary MCP workflow. Provider-native
+> enforced hooks are separate integration assets: when a supported provider
+> invokes such a hook at its prompt lifecycle boundary, it can apply the same
+> deterministic decision before normal model processing. See [SecuRedact
+> Enforced](docs/enforced.md).
 
 ## Safe default workflow
 

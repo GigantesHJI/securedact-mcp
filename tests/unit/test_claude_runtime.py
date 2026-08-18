@@ -14,10 +14,11 @@ from securedact_enforced import claude_hook
 from securedact_enforced.adapter import EnforcementOutcome, EnforcementResult
 from securedact_enforced.claude_runtime import (
     _atomic_write_json,
-    _daemon_popen_kwargs,
     _is_healthy,
     _serve,
     _session_digest,
+    _spawn_posix_daemon,
+    _spawn_windows_daemon,
     ensure_runtime,
     inspect_prompt,
     shutdown_runtime,
@@ -90,29 +91,45 @@ def test_session_start_launches_without_waiting_for_model_warmup(warmed_runtime)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows process flags are Windows-only.")
-def test_windows_daemon_launch_is_detached_and_closes_all_host_handles() -> None:
-    options = _daemon_popen_kwargs(is_windows=True)
+def test_windows_daemon_launch_is_detached_and_closes_all_host_handles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
 
-    assert options["stdin"] is claude_runtime.subprocess.DEVNULL
-    assert options["stdout"] is claude_runtime.subprocess.DEVNULL
-    assert options["stderr"] is claude_runtime.subprocess.DEVNULL
-    assert options["close_fds"] is True
-    assert options["creationflags"] == (
+    def record_popen(_command: list[str], **options: object) -> None:
+        captured.update(options)
+
+    monkeypatch.setattr(claude_runtime.subprocess, "Popen", record_popen)
+    _spawn_windows_daemon(["python", "-m", "securedact_enforced.claude_runtime"])
+
+    assert captured["stdin"] is claude_runtime.subprocess.DEVNULL
+    assert captured["stdout"] is claude_runtime.subprocess.DEVNULL
+    assert captured["stderr"] is claude_runtime.subprocess.DEVNULL
+    assert captured["close_fds"] is True
+    assert captured["creationflags"] == (
         claude_runtime.subprocess.DETACHED_PROCESS
         | claude_runtime.subprocess.CREATE_NEW_PROCESS_GROUP
     )
-    assert "start_new_session" not in options
+    assert "start_new_session" not in captured
 
 
-def test_posix_daemon_launch_starts_an_independent_session_and_closes_handles() -> None:
-    options = _daemon_popen_kwargs(is_windows=False)
+def test_posix_daemon_launch_starts_an_independent_session_and_closes_handles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
 
-    assert options["stdin"] is claude_runtime.subprocess.DEVNULL
-    assert options["stdout"] is claude_runtime.subprocess.DEVNULL
-    assert options["stderr"] is claude_runtime.subprocess.DEVNULL
-    assert options["close_fds"] is True
-    assert options["start_new_session"] is True
-    assert "creationflags" not in options
+    def record_popen(_command: list[str], **options: object) -> None:
+        captured.update(options)
+
+    monkeypatch.setattr(claude_runtime.subprocess, "Popen", record_popen)
+    _spawn_posix_daemon(["python", "-m", "securedact_enforced.claude_runtime"])
+
+    assert captured["stdin"] is claude_runtime.subprocess.DEVNULL
+    assert captured["stdout"] is claude_runtime.subprocess.DEVNULL
+    assert captured["stderr"] is claude_runtime.subprocess.DEVNULL
+    assert captured["close_fds"] is True
+    assert captured["start_new_session"] is True
+    assert "creationflags" not in captured
 
 
 def test_warmed_runtime_allows_and_blocks_without_reloading(warmed_runtime) -> None:

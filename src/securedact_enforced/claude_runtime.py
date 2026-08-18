@@ -360,34 +360,33 @@ def _release_start_lock(state_path: Path, descriptor: int | None) -> None:
         pass
 
 
-def _daemon_popen_kwargs(*, is_windows: bool) -> dict[str, object]:
-    """Return process options that cannot retain a Claude hook handle.
+def _spawn_windows_daemon(command: list[str]) -> None:
+    """Start without any Claude handle or console inheritance on Windows."""
 
-    Standard streams are deliberately redirected and ``close_fds`` is enabled
-    on every platform.  This matters particularly on Windows: setting
-    ``close_fds=False`` allows any inheritable host pipe/console handle into
-    the long-lived runtime, even if the three standard streams use DEVNULL.
+    subprocess.Popen(  # noqa: S603 - fixed module invocation with generated state arguments.
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        creationflags=(
+            getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        ),
+    )
 
-    ``DETACHED_PROCESS`` is the Windows mechanism that prevents console
-    inheritance.  It is intentionally not combined with ``CREATE_NO_WINDOW``:
-    Windows documents the latter as ignored with a detached process.  A new
-    process group also prevents the runtime from sharing Claude's console
-    control group.  On POSIX, a new session is the corresponding isolation.
-    """
 
-    options: dict[str, object] = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    if is_windows:
-        options["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-        )
-    else:
-        options["start_new_session"] = True
-    return options
+def _spawn_posix_daemon(command: list[str]) -> None:
+    """Start in a new POSIX session without inherited Claude handles."""
+
+    subprocess.Popen(  # noqa: S603 - fixed module invocation with generated state arguments.
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
 
 
 def _spawn_daemon(state_path: Path, token: bytes, session_digest: str) -> None:
@@ -403,10 +402,10 @@ def _spawn_daemon(state_path: Path, token: bytes, session_digest: str) -> None:
         "--session-digest",
         session_digest,
     ]
-    subprocess.Popen(  # noqa: S603 - command is a fixed module invocation with generated state arguments.
-        command,
-        **_daemon_popen_kwargs(is_windows=os.name == "nt"),
-    )
+    if os.name == "nt":
+        _spawn_windows_daemon(command)
+    else:
+        _spawn_posix_daemon(command)
 
 
 def ensure_runtime(

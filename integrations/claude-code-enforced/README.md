@@ -1,0 +1,12 @@
+# SecuRedact Enforced for Claude Code
+
+The plugin artifact is in `securedact-enforced/`. It contains a Claude Code
+plugin manifest, deterministic hook configuration, and supplemental skill.
+Install the SecuRedact runtime and its local model first; no dependency or model
+is downloaded by the plugin.
+
+For development, run `claude plugin validate --strict securedact-enforced`, then
+install the directory or expose it through a Claude Code marketplace. Ensure
+`python -m securedact_enforced.provider_hook --provider claude` succeeds in the
+same user environment and use `/hooks` to confirm both event registrations. See
+[`docs/enforced.md`](../../docs/enforced.md) for scope and limitations.

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "securedact-enforced",
+  "displayName": "SecuRedact Enforced",
+  "version": "0.1.6",
+  "description": "Local privacy enforcement for Claude Code. Checks prompts before model processing and blocks or requires review when SecuRedact detects protected information.",
+  "author": {
+    "name": "SecuRedact"
+  },
+  "homepage": "https://github.com/GigantesHJI/securedact-mcp",
+  "repository": "https://github.com/GigantesHJI/securedact-mcp",
+  "license": "Apache-2.0",
+  "keywords": ["privacy", "security", "pii", "gdpr", "redaction", "local-processing", "claude-code"]
+}

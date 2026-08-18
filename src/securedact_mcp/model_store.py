@@ -251,11 +251,11 @@ def _validate_model_root(path: Path, *, cwd: Path | None = None) -> None:
         )
 
     working_directory = (cwd or Path.cwd()).resolve()
-    try:
-        path.relative_to(working_directory)
-    except ValueError:
-        pass
-    else:
+    # This boundary is deliberately exact.  A user's application-data directory
+    # is normally a descendant of their home directory, which is also a common
+    # process working directory.  Repository containment is checked separately
+    # below, so rejecting descendants here would reject the managed store too.
+    if path == working_directory:
         raise ModelPathError("Models may not be installed in the current working directory")
 
     if any((ancestor / ".git").exists() for ancestor in (path, *path.parents)):

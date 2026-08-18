@@ -105,3 +105,6 @@ Desktop.ini
 *.toc
 warn-*.txt
 xref-*.html
+.aider*
+.claude-runtime-benchmark/
+.agents/

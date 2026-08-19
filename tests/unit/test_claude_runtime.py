@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+import os
 import socket
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -17,6 +21,7 @@ from securedact_enforced.adapter import EnforcementOutcome, EnforcementResult
 from securedact_enforced.claude_runtime import (
     _atomic_write_json,
     _is_healthy,
+    _pid_is_alive,
     _serve,
     _session_digest,
     _spawn_posix_daemon,
@@ -29,6 +34,59 @@ from securedact_enforced.claude_runtime import (
     start_runtime,
     state_path_for_session,
 )
+
+
+def _call_with_deadline[ResultT](
+    action: Callable[[], ResultT],
+    *,
+    timeout_seconds: float,
+    stage: str,
+    metadata: Callable[[], dict[str, object]],
+) -> ResultT:
+    """Keep a fixture failure from stranding Windows CI in a socket operation."""
+
+    completed = threading.Event()
+    result: list[object] = []
+    errors: list[BaseException] = []
+
+    def invoke() -> None:
+        try:
+            result.append(action())
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            completed.set()
+
+    thread = threading.Thread(target=invoke, daemon=True)
+    thread.start()
+    if not completed.wait(timeout=timeout_seconds):
+        pytest.fail(f"runtime fixture timed out during {stage}: {metadata()}")
+    thread.join(timeout=0.1)
+    if errors:
+        raise errors[0]
+    return cast(ResultT, result[0])
+
+
+def _process_metadata(
+    processes: list[subprocess.Popen[bytes]], state_path: Path
+) -> dict[str, object]:
+    """Return only non-sensitive lifecycle data for a failing test assertion."""
+
+    process = processes[0] if processes else None
+    port: int | None = None
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state_port = state.get("port") if isinstance(state, dict) else None
+        port = state_port if isinstance(state_port, int) else None
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return {
+        "pid": process.pid if process is not None else None,
+        "exit_code": process.poll() if process is not None else None,
+        "state_path": str(state_path),
+        "state_exists": state_path.exists(),
+        "port": port,
+    }
 
 
 class RecordingEnforcer:
@@ -67,8 +125,29 @@ class RecordingEnforcer:
 def process_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Run the lifecycle checks against a separate process, as production does."""
 
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    provider_data = tmp_path / "provider-data"
+    child_temp = tmp_path / "child-temp"
+    child_local_app_data = tmp_path / "local-app-data"
+    for directory in (provider_data, child_temp, child_local_app_data):
+        directory.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(provider_data))
+    monkeypatch.setenv("LOCALAPPDATA", str(child_local_app_data))
+    monkeypatch.setenv("TEMP", str(child_temp))
+    monkeypatch.setenv("TMP", str(child_temp))
+
     helper = Path(__file__).with_name("_claude_runtime_fixture_daemon.py")
+    repository = Path(__file__).resolve().parents[2]
+    child_environment = os.environ.copy()
+    child_environment.update(
+        {
+            "CLAUDE_PLUGIN_DATA": str(provider_data),
+            "LOCALAPPDATA": str(child_local_app_data),
+            "TEMP": str(child_temp),
+            "TMP": str(child_temp),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": str(repository / "src"),
+        }
+    )
     processes: list[subprocess.Popen[bytes]] = []
     spawn_count = 0
 
@@ -88,17 +167,44 @@ def process_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 close_fds=True,
+                creationflags=(
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    if sys.platform == "win32"
+                    else 0
+                ),
+                cwd=repository,
+                env=child_environment,
             )
         )
 
-    yield spawn, lambda: spawn_count, processes
+    yield spawn, lambda: spawn_count, processes, provider_data, child_temp
 
     for process in processes:
+        if process.poll() is not None:
+            continue
+        process.terminate()
         try:
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            process.terminate()
+            process.kill()
             process.wait(timeout=2)
+
+
+def _health(
+    state_path: Path,
+    session_id: str,
+    processes: list[subprocess.Popen[bytes]],
+) -> bool:
+    return _call_with_deadline(
+        lambda: _is_healthy(
+            state_path,
+            _session_digest(session_id) or "",
+            timeout_seconds=0.5,
+        ),
+        timeout_seconds=2,
+        stage="health",
+        metadata=lambda: _process_metadata(processes, state_path),
+    )
 
 
 @pytest.fixture
@@ -128,23 +234,44 @@ def warmed_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_session_start_warms_once_reuses_and_reports_health(process_runtime) -> None:
-    spawn, spawn_count, processes = process_runtime
-
-    first = ensure_runtime("session-a", startup_timeout_seconds=2, spawn_daemon=spawn)
-    state_path = state_path_for_session("session-a")
-
-    assert first.ready is True
-    assert first.started is True
+    spawn, spawn_count, processes, provider_data, child_temp = process_runtime
+    session_id = "session-a"
+    state_path = state_path_for_session(session_id)
     assert state_path is not None
-    assert _is_healthy(state_path, _session_digest("session-a") or "") is True
 
-    second = ensure_runtime("session-a", startup_timeout_seconds=2, spawn_daemon=spawn)
+    def metadata() -> dict[str, object]:
+        return _process_metadata(processes, state_path)
 
-    assert second.ready is True
+    first = _call_with_deadline(
+        lambda: ensure_runtime(session_id, startup_timeout_seconds=2, spawn_daemon=spawn),
+        timeout_seconds=5,
+        stage="start",
+        metadata=metadata,
+    )
+
+    assert first.ready is True, metadata()
+    assert first.started is True
+    assert state_path.parent == provider_data / "runtime"
+    assert child_temp.is_dir()
+    assert _health(state_path, session_id, processes) is True
+
+    second = _call_with_deadline(
+        lambda: ensure_runtime(session_id, startup_timeout_seconds=2, spawn_daemon=spawn),
+        timeout_seconds=5,
+        stage="reuse",
+        metadata=metadata,
+    )
+
+    assert second.ready is True, metadata()
     assert second.started is False
     assert spawn_count() == 1
-    assert _is_healthy(state_path, _session_digest("session-a") or "") is True
-    diagnostics = runtime_diagnostics("session-a", timeout_seconds=1)
+    assert _health(state_path, session_id, processes) is True
+    diagnostics = _call_with_deadline(
+        lambda: runtime_diagnostics(session_id, timeout_seconds=0.5),
+        timeout_seconds=2,
+        stage="diagnostics",
+        metadata=metadata,
+    )
     assert diagnostics["runtime_scope"] == "claude"
     assert diagnostics["ready_state_flag"] is True
     assert diagnostics["health_request_success"] is True
@@ -153,8 +280,16 @@ def test_session_start_warms_once_reuses_and_reports_health(process_runtime) -> 
     assert diagnostics["daemon_sees_same_session_reference"] is True
     assert diagnostics["failure_stage"] == "ready"
     assert "token" not in str(diagnostics).casefold()
-    assert _is_healthy(state_path, _session_digest("session-a") or "") is True
-    assert shutdown_runtime("session-a") is True
+    assert _health(state_path, session_id, processes) is True
+    assert (
+        _call_with_deadline(
+            lambda: shutdown_runtime(session_id),
+            timeout_seconds=6,
+            stage="shutdown",
+            metadata=metadata,
+        )
+        is True
+    )
     assert not state_path.exists()
     assert len(processes) == 1
     processes[0].wait(timeout=2)
@@ -162,28 +297,47 @@ def test_session_start_warms_once_reuses_and_reports_health(process_runtime) -> 
 
 
 def test_runtime_accepts_sequential_authenticated_health_requests(process_runtime) -> None:
-    spawn, spawn_count, processes = process_runtime
+    spawn, spawn_count, processes, provider_data, _child_temp = process_runtime
     session_id = "sequential-health-session"
     state_path = state_path_for_session(session_id)
 
     assert state_path is not None
-    assert ensure_runtime(session_id, startup_timeout_seconds=2, spawn_daemon=spawn).ready
-    assert all(
-        _is_healthy(
-            state_path,
-            _session_digest(session_id) or "",
-            timeout_seconds=0.5,
-        )
-        for _ in range(8)
+
+    def metadata() -> dict[str, object]:
+        return _process_metadata(processes, state_path)
+
+    assert (
+        _call_with_deadline(
+            lambda: ensure_runtime(session_id, startup_timeout_seconds=2, spawn_daemon=spawn),
+            timeout_seconds=5,
+            stage="sequential-health-start",
+            metadata=metadata,
+        ).ready
+        is True
     )
+    assert state_path.parent == provider_data / "runtime"
+    for _ in range(8):
+        assert _health(state_path, session_id, processes) is True
     assert spawn_count() == 1
-    assert runtime_diagnostics(session_id, timeout_seconds=0.5)["ready_state_flag"] is True
-    assert _is_healthy(
-        state_path,
-        _session_digest(session_id) or "",
-        timeout_seconds=0.5,
+    assert (
+        _call_with_deadline(
+            lambda: runtime_diagnostics(session_id, timeout_seconds=0.5),
+            timeout_seconds=2,
+            stage="sequential-health-diagnostics",
+            metadata=metadata,
+        )["ready_state_flag"]
+        is True
     )
-    assert shutdown_runtime(session_id) is True
+    assert _health(state_path, session_id, processes) is True
+    assert (
+        _call_with_deadline(
+            lambda: shutdown_runtime(session_id),
+            timeout_seconds=6,
+            stage="sequential-health-shutdown",
+            metadata=metadata,
+        )
+        is True
+    )
     processes[0].wait(timeout=2)
     assert processes[0].returncode == 0
 
@@ -254,6 +408,29 @@ def test_windows_daemon_launch_is_detached_and_closes_all_host_handles(
         | claude_runtime.subprocess.CREATE_NEW_PROCESS_GROUP
     )
     assert "start_new_session" not in captured
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows PID probing is Windows-only.")
+def test_windows_pid_probe_does_not_signal_live_runtime() -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(10)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+    try:
+        assert _pid_is_alive(process.pid) is True
+        assert process.poll() is None
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
 
 
 def test_posix_daemon_launch_starts_an_independent_session_and_closes_handles(

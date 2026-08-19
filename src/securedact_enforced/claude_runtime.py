@@ -9,6 +9,7 @@ or forge requests to the daemon.
 from __future__ import annotations
 
 import base64
+import ctypes
 import hashlib
 import hmac
 import json
@@ -22,6 +23,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
+from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -636,11 +638,39 @@ def _request(
 def _pid_is_alive(pid: int) -> bool:
     """Return liveness only; no process command line or other private data is read."""
 
+    if sys.platform == "win32":
+        return _windows_pid_is_alive(pid)
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     return True
+
+
+def _windows_pid_is_alive(pid: int) -> bool:
+    """Query Windows process state without emitting CTRL_C_EVENT (signal zero)."""
+
+    if pid <= 0:
+        return False
+    process_query_limited_information = 0x1000
+    still_active = 259
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return False
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def runtime_diagnostics(

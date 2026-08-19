@@ -253,6 +253,6 @@ This mode has reduced detection coverage and is not recommended for production.
 
 ## Next Steps
 
-- [Models](models.md) - Detailed model configuration
+- [Model Installation](model-installation.md) - Install and verify contextual models
 - [Architecture](architecture.md) - How configuration affects the system
-- [Use Cases](use-cases.md) - Configuration examples for different scenarios
+- [Privacy Model](privacy-model.md) - How policies protect provider-bound content

@@ -1,15 +1,15 @@
-# Replace the placeholder below with the verified maintainer team before release.
-* @SECUREDACT-MAINTAINER
+# Verified repository owner and release maintainer.
+* @GigantesHJI
 
-/.github/ @SECUREDACT-MAINTAINER
-/pyproject.toml @SECUREDACT-MAINTAINER
-/uv.lock @SECUREDACT-MAINTAINER
-/SECURITY.md @SECUREDACT-MAINTAINER
-/docs/releasing.md @SECUREDACT-MAINTAINER
-/src/securedact_core/policies.py @SECUREDACT-MAINTAINER
-/src/securedact_core/policy_loader.py @SECUREDACT-MAINTAINER
-/src/securedact_core/restoration.py @SECUREDACT-MAINTAINER
-/src/securedact_core/merge.py @SECUREDACT-MAINTAINER
-/src/securedact_core/engine.py @SECUREDACT-MAINTAINER
-/src/securedact_mcp/model_registry.py @SECUREDACT-MAINTAINER
-/scripts/ @SECUREDACT-MAINTAINER
+/.github/ @GigantesHJI
+/pyproject.toml @GigantesHJI
+/uv.lock @GigantesHJI
+/SECURITY.md @GigantesHJI
+/docs/releasing.md @GigantesHJI
+/src/securedact_core/policies.py @GigantesHJI
+/src/securedact_core/policy_loader.py @GigantesHJI
+/src/securedact_core/restoration.py @GigantesHJI
+/src/securedact_core/merge.py @GigantesHJI
+/src/securedact_core/engine.py @GigantesHJI
+/src/securedact_mcp/model_registry.py @GigantesHJI
+/scripts/ @GigantesHJI

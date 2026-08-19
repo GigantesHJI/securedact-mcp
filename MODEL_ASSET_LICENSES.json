@@ -1,0 +1,33 @@
+{
+  "review_version": 1,
+  "release": "0.1.0",
+  "review_date": "2026-08-19",
+  "distribution_decision": {
+    "maintainer_accepted_for_software_release": true,
+    "redistributed_by_securedact": false,
+    "retrieval": "explicit_user_triggered_upstream_download"
+  },
+  "assets": [
+    {
+      "repository": "FacebookAI/xlm-roberta-large",
+      "asset_type": "runtime_component",
+      "license_identifier": "MIT",
+      "license_status": "confirmed_from_upstream_metadata",
+      "redistributed_by_securedact": false
+    },
+    {
+      "repository": "flair/ner-english-large",
+      "asset_type": "checkpoint_weights",
+      "license_identifier": null,
+      "license_status": "reviewed_upstream_explicit_checkpoint_license_identifier_unavailable",
+      "redistributed_by_securedact": false
+    },
+    {
+      "repository": "flair/ner-dutch-large",
+      "asset_type": "checkpoint_weights",
+      "license_identifier": null,
+      "license_status": "reviewed_upstream_explicit_checkpoint_license_identifier_unavailable",
+      "redistributed_by_securedact": false
+    }
+  ]
+}

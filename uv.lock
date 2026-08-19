@@ -2238,6 +2238,7 @@ ml = [
     { name = "flair" },
     { name = "huggingface-hub" },
     { name = "torch" },
+    { name = "transformers" },
 ]
 security = [
     { name = "cyclonedx-bom" },
@@ -2269,6 +2270,7 @@ requires-dist = [
     { name = "setuptools", marker = "extra == 'dev'", specifier = ">=75" },
     { name = "sigstore", marker = "extra == 'security'", specifier = ">=3,<5" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.5,<3" },
+    { name = "transformers", marker = "extra == 'ml'", specifier = ">=4.41,<5" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=6.1,<7" },
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=6,<8" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12,<7" },

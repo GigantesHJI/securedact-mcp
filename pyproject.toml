@@ -27,6 +27,13 @@ classifiers = [
   "Topic :: Security",
 ]
 
+[project.urls]
+Homepage = "https://github.com/GigantesHJI/securedact-mcp"
+Repository = "https://github.com/GigantesHJI/securedact-mcp"
+Issues = "https://github.com/GigantesHJI/securedact-mcp/issues"
+Changelog = "https://github.com/GigantesHJI/securedact-mcp/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/GigantesHJI/securedact-mcp/tree/main/docs"
+
 [project.optional-dependencies]
 ml = [
   "flair>=0.15,<1",

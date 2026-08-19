@@ -90,12 +90,20 @@ See [MCP tools](docs/mcp-tools.md), [response privacy](docs/privacy-model.md), a
 
 Python `>=3.12,<3.13` is supported.
 
+The first public PyPI release is not yet available. Until publication is
+confirmed, install from a reviewed source checkout:
+
 ```powershell
-python -m pip install "securedact-mcp[ml]"
+git clone https://github.com/GigantesHJI/securedact-mcp.git
+cd securedact-mcp
+python -m pip install ".[ml]"
 securedact-mcp install
 securedact-mcp models verify
 securedact-mcp
 ```
+
+After the package is published and independently verified on PyPI, the primary
+installation command will be `python -m pip install "securedact-mcp[ml]"`.
 
 The last command starts a local `stdio` server. Standard output is reserved for
 MCP protocol messages. Model installation is explicit and consent-based; no
@@ -203,7 +211,6 @@ vulnerability details or real data in a public issue.
 ## License
 
 Original repository source and documentation are licensed under the
-[Apache License 2.0](LICENSE.md). The legal copyright-holder name remains a
-clearly marked pre-release placeholder in [NOTICE](NOTICE); maintainers must
-resolve it before publication. Third-party dependencies and model weights retain
-their own licenses.
+[Apache License 2.0](LICENSE.md). Copyright attribution is recorded in
+[NOTICE](NOTICE). Third-party dependencies and model weights retain their own
+licenses.

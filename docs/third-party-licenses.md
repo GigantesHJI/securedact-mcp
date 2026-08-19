@@ -20,5 +20,13 @@ an allowlisted upstream repository after user consent. Users and distributors
 must independently review and comply with the model repository's license and
 terms. Citation metadata is not a substitute for license permission.
 
-See [Model installation](model-installation.md) for the pinned sources and the
-known upstream model-license uncertainty.
+For the 0.1.0 review, upstream metadata confirms MIT for
+`FacebookAI/xlm-roberta-large`. The current upstream metadata for
+`flair/ner-english-large` and `flair/ner-dutch-large` does not state a separate
+explicit checkpoint-weight license identifier; none is inferred from the Flair
+framework license. The maintainer reviewed and accepted this status for a
+software-only release in which Securedact does not redistribute these assets.
+
+See [Model installation](model-installation.md) for the pinned sources and
+[`MODEL_ASSET_LICENSES.json`](../MODEL_ASSET_LICENSES.json) for the reviewed
+machine-readable release record.

@@ -3,9 +3,11 @@
 All notable changes to this repository will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-No versioned server release has been published yet.
+Version 0.1.0 is the first planned public server release.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-08-19
 
 ### Added
 

@@ -34,6 +34,11 @@ def test_official_repositories_and_pinned_revisions_are_exact() -> None:
     )
     assert ENGLISH_MODEL.runtime_component_ids == (XLM_ROBERTA_LARGE_RUNTIME.id,)
     assert DUTCH_MODEL.runtime_component_ids == (XLM_ROBERTA_LARGE_RUNTIME.id,)
+    assert ENGLISH_MODEL.license_identifier is None
+    assert DUTCH_MODEL.license_identifier is None
+    assert "does not state an explicit checkpoint-weight license identifier" in (
+        ENGLISH_MODEL.license_note or ""
+    )
 
 
 def test_transformer_runtime_dependency_is_exact_and_immutable() -> None:
@@ -41,6 +46,8 @@ def test_transformer_runtime_dependency_is_exact_and_immutable() -> None:
     assert component.upstream_repo == "FacebookAI/xlm-roberta-large"
     assert component.upstream_revision == "c23d21b0620b635a76227c604d44e43a9f0ee389"
     assert component.cache_repository_name == "models--xlm-roberta-large"
+    assert component.license_identifier == "MIT"
+    assert "confirmed from upstream metadata" in (component.license_note or "").lower()
     assert component.required_files == (
         "config.json",
         "sentencepiece.bpe.model",

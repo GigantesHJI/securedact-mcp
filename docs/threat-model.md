@@ -187,7 +187,9 @@ Supported checkpoints use PyTorch serialization. Loading a compromised
 checkpoint is a potential code-execution boundary. Official provenance and an
 exact pinned digest reduce substitution risk but do not establish that upstream
 content is harmless. The upstream model cards currently omit a clear separate
-model-weight license identifier; citations are not license grants.
+model-weight license identifier; citations are not license grants. This status
+was explicitly reviewed and accepted for the 0.1.0 software-only release because
+Securedact does not redistribute the checkpoints.
 
 Release artifacts are signed keylessly and receive GitHub build provenance.
 Action and lock updates follow the review process in `docs/supply-chain.md`.

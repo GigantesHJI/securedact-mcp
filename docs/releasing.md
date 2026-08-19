@@ -37,12 +37,18 @@ baseline; never substitute mocked-Flair results for a real-model claim.
 1. Merge the approved release commit under branch protection.
 2. Create an annotated tag: `git tag -a vX.Y.Z -m "Securedact X.Y.Z"`.
 3. Push only that tag and monitor the tag-only release workflow.
-4. Confirm all attached hashes match the build artifact, Sigstore verification
+4. Confirm the protected `pypi` environment approved the expected repository,
+   tag, and workflow, and that PyPI Trusted Publishing used GitHub OIDC without
+   an API token or stored PyPI credential.
+5. Confirm all attached hashes match the build artifact, Sigstore verification
    succeeds, the GitHub attestation identifies the expected repository/workflow,
-   and the SBOM contains no checkpoint.
-5. Publish the completed release notes and update the compatibility matrix only
+   the PyPI files match the validated distributions, and the SBOM contains no
+   checkpoint.
+6. Publish the completed release notes and update the compatibility matrix only
    for hosts actually tested.
-6. Follow the post-release checks in [Rollback](rollback.md).
+7. Install the exact released version from public PyPI in a clean Python 3.12
+   environment and repeat the CLI and MCP protocol smoke tests.
+8. Follow the post-release checks in [Rollback](rollback.md).
 
 The workflow deliberately rejects lightweight tags, mismatched versions,
 missing dated changelog entries, dirty inputs, gate failures, and prohibited

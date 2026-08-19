@@ -136,3 +136,15 @@ actions:
     nested_by: actions/attest-build-provenance
     purpose: Nested implementation for GitHub attestation publication.
     security_notes: Official public repository; exact nested pin and tag verified.
+  - id: pypa-gh-action-pypi-publish-v1.14.2
+    owner: pypa
+    repository: pypa/gh-action-pypi-publish
+    sha: dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+    release: v1.14.2
+    url: https://github.com/pypa/gh-action-pypi-publish/tree/dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+    first_party: false
+    date_verified: "2026-08-19"
+    security_review_status: reviewed
+    workflows: [release.yml]
+    purpose: Publish prevalidated distributions through PyPI Trusted Publishing.
+    security_notes: Official PyPA public repository; Docker action; signed release tag and owner verified.

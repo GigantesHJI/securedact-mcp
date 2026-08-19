@@ -15,11 +15,9 @@ credential exposure, or accidental inclusion of real data.
 
 Report privately to:
 
-`security@securedact.com`
+`info@securedact.com`
 
-This is an interim role address. The repository owner must confirm that it is
-actively monitored before public release. Do not replace it with a personal
-address.
+This is the actively monitored project security contact for this release.
 
 Include:
 
@@ -170,11 +168,14 @@ than skipping contextual analysis.
 - Do not commit or publish model checkpoints, logs, mappings, databases, safe
   copies, environment files, credential exports, or user data.
 
-Securedact does not redistribute the supported model weights. The upstream model
-cards currently provide citations but no clear separate model-weight license
-identifier. A citation is not license permission; maintainers must review terms
-before release and users must review the displayed upstream notice before
-download.
+Securedact does not redistribute the supported model weights. The maintainer
+completed the 0.1.0 model-asset license review: `FacebookAI/xlm-roberta-large`
+identifies its runtime assets as MIT licensed, while the current
+`flair/ner-english-large` and `flair/ner-dutch-large` upstream metadata does not
+state a separate explicit checkpoint-weight license identifier. The latter is
+not inferred from the Flair framework license. These third-party assets remain
+separate, explicit upstream downloads subject to their upstream terms. See
+`MODEL_ASSET_LICENSES.json` for the reviewed release record.
 
 ## Model storage and rollback
 

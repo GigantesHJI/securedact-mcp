@@ -38,21 +38,26 @@ Required files are pinned individually:
 | `tokenizer.json` | 9,096,718 | `a898ea75433890f6610f4e470b8ebeb0c21dce5c8dd61f892eb09eb5919d2e2c` |
 | `tokenizer_config.json` | 25 | `994f46754c5bf4014f1aa92d34b1374319c3a6b3f702105cd5b742beaecd18ce` |
 
-The official repository currently identifies this component as MIT licensed.
-That metadata applies to the transformer repository; it does not resolve the
-separate licensing uncertainty for the Flair checkpoint weights. Citation and
-license permission remain distinct questions.
+The official repository identifies this component as MIT licensed. That status
+was confirmed from upstream metadata for the 0.1.0 review. It applies to the
+transformer repository; it does not establish a license for the separate Flair
+checkpoint weights. Citation and license permission remain distinct questions.
 
 The upstream model cards cite:
 
 > Schweter, Stefan and Alan Akbik. FLERT: Document-Level Features for Named
 > Entity Recognition. arXiv:2011.06993, 2020.
 
-A citation is not a license grant. Neither upstream repository currently exposes
-a clear, separate model-weight license identifier in its model-card metadata.
-Securedact therefore warns before download and obtains the files directly from
-the official repository without mirroring or redistributing them. Maintainers
-must recheck upstream terms before every release.
+A citation is not a license grant. The 0.1.0 maintainer review found that the
+current `flair/ner-english-large` and `flair/ner-dutch-large` model-card and
+repository metadata does not state a clear, separate explicit checkpoint-weight
+license identifier. Securedact does not infer one from the MIT-licensed Flair
+software framework. The maintainer accepted this recorded status for the 0.1.0
+software release because the checkpoints remain explicit, separate downloads
+from their official upstream repositories and are never mirrored or
+redistributed by Securedact. Users remain responsible for upstream terms, and
+maintainers must recheck them before every release. The machine-readable review
+record is in [`MODEL_ASSET_LICENSES.json`](../MODEL_ASSET_LICENSES.json).
 
 ## Guided setup
 

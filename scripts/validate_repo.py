@@ -33,6 +33,7 @@ REQUIRED_FILES = {
     "CONTRIBUTING.md",
     "LICENSE.md",
     "MANIFEST.in",
+    "MODEL_ASSET_LICENSES.json",
     "NOTICE",
     "README.md",
     "SECURITY.md",
@@ -202,7 +203,10 @@ def tracked_candidates(root: Path) -> list[Path]:
         for path in root.rglob("*")
         if path.is_file()
         and path.name not in excluded_local_files
-        and not any(part in excluded_directories for part in path.relative_to(root).parts)
+        and not any(
+            part in excluded_directories or part == ".agents" or part.startswith(".aider")
+            for part in path.relative_to(root).parts
+        )
     )
 
 

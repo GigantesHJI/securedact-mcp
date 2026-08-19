@@ -13,10 +13,15 @@ Face CLI, Git, `curl`, `wget`, or a remote PowerShell script.
 
 ## Windows quick start
 
+The first public PyPI release is not yet available. Until publication is
+confirmed, use a reviewed source checkout:
+
 ```powershell
+git clone https://github.com/GigantesHJI/securedact-mcp.git
+cd securedact-mcp
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install "securedact-mcp[ml]"
+python -m pip install ".[ml]"
 
 securedact-mcp install
 securedact-mcp models verify
@@ -58,13 +63,18 @@ administrator, execute remote scripts, or install Git/Hugging Face tools.
 ## Linux and macOS
 
 ```bash
+git clone https://github.com/GigantesHJI/securedact-mcp.git
+cd securedact-mcp
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install "securedact-mcp[ml]"
+python -m pip install ".[ml]"
 securedact-mcp install
 securedact-mcp models verify
 securedact-mcp
 ```
+
+After publication is independently verified, the source-install line can be
+replaced with `python -m pip install "securedact-mcp[ml]"`.
 
 ## Model choice and consent
 

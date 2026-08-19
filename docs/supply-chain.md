@@ -17,13 +17,19 @@ commit ownership/diff, permissions, release notes, and workflow behavior before
 accepting a new SHA. Actions receive job-scoped least privilege; untrusted pull
 requests never receive publish permissions.
 
-Essential CI uses only official checkout and Python-setup actions. Security scans, CodeQL, scheduled
-benchmarks, and tag-only signing/provenance are isolated. See [CI troubleshooting](ci-troubleshooting.md)
-for pre-step action-resolution failures and safe reruns.
+Essential CI uses only official checkout and Python-setup actions. Security
+scans, CodeQL, scheduled benchmarks, tag-only signing/provenance, and PyPI
+publication are isolated. The minimal PyPI job receives only `contents: read`
+and `id-token: write`, downloads the already validated artifact, and
+authenticates through the protected `pypi` environment and PyPI Trusted
+Publishing. It has no long-lived PyPI credential and runs no repository build
+code. See [CI troubleshooting](ci-troubleshooting.md) for pre-step
+action-resolution failures and safe reruns.
 
 ## Artifacts, signing, and provenance
 
-The tag workflow builds once and transfers exact bytes to the publish job.
+The tag workflow builds once and transfers exact bytes to the signing and PyPI
+publish jobs.
 Archives are inspected for forbidden content and clean-installed before release.
 CycloneDX SBOMs and SHA-256 checksums accompany distributions. Sigstore keyless
 signing uses GitHub OIDC, and GitHub artifact attestation records build
@@ -36,8 +42,9 @@ Model downloads are separate, explicit, and consent-gated. Only registry-
 allowlisted official repositories and immutable revisions are accepted. Exact
 component sizes/hashes, local manifests, offline load tests, and atomic
 activation protect runtime selection. Model IDs, revisions, hashes, upstream
-terms, and unresolved weight-license questions are reviewed independently from
-Python package licensing. Checkpoints never enter package artifacts or CI.
+terms, and explicit checkpoint-license availability are reviewed independently
+from Python package licensing. The 0.1.0 conclusions are recorded in
+`MODEL_ASSET_LICENSES.json`. Checkpoints never enter package artifacts or CI.
 
 ## Secret and key rotation
 

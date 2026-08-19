@@ -3,6 +3,7 @@ include CODE_OF_CONDUCT.md
 include CONTRIBUTING.md
 include LICENSE.md
 include NOTICE
+include MODEL_ASSET_LICENSES.json
 include README.md
 include SECURITY.md
 include requirements-dev.txt

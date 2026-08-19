@@ -8,11 +8,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.validate_repo import validate_repository  # noqa: E402
+from scripts.validate_repo import tracked_candidates, validate_repository  # noqa: E402
 
 
 def test_repository_is_valid() -> None:
     assert validate_repository(ROOT) == []
+
+
+def test_repository_scan_does_not_read_ignored_agent_state(tmp_path: Path) -> None:
+    (tmp_path / ".aider.chat.history.md").write_text("private local history", encoding="utf-8")
+    cache = tmp_path / ".aider.tags.cache.v4"
+    cache.mkdir()
+    (cache / "cache.db").write_bytes(b"local cache")
+    agents = tmp_path / ".agents"
+    agents.mkdir()
+    (agents / "state.md").write_text("local state", encoding="utf-8")
+
+    assert tracked_candidates(tmp_path) == []
 
 
 def test_package_metadata_and_console_entry_point_match_server() -> None:
@@ -22,6 +34,7 @@ def test_package_metadata_and_console_entry_point_match_server() -> None:
     assert (ROOT / "src" / "securedact_mcp" / "server.py").exists()
     assert pyproject["project"]["name"] == "securedact-mcp"
     assert pyproject["project"]["scripts"]["securedact-mcp"] == "securedact_mcp.cli:main"
+    assert (ROOT / "MODEL_ASSET_LICENSES.json").is_file()
 
 
 def test_client_json_examples_are_valid_and_generic() -> None:

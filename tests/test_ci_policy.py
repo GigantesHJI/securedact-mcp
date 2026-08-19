@@ -21,6 +21,15 @@ def test_workflow_yaml_inventory_permissions_timeouts_and_fork_safety() -> None:
     assert "secrets." not in essential
     assert "pull_request:" not in release
     assert "cancel-in-progress: false" in release
+    assert "name: pypi" in release
+    assert "url: https://pypi.org/p/securedact-mcp" in release
+    assert "id-token: write" in release
+    assert "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33" in release
+    assert "password:" not in release.lower()
+    assert "pypi_api_token" not in release.lower()
+    assert "skip-existing:" not in release.lower()
+    assert "twine check dist/*.whl dist/*.tar.gz" in release
+    assert "name: securedact-mcp-distributions" in release
 
 
 def test_mutable_action_reference_is_rejected(tmp_path: Path) -> None:

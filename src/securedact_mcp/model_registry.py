@@ -14,9 +14,10 @@ FLERT_CITATION = (
     "Entity Recognition. arXiv:2011.06993, 2020."
 )
 UPSTREAM_LICENSE_NOTE = (
-    "The upstream repository does not clearly state separate model-weight "
-    "redistribution terms. Securedact downloads this model directly from its "
-    "official upstream repository and does not redistribute it."
+    "The current upstream model card/repository metadata does not state an explicit "
+    "checkpoint-weight license identifier. This status was reviewed for Securedact "
+    "0.1.0; Securedact downloads the checkpoint directly from its official upstream "
+    "repository and does not redistribute it."
 )
 
 
@@ -92,8 +93,9 @@ XLM_ROBERTA_LARGE_RUNTIME = SupportedRuntimeComponent(
     approximate_size_bytes=14_166_410,
     license_identifier="MIT",
     license_note=(
-        "This runtime component is downloaded directly from its official upstream "
-        "repository and is not redistributed by Securedact."
+        "MIT confirmed from upstream metadata. This runtime component is downloaded "
+        "directly from its official upstream repository and is not redistributed by "
+        "Securedact."
     ),
 )
 

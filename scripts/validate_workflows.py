@@ -30,6 +30,7 @@ APPROVED_ACTION_REPOSITORIES = {
     "gitleaks/gitleaks-action",
     "sigstore/gh-action-sigstore-python",
     "softprops/action-gh-release",
+    "pypa/gh-action-pypi-publish",
 }
 
 
@@ -149,7 +150,16 @@ def validate_workflows(root: Path) -> list[str]:
                 errors.append(f"{path.name}/{job_name}: timeout-minutes is required")
             runner = job.get("runs-on")
             if isinstance(runner, str):
-                if runner not in ALLOWED_RUNNERS and "matrix.os" not in runner:
+                trusted_publish_runner = (
+                    path.name == "release.yml"
+                    and job_name == "publish-pypi"
+                    and runner == "ubuntu-latest"
+                )
+                if (
+                    runner not in ALLOWED_RUNNERS
+                    and "matrix.os" not in runner
+                    and not trusted_publish_runner
+                ):
                     errors.append(f"{path.name}/{job_name}: unsupported runner {runner}")
             elif runner != ["self-hosted", "securedact-models"]:
                 errors.append(f"{path.name}/{job_name}: unsupported runner labels")
@@ -206,6 +216,65 @@ def validate_workflows(root: Path) -> list[str]:
                 )
             if "release_metadata.py validate" not in path.read_text(encoding="utf-8"):
                 errors.append("release.yml: manual runs must retain annotated-tag validation")
+            publish = jobs.get("publish-pypi")
+            if not isinstance(publish, dict):
+                errors.append("release.yml: publish-pypi job is required")
+            else:
+                environment = publish.get("environment")
+                if environment != {
+                    "name": "pypi",
+                    "url": "https://pypi.org/p/securedact-mcp",
+                }:
+                    errors.append("release.yml/publish-pypi: exact PyPI environment is required")
+                if publish.get("permissions") != {"contents": "read", "id-token": "write"}:
+                    errors.append(
+                        "release.yml/publish-pypi: permissions must be contents read and OIDC write"
+                    )
+                publish_steps = publish.get("steps")
+                if isinstance(publish_steps, list):
+                    external_actions = [
+                        str(step["uses"]).split("@", 1)[0]
+                        for step in publish_steps
+                        if isinstance(step, dict) and "uses" in step
+                    ]
+                    if external_actions != [
+                        "actions/download-artifact",
+                        "pypa/gh-action-pypi-publish",
+                    ]:
+                        errors.append(
+                            "release.yml/publish-pypi: only download and trusted publish actions are allowed"
+                        )
+                    action_steps = [
+                        step for step in publish_steps if isinstance(step, dict) and "uses" in step
+                    ]
+                    if len(action_steps) == 2:
+                        download_inputs = action_steps[0].get("with")
+                        publish_inputs = action_steps[1].get("with")
+                        if (
+                            not isinstance(download_inputs, dict)
+                            or download_inputs.get("name") != "securedact-mcp-distributions"
+                        ):
+                            errors.append(
+                                "release.yml/publish-pypi: only the distributions artifact may be downloaded"
+                            )
+                        if publish_inputs != {"packages-dir": "dist/"}:
+                            errors.append(
+                                "release.yml/publish-pypi: trusted publisher must receive only dist/"
+                            )
+                    if any(isinstance(step, dict) and "run" in step for step in publish_steps[1:]):
+                        errors.append(
+                            "release.yml/publish-pypi: project commands are forbidden after the sentinel"
+                        )
+                release_source = path.read_text(encoding="utf-8").lower()
+                forbidden_publish_inputs = (
+                    "password:",
+                    "username:",
+                    "repository-url:",
+                    "skip-existing:",
+                    "pypi_api_token",
+                )
+                if any(value in release_source for value in forbidden_publish_inputs):
+                    errors.append("release.yml: credential or unsafe PyPI input is forbidden")
         if isinstance(triggers, dict) and "pull_request" in triggers:
             source = path.read_text(encoding="utf-8")
             if "secrets." in source or "contents: write" in source or "id-token: write" in source:

@@ -13,23 +13,18 @@ Face CLI, Git, `curl`, `wget`, or a remote PowerShell script.
 
 ## Windows quick start
 
-The first public PyPI release is not yet available. Until publication is
-confirmed, use a reviewed source checkout:
+Install from PyPI and run the unified guided setup:
 
 ```powershell
-git clone https://github.com/GigantesHJI/securedact-mcp.git
-cd securedact-mcp
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install ".[ml]"
-
-securedact-mcp install
-securedact-mcp models verify
-securedact-mcp
+py -3.12 -m pip install "securedact-mcp[ml]"
+securedact-mcp setup
 ```
 
-The last command starts the local `stdio` MCP server and can appear idle while it
-waits for Codex or another MCP host. It never downloads models during startup.
+`setup` reports the installed package, Python and ML dependencies; offers the
+existing contextual-model setup and upstream acceptance flow; runs the existing
+offline model verifier; detects Claude Code and Gemini CLI; and offers their
+official plugin or extension installation. It does not call either provider's
+model API.
 
 For development from this repository:
 
@@ -37,7 +32,7 @@ For development from this repository:
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[ml,dev]"
-securedact-mcp install
+securedact-mcp setup
 ```
 
 The optional one-flow Windows bootstrap performs these local steps and then
@@ -63,22 +58,39 @@ administrator, execute remote scripts, or install Git/Hugging Face tools.
 ## Linux and macOS
 
 ```bash
-git clone https://github.com/GigantesHJI/securedact-mcp.git
-cd securedact-mcp
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install ".[ml]"
-securedact-mcp install
-securedact-mcp models verify
-securedact-mcp
+python3.12 -m pip install "securedact-mcp[ml]"
+securedact-mcp setup
 ```
 
-After publication is independently verified, the source-install line can be
-replaced with `python -m pip install "securedact-mcp[ml]"`.
+Use `python -m pip install "securedact-mcp[ml]"` when `python` already resolves
+to a supported Python 3.12 interpreter.
+
+## What unified setup changes
+
+Interactive `securedact-mcp setup` detects installed supported hosts and asks
+before configuring each one. `--host claude`, `--host gemini`, and `--host all`
+target the provider step. Setup calls the provider's official CLI; it never
+rewrites Claude or Gemini settings directly, stores credentials, bypasses trust
+prompts, or invokes a hosted model. Rerunning setup verifies existing active
+installations and does not duplicate them.
+
+`securedact-mcp setup --non-interactive` performs deterministic preflight and
+readiness inspection only. It does not imply model terms acceptance or provider
+trust. A new non-interactive model install requires the existing explicit
+combination, for example:
+
+```powershell
+securedact-mcp setup --non-interactive --language english --accept-upstream-terms
+```
+
+New provider configuration remains interactive. A targeted non-interactive run
+reports that requirement and exits safely; an already configured provider is
+verified without changes.
 
 ## Model choice and consent
 
-`securedact-mcp install` immediately offers:
+When model setup is selected, `securedact-mcp setup` delegates to the same flow
+used by `securedact-mcp install`, which offers:
 
 1. English
 2. Dutch
@@ -86,7 +98,12 @@ replaced with `python -m pip install "securedact-mcp[ml]"`.
 4. Continue without contextual models
 
 Every selected model is described before download, and confirmation defaults to
-No. Non-interactive downloads require `--accept-upstream-terms`:
+No. There is no setup-specific agreement or acceptance record. Declining leaves
+models uninstalled, continues safe host inspection/configuration, and reports
+that contextual readiness is incomplete. Setup can be rerun later.
+
+The manual commands remain available. Non-interactive downloads require
+`--accept-upstream-terms`:
 
 ```powershell
 securedact-mcp install --language english --accept-upstream-terms

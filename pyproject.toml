@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "securedact-mcp"
-version = "0.1.1"
+version = "0.2.0"
 description = "Local-first privacy MCP server for sensitive AI workflows"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -45,8 +45,8 @@ dev = [
   "build>=1.2.2,<2",
   "hypothesis>=6.100,<7",
   "mypy>=1.17,<2",
-  "pytest>=8.4,<9",
-  "pytest-asyncio>=0.25,<1",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.4,<2",
   "pytest-cov>=6,<8",
   "ruff>=0.12,<1",
   "setuptools>=75",
@@ -76,6 +76,14 @@ include = ["securedact_mcp*", "securedact_core*", "securedact_eval*", "securedac
 
 [tool.setuptools.package-data]
 "securedact_core.detectors" = ["lexicons/*.json"]
+"securedact_mcp.setup_assets" = [
+  "claude/.claude-plugin/*.json",
+  "claude/integrations/claude-code-enforced/securedact-enforced/.claude-plugin/*.json",
+  "claude/integrations/claude-code-enforced/securedact-enforced/hooks/*.json",
+  "claude/integrations/claude-code-enforced/securedact-enforced/skills/securedact-enforced/*.md",
+  "gemini/*.json",
+  "gemini/hooks/*.json",
+]
 
 [tool.ruff]
 target-version = "py312"

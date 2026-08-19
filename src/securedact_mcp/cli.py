@@ -54,6 +54,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="explicitly accept third-party model terms for non-interactive download",
     )
 
+    setup = commands.add_parser("setup", help="guide model and provider integration setup")
+    setup.add_argument("--host", choices=("claude", "gemini", "all"))
+    setup.add_argument("--language", choices=("english", "dutch", "all", "none"))
+    setup.add_argument(
+        "--accept-upstream-terms",
+        action="store_true",
+        help="reuse explicit upstream acceptance for a selected non-interactive model install",
+    )
+    setup.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="report readiness without assuming model terms or provider trust",
+    )
+
     models = commands.add_parser("models", help="inspect and maintain local contextual models")
     model_commands = models.add_subparsers(dest="model_command", required=True)
     model_commands.add_parser("list", help="list registry-supported models")
@@ -429,6 +443,19 @@ def main(
         return run_guided_install(
             language=arguments.language,
             accept_upstream_terms=arguments.accept_upstream_terms,
+            input_fn=input_fn,
+            output=output,
+        )
+    if arguments.command == "setup":
+        from .onboarding import run_setup
+
+        return run_setup(
+            host=arguments.host,
+            language=arguments.language,
+            accept_upstream_terms=arguments.accept_upstream_terms,
+            non_interactive=arguments.non_interactive,
+            install_models=run_guided_install,
+            verify_models=_models_verify,
             input_fn=input_fn,
             output=output,
         )

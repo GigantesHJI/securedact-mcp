@@ -49,9 +49,13 @@ Install Gemini CLI, then install SecuRedact with its local contextual models:
 
 ```powershell
 python -m pip install "securedact-mcp[ml]"
-securedact-mcp install
-securedact-mcp models verify
+securedact-mcp setup --host gemini
 ```
+
+Setup reuses the existing SecuRedact model terms/installation/verifier flow,
+then supplies the wheel-packaged extension to Gemini's official `extensions`
+commands. Gemini's installation confirmation remains authoritative; setup never
+passes `--consent`, edits credentials, or invokes a Gemini model.
 
 For development, link this extension and start a fresh Gemini session:
 

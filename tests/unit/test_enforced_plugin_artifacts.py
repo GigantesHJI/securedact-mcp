@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -111,7 +112,7 @@ def test_claude_marketplace_references_the_self_contained_plugin() -> None:
             "description": "Local privacy enforcement for Claude Code. Checks prompts before "
             "model processing and blocks or requires review when SecuRedact detects "
             "protected information.",
-            "version": "0.1.6",
+            "version": "0.2.0",
             "author": {"name": "SecuRedact"},
             "homepage": "https://github.com/GigantesHJI/securedact-mcp",
             "repository": "https://github.com/GigantesHJI/securedact-mcp",
@@ -121,3 +122,28 @@ def test_claude_marketplace_references_the_self_contained_plugin() -> None:
             "tags": ["privacy", "security", "pii", "gdpr", "redaction", "local-processing"],
         }
     ]
+
+
+def test_packaged_setup_resources_match_provider_integration_behavior() -> None:
+    packaged = resources.files("securedact_mcp.setup_assets")
+    assert json.loads(
+        packaged.joinpath("claude/.claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    ) == _read_json(ROOT / ".claude-plugin" / "marketplace.json")
+    claude_packaged = packaged.joinpath(
+        "claude/integrations/claude-code-enforced/securedact-enforced"
+    )
+    claude_source = ROOT / "integrations" / "claude-code-enforced" / "securedact-enforced"
+    gemini_packaged = packaged.joinpath("gemini")
+    gemini_source = ROOT / "integrations" / "gemini-enforced" / "securedact-enforced"
+
+    for relative in (".claude-plugin/plugin.json", "hooks/hooks.json"):
+        assert json.loads(
+            claude_packaged.joinpath(relative).read_text(encoding="utf-8")
+        ) == _read_json(claude_source / relative)
+    assert claude_packaged.joinpath("skills/securedact-enforced/SKILL.md").read_text(
+        encoding="utf-8"
+    ) == (claude_source / "skills" / "securedact-enforced" / "SKILL.md").read_text(encoding="utf-8")
+    for relative in ("gemini-extension.json", "hooks/hooks.json"):
+        assert json.loads(
+            gemini_packaged.joinpath(relative).read_text(encoding="utf-8")
+        ) == _read_json(gemini_source / relative)

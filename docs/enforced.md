@@ -43,13 +43,15 @@ same lifecycle order, its prompt-block response, and `updatedInput` for
 | Codex | CONFIG VALIDATED; UNIT TESTED | Manifest and hook JSON validate locally; actual host load pending. |
 | Claude Code | CONFIG VALIDATED; UNIT TESTED | Manifest and hook JSON validate locally; actual host load pending. |
 
-## Runtime distribution assessment
+## Runtime distribution and guided onboarding
 
-Both plugin directories are self-contained hook artifacts but intentionally do
-not download code or models. Today each requires a separately installed
-SecuRedact Python runtime (including the required local model) and `python` on
-`PATH`; Codex uses `python` on Windows. The current provider plugin formats can
-run packaged scripts, but do not themselves establish a safe Python runtime or
-model bootstrap contract. A future one-click install can bundle a signed native
-runtime or depend on a signed SecuRedact package; model downloads must remain an
-explicit, consented SecuRedact setup step.
+The Claude and Gemini hook artifacts needed by `securedact-mcp setup` are
+included as package resources in the wheel. Setup supplies those resources to
+the providers' official plugin/extension commands, so a repository checkout is
+not required. Provider configuration remains separate from the installed
+Python runtime and local models.
+
+The integrations never download packages or models while a hook is running.
+`setup` delegates contextual installation and verification to SecuRedact's
+existing explicit, consented model flow. It does not bypass Claude/Gemini trust,
+write provider credentials, or invoke their hosted models.

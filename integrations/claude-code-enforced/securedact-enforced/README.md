@@ -64,6 +64,10 @@ Install these three things before enabling the plugin on a new Windows machine:
    Production defaults require a verified contextual model. Do not set
    `SECUREDACT_REQUIRE_FLAIR=0` for normal privacy enforcement.
 
+For normal onboarding, `securedact-mcp setup` reuses those same model commands
+and offers this Claude plugin through Claude's official plugin manager. It does
+not add another model-terms prompt or call Claude's model API.
+
 The default Windows managed model location is
 `%LOCALAPPDATA%\Securedact\MCP\models`; it is not packaged in this plugin.
 

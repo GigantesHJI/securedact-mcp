@@ -13,9 +13,7 @@
       "displayName": "SecuRedact Enforced",
       "description": "Local privacy enforcement for Claude Code. Checks prompts before model processing and blocks or requires review when SecuRedact detects protected information.",
       "version": "0.2.0",
-      "author": {
-        "name": "SecuRedact"
-      },
+      "author": {"name": "SecuRedact"},
       "homepage": "https://github.com/GigantesHJI/securedact-mcp",
       "repository": "https://github.com/GigantesHJI/securedact-mcp",
       "license": "Apache-2.0",

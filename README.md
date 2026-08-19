@@ -93,14 +93,36 @@ Python `>=3.12,<3.13` is supported.
 For a normal installation from PyPI:
 
 ```powershell
-python -m pip install "securedact-mcp[ml]"
+py -3.12 -m pip install "securedact-mcp[ml]"
+securedact-mcp setup
+```
+
+On Linux or macOS, use `python3.12 -m pip install "securedact-mcp[ml]"`;
+`python -m pip install "securedact-mcp[ml]"` is also appropriate when `python`
+already selects a supported 3.12 environment.
+
+`setup` checks the package, Python and ML dependencies, inspects local model
+state, offers the existing consent-based model installer, runs the existing
+offline verifier, and offers the packaged Claude Code and Gemini CLI
+integrations when those hosts are detected. It uses the providers' official
+plugin/extension commands and is safe to rerun. It does not call a provider
+model API, accept provider trust automatically, or download a contextual model
+unless the user explicitly selects model setup and accepts the existing
+upstream prompt.
+
+Manual model commands remain available for advanced or unattended operation:
+
+```powershell
 securedact-mcp install
 securedact-mcp models verify
 securedact-mcp
 ```
 
-Model installation is a separate, explicit step. The last command starts a
-local `stdio` server. Standard output is reserved for MCP protocol messages.
+The last command starts a local `stdio` server. Standard output is reserved for
+MCP protocol messages. `securedact-mcp setup --non-interactive` reports state
+without implying upstream acceptance or configuring a new provider. Use
+`--host claude`, `--host gemini`, or `--host all` for targeted interactive
+provider setup.
 
 ### Developer/source installation
 
@@ -110,9 +132,7 @@ To work from a reviewed source checkout instead:
 git clone https://github.com/GigantesHJI/securedact-mcp.git
 cd securedact-mcp
 python -m pip install ".[ml]"
-securedact-mcp install
-securedact-mcp models verify
-securedact-mcp
+securedact-mcp setup
 ```
 
 No model checkpoint is included in the repository or wheel, and startup never

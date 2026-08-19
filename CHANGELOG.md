@@ -8,6 +8,29 @@ public server release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-19
+
+### Added
+
+- `securedact-mcp setup` as a unified guided onboarding command for package,
+  Python, ML dependency, contextual-model, Claude Code, and Gemini CLI
+  readiness.
+- Host detection, targeted `--host` selection, deterministic
+  `--non-interactive` inspection, idempotent provider setup, and final readiness
+  reporting.
+- Install-safe Claude and Gemini integration resources in the wheel, with
+  clean-wheel setup smoke coverage that does not require a source checkout.
+
+### Changed
+
+- Guided onboarding reuses the existing model installer, upstream-terms prompt,
+  managed configuration, and offline verifier rather than adding another
+  downloader or consent system.
+- Claude and Gemini onboarding uses their official plugin/extension management
+  commands and preserves provider trust prompts and unrelated configuration.
+- No privacy policy, detection, pseudonymisation, review/block, restoration,
+  provider enforcement, authenticated runtime, HMAC, or MCP semantics changed.
+
 ## [0.1.1] - 2026-08-19
 
 ### Added

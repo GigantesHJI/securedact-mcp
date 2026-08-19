@@ -209,6 +209,22 @@ def test_existing_verified_installation_does_not_prompt_for_download(
 
 def test_cli_parser_exposes_required_command_structure() -> None:
     parser = build_parser()
+    setup = parser.parse_args(
+        [
+            "setup",
+            "--host",
+            "all",
+            "--language",
+            "english",
+            "--accept-upstream-terms",
+            "--non-interactive",
+        ]
+    )
+    assert setup.command == "setup"
+    assert setup.host == "all"
+    assert setup.language == "english"
+    assert setup.accept_upstream_terms is True
+    assert setup.non_interactive is True
     assert parser.parse_args(["install", "--language", "all"]).language == "all"
     assert parser.parse_args(["models", "update", "english"]).model_command == "update"
     assert parser.parse_args(["models", "remove", "dutch"]).model_command == "remove"

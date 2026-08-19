@@ -1,5 +1,18 @@
 # Troubleshooting
 
+## Unified setup is incomplete
+
+Rerun `securedact-mcp setup` after resolving the item named in its readiness
+summary. `ML dependencies: missing` means the active Python environment needs
+`python -m pip install "securedact-mcp[ml]"`. A missing host means its CLI is not
+on `PATH`; an unavailable provider state is not treated as configured.
+
+`securedact-mcp setup --non-interactive` intentionally does not accept model
+terms or provider trust. Use an interactive run for new Claude/Gemini setup. For
+an unattended model download, provide both `--language` and the existing
+`--accept-upstream-terms` flag. Setup never passes Gemini's extension-consent
+flag or invokes a provider model API.
+
 ## The server does not appear in my MCP client
 
 1. Verify the absolute Python executable path.

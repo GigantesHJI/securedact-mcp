@@ -5,8 +5,9 @@ selected model is downloaded directly from its official Hugging Face repository
 to the user's local Securedact data directory.
 
 The Python package installation remains deterministic and non-interactive.
-`securedact-mcp install` is the separate, consent-based product setup step; the
-MCP server itself never downloads a model.
+`securedact-mcp setup` can invoke the existing `securedact-mcp install`
+consent-based model flow; the MCP server itself never downloads a model. Setup
+does not add another agreement, acceptance record, downloader, or verifier.
 
 ## Supported models
 
@@ -65,13 +66,14 @@ Install ML dependencies and start the guided setup:
 
 ```powershell
 python -m pip install "securedact-mcp[ml]"
-securedact-mcp install
+securedact-mcp setup
 ```
 
-The menu offers English, Dutch, both, or no contextual model. For each selected
-model it displays the official source, immutable revision, estimated size,
-destination, licensing note, citation, and required transformer component. The
-confirmation prompt defaults to No.
+After the user selects contextual setup, the existing model menu offers English,
+Dutch, both, or no contextual model. For each selected model it displays the
+official source, immutable revision, estimated size, destination, licensing
+note, citation, and required transformer component. The existing confirmation
+prompt defaults to No. Declining it starts no download and setup can be rerun.
 
 For unattended setup, the selected upstream download must be accepted explicitly:
 

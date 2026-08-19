@@ -121,3 +121,5 @@ jobs:
           uv pip install --python .clean-venv/bin/python --no-deps dist/*.whl
           .clean-venv/bin/python scripts/smoke_test_entrypoint.py
           .clean-venv/bin/securedact-mcp --help
+          .clean-venv/bin/securedact-mcp setup --help
+          .clean-venv/bin/python scripts/smoke_test_setup.py

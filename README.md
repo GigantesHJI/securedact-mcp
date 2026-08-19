@@ -90,8 +90,21 @@ See [MCP tools](docs/mcp-tools.md), [response privacy](docs/privacy-model.md), a
 
 Python `>=3.12,<3.13` is supported.
 
-The first public PyPI release is not yet available. Until publication is
-confirmed, install from a reviewed source checkout:
+For a normal installation from PyPI:
+
+```powershell
+python -m pip install "securedact-mcp[ml]"
+securedact-mcp install
+securedact-mcp models verify
+securedact-mcp
+```
+
+Model installation is a separate, explicit step. The last command starts a
+local `stdio` server. Standard output is reserved for MCP protocol messages.
+
+### Developer/source installation
+
+To work from a reviewed source checkout instead:
 
 ```powershell
 git clone https://github.com/GigantesHJI/securedact-mcp.git
@@ -102,16 +115,11 @@ securedact-mcp models verify
 securedact-mcp
 ```
 
-After the package is published and independently verified on PyPI, the primary
-installation command will be `python -m pip install "securedact-mcp[ml]"`.
-
-The last command starts a local `stdio` server. Standard output is reserved for
-MCP protocol messages. Model installation is explicit and consent-based; no
-model checkpoint is included in the repository or wheel, and startup never
+No model checkpoint is included in the repository or wheel, and startup never
 downloads one. Securedact does not redistribute these model weights. Upstream
-model weights retain their own licenses and are not
-relicensed by Apache-2.0. See [model installation](docs/model-installation.md) and
-[third-party licenses](docs/third-party-licenses.md).
+model weights retain their own licenses and are not relicensed by Apache-2.0.
+See [model installation](docs/model-installation.md) and [third-party
+licenses](docs/third-party-licenses.md).
 
 Deterministic-only local development must be explicitly selected:
 

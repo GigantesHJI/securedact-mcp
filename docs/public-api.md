@@ -4,7 +4,7 @@ The stable provider-neutral entry points are exported from `securedact_core`:
 
 - `SecuredactEngine`, `RedactionRequest`, `PrepareResult`, and `SafeFinding`;
 - `RestorationRequest` and `RestorationResult`;
-- `ResponseMode`, `PrepareStatus`, and `ErrorCode`;
+- `ResponseMode`, `PrepareStatus`, `PrepareOutcome`, `ReviewOption`, and `ErrorCode`;
 - `SecuredactError` and `SecuredactConfigurationError`;
 - `RestorationVault` and its safe error enums for advanced local embedding.
 
@@ -27,6 +27,13 @@ result = engine.prepare(
 if result.status == "ok":
     approved = result.sanitized_text
 ```
+
+`status` remains the compatibility approval boundary. The additive `outcome`
+field distinguishes unchanged `allow` output from `pseudonymized` or `redacted`
+output. `action_counts` summarizes provider-neutral finding decisions. Review
+mode adds opaque finding IDs and typed replacement suggestions; local callers
+may resubmit `ReviewDecision` values in `review_decisions` without changing any
+provider hook.
 
 `prepare()` and `restore()` are synchronous. One engine serializes detector
 inference because injected statistical models are not assumed thread-safe; the

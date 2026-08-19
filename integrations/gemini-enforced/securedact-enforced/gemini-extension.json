@@ -1,0 +1,5 @@
+{
+  "name": "securedact-enforced",
+  "version": "0.1.0",
+  "description": "Local SecuRedact privacy enforcement for Gemini CLI prompts, model requests, and external tools."
+}

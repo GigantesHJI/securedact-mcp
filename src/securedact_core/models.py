@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from hashlib import sha256
 
@@ -104,6 +105,16 @@ class PrivacyAction(StrEnum):
     BLOCK = "block"
 
 
+class FindingDecision(StrEnum):
+    """Provider-neutral disposition selected for one finding."""
+
+    ALLOW = "allow"
+    PSEUDONYMIZE = "pseudonymize"
+    REDACT = "redact"
+    REVIEW = "review"
+    BLOCK = "block"
+
+
 class Severity(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
@@ -126,6 +137,7 @@ class ReviewAction(StrEnum):
     REDACT_ASSERTION = "redact_assertion"
     REDACT_SENTENCE = "redact_sentence"
     ALLOW_ONCE = "allow_once"
+    REPLACE = "replace"
 
 
 class Detection(BaseModel):
@@ -146,6 +158,10 @@ class Detection(BaseModel):
     masked_preview: str = ""
     rationale_code: str | None = None
     precedence: int = 0
+    decision: FindingDecision | None = None
+    supporting_sources: frozenset[DetectionSource] = frozenset()
+    conflicting_entity_types: frozenset[EntityType] = frozenset()
+    replacement: str | None = None
 
     @model_validator(mode="after")
     def validate_span(self) -> Detection:
@@ -154,6 +170,12 @@ class Detection(BaseModel):
         if not self.id:
             seed = f"{self.start}:{self.end}:{self.entity_type}:{self.source}:{self.text}"
             object.__setattr__(self, "id", sha256(seed.encode("utf-8")).hexdigest()[:16])
+        if not self.supporting_sources:
+            object.__setattr__(self, "supporting_sources", frozenset({self.source}))
+        if self.replacement is not None and not re.fullmatch(
+            r"\[[A-Z][A-Z0-9_]*_\d+\]", self.replacement
+        ):
+            raise ValueError("replacement must be a typed pseudonym token")
         return self
 
     @property
@@ -162,14 +184,22 @@ class Detection(BaseModel):
 
 
 class ReviewDecision(BaseModel):
-    detection_id: str
+    detection_id: str = Field(min_length=1, max_length=64)
     action: ReviewAction
     entity_type: EntityType | None = None
+    replacement: str | None = None
 
     @model_validator(mode="after")
     def type_required_for_change(self) -> ReviewDecision:
         if self.action == ReviewAction.CHANGE_TYPE and self.entity_type is None:
             raise ValueError("entity_type is required when changing type")
+        if self.action == ReviewAction.REPLACE:
+            if self.replacement is None or not re.fullmatch(
+                r"\[[A-Z][A-Z0-9_]*_\d+\]", self.replacement
+            ):
+                raise ValueError("a typed pseudonym token is required when replacing")
+        elif self.replacement is not None:
+            raise ValueError("replacement is only valid for replace decisions")
         return self
 
 

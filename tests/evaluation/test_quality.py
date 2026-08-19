@@ -55,6 +55,10 @@ def test_quality_report_is_deterministic_and_has_required_groupings() -> None:
         item.id for item in first.sample_results
     )
     assert first.metadata["evaluation_unit"].startswith("character spans")
+    assert first.document_decisions is not None
+    assert first.document_decisions.review_rate is not None
+    assert first.document_decisions.automatic_pseudonymization_rate is not None
+    assert first.document_decisions.sensitive_category_block_or_review_rate == 1.0
 
 
 def test_json_csv_and_markdown_outputs_are_content_safe(tmp_path: Path) -> None:

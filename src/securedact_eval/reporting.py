@@ -69,6 +69,24 @@ def quality_markdown(report: QualityReport) -> str:
                     )
                 )
                 + f" | {decisions.audit_failure_count} |",
+                "",
+                "| Review rate | Automatic pseudonymization rate | Sensitive block/review rate | Blocked docs | Review docs | Auto-pseudonymized docs | Sensitive docs |",
+                "|---:|---:|---:|---:|---:|---:|---:|",
+                "| "
+                + " | ".join(
+                    "undefined" if value is None else f"{value:.4f}"
+                    for value in (
+                        decisions.review_rate,
+                        decisions.automatic_pseudonymization_rate,
+                        decisions.sensitive_category_block_or_review_rate,
+                    )
+                )
+                + (
+                    f" | {decisions.blocked_documents}"
+                    f" | {decisions.review_required_documents}"
+                    f" | {decisions.automatic_pseudonymized_documents}"
+                    f" | {decisions.sensitive_category_documents} |"
+                ),
             ]
         )
     return "\n".join(lines) + "\n"

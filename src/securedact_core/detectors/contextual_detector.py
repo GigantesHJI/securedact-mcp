@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,6 +19,7 @@ from ..normalization import (
     normalize_for_detection,
     requires_detection_normalization,
 )
+from .regex_detector import LABEL_RULES
 
 LEXICON_PATH = Path(__file__).with_name("lexicons") / "special_categories.v1.json"
 
@@ -81,6 +83,19 @@ INDIRECT_HIGH_PATTERNS = tuple(
         r"\biris scan\b",
         r"\bvoiceprint\b",
     )
+)
+_STRUCTURED_FIELD_PATTERN = re.compile(
+    r"(?<!\w)(?:"
+    + "|".join(
+        re.escape(label)
+        for label in sorted(
+            {label for rule in LABEL_RULES for label in rule.labels},
+            key=len,
+            reverse=True,
+        )
+    )
+    + r")\s*(?::|=|#)",
+    re.IGNORECASE,
 )
 
 
@@ -584,14 +599,20 @@ class ContextualPrivacyDetector:
     @staticmethod
     def _sentences(text: str) -> list[tuple[int, int, str]]:
         output: list[tuple[int, int, str]] = []
-        for match in re.finditer(r"[^\n.!?]+(?:[.!?]+|$)", text):
-            raw = match.group(0)
-            leading = len(raw) - len(raw.lstrip())
-            sentence = raw.strip()
-            if not sentence:
-                continue
-            start = match.start() + leading
-            output.append((start, start + len(sentence), sentence))
+        field_starts = sorted({match.start() for match in _STRUCTURED_FIELD_PATTERN.finditer(text)})
+        boundaries = sorted({0, len(text), *field_starts})
+        for chunk_start, chunk_end in pairwise(boundaries):
+            chunk = text[chunk_start:chunk_end]
+            # A period ends a sentence only before whitespace/end. This keeps an
+            # email/domain in the same assertion as the surrounding sensitive text.
+            for match in re.finditer(r"[^\n!?]+?(?:[!?]+|[.]+(?=\s|$)|\n+|$)", chunk):
+                raw = match.group(0)
+                leading = len(raw) - len(raw.lstrip())
+                sentence = raw.strip()
+                if not sentence:
+                    continue
+                start = chunk_start + match.start() + leading
+                output.append((start, start + len(sentence), sentence))
         return output
 
     @staticmethod

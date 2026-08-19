@@ -9,16 +9,18 @@ from urllib.parse import unquote
 from .detectors.base import Detector
 from .detectors.contextual_detector import ContextualPrivacyDetector
 from .detectors.regex_detector import RegexDetector
-from .merge import merge_detections
+from .merge import merge_detections, merge_detections_with_evidence
 from .model_management import ModelManager
 from .models import (
     AnalysisResult,
     Detection,
     DetectionSource,
     EntityType,
+    FindingDecision,
     IndirectDisclosureRisk,
     PartialMatch,
     PrivacyAction,
+    RedactionMode,
     RedactionResult,
     ResidualScanResult,
     ReviewAction,
@@ -34,6 +36,33 @@ from .taxonomy import CATEGORY_DEFINITIONS, CRITICAL_TYPES, SPECIAL_CATEGORY_TYP
 VALID_PLACEHOLDER = re.compile(r"^\[(?:REDACTED|[A-Z][A-Z0-9_]*_\d+)\]$")
 PLACEHOLDER_IN_TEXT = re.compile(r"\[(?:REDACTED|[A-Z][A-Z0-9_]*_\d+)\]")
 BRACKETED_VALUE = re.compile(r"\[[^\[\]\r\n]{1,100}\]")
+_GEOGRAPHIC_TYPES = frozenset({EntityType.LOCATION, EntityType.COUNTRY})
+_DIRECT_PERSONAL_TYPES = frozenset(
+    {
+        EntityType.EMAIL,
+        EntityType.PHONE,
+        EntityType.ADDRESS,
+        EntityType.STREET_ADDRESS,
+        EntityType.HOUSE_NUMBER,
+        EntityType.POSTCODE,
+        EntityType.DATE_OF_BIRTH,
+        EntityType.BSN,
+        EntityType.PASSPORT_NUMBER,
+        EntityType.DRIVING_LICENCE_NUMBER,
+        EntityType.NATIONAL_ID,
+        EntityType.CUSTOMER_NUMBER,
+        EntityType.EMPLOYEE_ID,
+        EntityType.PAYROLL_NUMBER,
+        EntityType.PATIENT_NUMBER,
+        EntityType.MEDICAL_RECORD_NUMBER,
+        EntityType.IBAN,
+    }
+)
+_PERSONAL_RELATION = re.compile(
+    r"\b(?:emails?|emailed|calls?|called|works?\s+with|repl(?:y|ies|ied)\s+to|"
+    r"lives?\s+(?:at|in)|resides?\s+(?:at|in)|contact(?:ed|s)?|belongs?\s+to)\b",
+    re.IGNORECASE,
+)
 
 
 class PrivacyEngine:
@@ -142,7 +171,7 @@ class PrivacyEngine:
             warnings.append("contextual detector is not configured")
             contextual_ready = False
 
-        merged = merge_detections(candidates)
+        merged = merge_detections_with_evidence(candidates)
         assertion_evidence = {
             (span.start, span.end, assertion.category)
             for assertion in assertions
@@ -152,35 +181,47 @@ class PrivacyEngine:
         for entity in merged:
             if entity.entity_type not in policy.enabled_entity_types:
                 continue
-            if entity.confidence < policy.threshold_for(entity.entity_type):
+            below_detection_threshold = entity.confidence < policy.threshold_for(entity.entity_type)
+            if (
+                below_detection_threshold
+                and entity.entity_type not in policy.low_confidence_review_types
+                and not entity.conflicting_entity_types
+            ):
                 continue
             action = actions[entity.entity_type]
+            generic_geography = self._is_generic_geographic_reference(text, entity, merged)
             controlled_by_assertion = (
                 entity.entity_type in SPECIAL_CATEGORY_TYPES
                 and (entity.start, entity.end, entity.entity_type) in assertion_evidence
             )
-            needs_review = (action == PrivacyAction.REVIEW and not controlled_by_assertion) or (
-                action == PrivacyAction.REDACT
-                and (
-                    entity.entity_type in policy.always_review_types
-                    or (
-                        entity.source in policy.review_sources
-                        and (
-                            policy.review_all_contextual
-                            or entity.confidence < policy.auto_accept_confidence
-                        )
-                    )
-                )
+            decision, reason_code = self._decide_finding(
+                text,
+                entity,
+                merged,
+                policy,
+                action,
+                generic_geography=generic_geography,
+                below_detection_threshold=below_detection_threshold,
             )
+            effective_action = {
+                FindingDecision.ALLOW: PrivacyAction.ALLOW,
+                FindingDecision.PSEUDONYMIZE: PrivacyAction.REDACT,
+                FindingDecision.REDACT: PrivacyAction.REDACT,
+                FindingDecision.REVIEW: PrivacyAction.REVIEW,
+                FindingDecision.BLOCK: PrivacyAction.BLOCK,
+            }[decision]
+            needs_review = decision == FindingDecision.REVIEW and not controlled_by_assertion
             definition = CATEGORY_DEFINITIONS[entity.entity_type]
             accepted.append(
                 entity.model_copy(
                     update={
                         "requires_review": needs_review,
                         "context": self._context(text, entity.start, entity.end),
-                        "action": action,
+                        "action": effective_action,
+                        "decision": decision,
                         "severity": definition.severity,
                         "masked_preview": mask_preview(entity.text),
+                        "rationale_code": reason_code,
                     }
                 )
             )
@@ -201,6 +242,11 @@ class PrivacyEngine:
                     update={
                         "action": action,
                         "requires_review": requires_review,
+                        "rationale_code": (
+                            "sensitive_category_requires_review"
+                            if requires_review
+                            else assertion.rationale_code
+                        ),
                     }
                 )
             )
@@ -221,6 +267,169 @@ class PrivacyEngine:
             blocked=blocked,
             engine_ready=contextual_ready and deterministic_ready,
             warnings=warnings,
+        )
+
+    def _decide_finding(
+        self,
+        text: str,
+        entity: Detection,
+        entities: list[Detection],
+        policy: Policy,
+        policy_action: PrivacyAction,
+        *,
+        generic_geography: bool,
+        below_detection_threshold: bool,
+    ) -> tuple[FindingDecision, str]:
+        if generic_geography:
+            return FindingDecision.ALLOW, "generic_geographic_reference"
+        if policy_action == PrivacyAction.BLOCK:
+            return FindingDecision.BLOCK, "policy_blocked"
+        if policy_action == PrivacyAction.ALLOW:
+            return FindingDecision.ALLOW, "policy_allowed"
+        if entity.entity_type in SPECIAL_CATEGORY_TYPES:
+            return FindingDecision.REVIEW, "sensitive_category_requires_review"
+        if below_detection_threshold:
+            return FindingDecision.REVIEW, "ambiguous_detection"
+
+        rule = policy.automatic_pseudonymization_rules.get(entity.entity_type)
+        source_threshold = rule.source_thresholds.get(entity.source) if rule is not None else None
+        threshold_met = source_threshold is not None and entity.confidence >= source_threshold
+        contextual_review_forced = entity.entity_type in policy.always_review_types or (
+            entity.source in policy.review_sources and policy.review_all_contextual
+        )
+        personal_context = (
+            self._has_personal_context(text, entity, entities)
+            if rule is not None and rule.require_personal_context
+            else True
+        )
+        structured_certainty = (
+            rule is not None
+            and entity.source in {DetectionSource.REGEX, DetectionSource.LABEL}
+            and threshold_met
+        )
+        conflict_requires_review = (
+            bool(entity.conflicting_entity_types) and not structured_certainty
+        )
+
+        if (
+            rule is not None
+            and threshold_met
+            and personal_context
+            and not contextual_review_forced
+            and not conflict_requires_review
+        ):
+            if not policy.automatic_pseudonymization:
+                return FindingDecision.REVIEW, "automatic_pseudonymization_disabled"
+            if len(entity.supporting_sources) > 1:
+                reason = "multiple_detector_agreement"
+            elif structured_certainty:
+                reason = "high_confidence_structured_pii"
+            else:
+                reason = "high_confidence_contextual_pii"
+            decision = (
+                FindingDecision.REDACT
+                if policy.replacement_mode == RedactionMode.REMOVE
+                else FindingDecision.PSEUDONYMIZE
+            )
+            return decision, reason
+        if entity.entity_type == EntityType.LOCATION and self._has_personal_location_context(
+            text, entity, entities
+        ):
+            return FindingDecision.REVIEW, "personal_location_context"
+        return FindingDecision.REVIEW, "ambiguous_detection"
+
+    @classmethod
+    def _has_personal_context(
+        cls,
+        text: str,
+        entity: Detection,
+        entities: list[Detection],
+    ) -> bool:
+        if entity.source == DetectionSource.LABEL:
+            return True
+        sentence_start, sentence_end = cls._sentence_span(text, entity.start, entity.end)
+        sentence = text[sentence_start:sentence_end]
+        sentence_entities = [
+            item for item in entities if item.start < sentence_end and item.end > sentence_start
+        ]
+        if entity.entity_type == EntityType.LOCATION:
+            return cls._has_precise_personal_location_context(text, entity, entities)
+        if any(item.entity_type in _DIRECT_PERSONAL_TYPES for item in sentence_entities):
+            return True
+        people = [item for item in sentence_entities if item.entity_type == EntityType.PERSON]
+        return len({item.text.casefold() for item in people}) >= 2 and bool(
+            _PERSONAL_RELATION.search(sentence)
+        )
+
+    @classmethod
+    def _has_personal_location_context(
+        cls,
+        text: str,
+        entity: Detection,
+        entities: list[Detection],
+    ) -> bool:
+        sentence_start, sentence_end = cls._sentence_span(text, entity.start, entity.end)
+        sentence_entities = [
+            item for item in entities if item.start < sentence_end and item.end > sentence_start
+        ]
+        has_person = any(item.entity_type == EntityType.PERSON for item in sentence_entities)
+        return has_person and bool(_PERSONAL_RELATION.search(text[sentence_start:sentence_end]))
+
+    @classmethod
+    def _has_precise_personal_location_context(
+        cls,
+        text: str,
+        entity: Detection,
+        entities: list[Detection],
+    ) -> bool:
+        sentence_start, sentence_end = cls._sentence_span(text, entity.start, entity.end)
+        sentence_entities = [
+            item for item in entities if item.start < sentence_end and item.end > sentence_start
+        ]
+        has_personal_relation = cls._has_personal_location_context(text, entity, entities)
+        has_precise_address = any(
+            item.entity_type
+            in {
+                EntityType.ADDRESS,
+                EntityType.STREET_ADDRESS,
+                EntityType.HOUSE_NUMBER,
+                EntityType.POSTCODE,
+            }
+            for item in sentence_entities
+        )
+        return has_personal_relation and has_precise_address
+
+    @staticmethod
+    def _sentence_span(text: str, start: int, end: int) -> tuple[int, int]:
+        left_boundaries = [text.rfind(boundary, 0, start) for boundary in ".?!\n"]
+        sentence_start = max(left_boundaries) + 1
+        right_boundaries = [
+            position for boundary in ".?!\n" if (position := text.find(boundary, end)) >= 0
+        ]
+        sentence_end = min(right_boundaries) if right_boundaries else len(text)
+        return sentence_start, sentence_end
+
+    @staticmethod
+    def _is_generic_geographic_reference(
+        text: str, entity: Detection, entities: list[Detection]
+    ) -> bool:
+        """Whether a country/place is public geography rather than personal location.
+
+        Detection deliberately retains LOCATION/GPE findings.  This policy-stage
+        rule only permits an otherwise review-only geographic mention when no
+        person is associated with it in the same sentence.  Precise addresses,
+        postcodes and street data use their own entity types and are never
+        affected by this rule.
+        """
+
+        if entity.entity_type not in _GEOGRAPHIC_TYPES:
+            return False
+        sentence_start, sentence_end = PrivacyEngine._sentence_span(text, entity.start, entity.end)
+        return not any(
+            item.entity_type == EntityType.PERSON
+            and item.start < sentence_end
+            and item.end > sentence_start
+            for item in entities
         )
 
     def replace_contextual_detector(self, detector: Detector | None) -> None:
@@ -321,7 +530,11 @@ class PrivacyEngine:
         unresolved: list[Detection] = []
 
         for entity in analysis.entities:
-            action = actions[entity.entity_type]
+            # Analysis may refine a policy default using surrounding context
+            # (for example, public geography versus a person's location).
+            # Redaction must honor that effective decision rather than
+            # recomputing the unrefined type-level default.
+            action = entity.action or actions[entity.entity_type]
             decision = by_id.get(entity.id)
             if action == PrivacyAction.BLOCK and not audit_mode:
                 raise SendingBlockedError("The active policy blocks this content")
@@ -338,6 +551,16 @@ class PrivacyEngine:
                             update={
                                 "entity_type": decision.entity_type,
                                 "requires_review": False,
+                            }
+                        )
+                    )
+                    continue
+                if decision.action == ReviewAction.REPLACE:
+                    output.append(
+                        entity.model_copy(
+                            update={
+                                "requires_review": False,
+                                "replacement": decision.replacement,
                             }
                         )
                     )
@@ -375,6 +598,13 @@ class PrivacyEngine:
                 continue
             if assertion.requires_review and decision is None and not audit_mode:
                 unresolved.append(self._assertion_detection(text, assertion))
+                continue
+            if decision is not None and decision.action == ReviewAction.REPLACE:
+                output.append(
+                    self._assertion_detection(text, assertion).model_copy(
+                        update={"replacement": decision.replacement}
+                    )
+                )
                 continue
 
             scope = decision.action if decision is not None else ReviewAction.REDACT_ASSERTION

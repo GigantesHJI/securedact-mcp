@@ -29,6 +29,7 @@ junctions, templates, or Python. No command or expression evaluation occurs.
 schema_version: 1
 name: organization_external
 description: Synthetic example organization policy
+automatic_pseudonymization: true
 category_actions:
   email: redact
   phone: redact
@@ -37,6 +38,14 @@ category_actions:
 thresholds:
   person: 0.85
   organization: 0.92
+automatic_pseudonymization_rules:
+  email:
+    source_thresholds:
+      regex: 0.99
+      label: 0.99
+low_confidence_review_types:
+  - health_data
+  - biometric_data
 residual_validation_enabled: true
 residual_on_failure: block
 default_response_mode: minimal
@@ -52,3 +61,17 @@ The loader will not accept a local policy that allows critical or GDPR
 special-category types, disables residual validation, changes residual failure
 away from block, exposes raw values, exposes mappings, or makes debug a default.
 Those invariants are not customizable through policy files.
+
+Automatic thresholds are intentionally nested under entity type and source.
+They are conservative policy configuration, not a claim that detector scores are
+globally calibrated. A finding below `minimum_confidence` is ignored only when
+its category is also outside `low_confidence_review_types` and it has no merge
+conflict; strict policies retain weak high-risk signals for review or block.
+
+`automatic_pseudonymization` defaults to `true` and is included in the policy
+digest. Setting it to `false` converts otherwise automatic pseudonymization or
+redaction into local review; it never approves the original value. The optional
+process-start environment override
+`SECUREDACT_AUTOMATIC_PSEUDONYMIZATION=1|0` takes precedence over this field for
+all policies. Restart the server or start a fresh enforced-provider session
+after changing either source.

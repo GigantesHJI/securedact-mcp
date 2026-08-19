@@ -1,0 +1,448 @@
+"""Gemini CLI hook adapter over the shared warmed SecuRedact runtime.
+
+All policy outcomes use Gemini's structured JSON response with exit status 0;
+Gemini treats other nonzero statuses as warnings, so they are never an
+enforcement mechanism here.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import time
+from collections.abc import Callable, Mapping
+from contextvars import ContextVar
+from functools import lru_cache
+
+from securedact_core import PolicyRegistry, PrepareOutcome
+from securedact_core.models import PrivacyAction
+
+from .adapter import EnforcementOutcome
+from .claude_runtime import (
+    inspect_payload_with_prepare_outcome_stage,
+    inspect_text_outcome_with_stage,
+    runtime_diagnostics,
+    runtime_is_warming,
+    shutdown_runtime,
+    start_runtime,
+    write_hook_receipt,
+)
+from .provider_messages import FAIL_CLOSED, PROMPT_BLOCK, REVIEW_BLOCK, TOOL_BLOCK
+
+_SCOPE = "gemini"
+# A warmed BeforeAgent request contains just the user text, while BeforeModel
+# and BeforeTool can contain a larger structured payload.  Both remain below
+# Gemini's configured 20-second hook budget and fail closed on expiry.
+_PROMPT_IPC_TIMEOUT_SECONDS = 2.0
+_PAYLOAD_IPC_TIMEOUT_SECONDS = 18.0
+_INITIALIZING = "SecuRedact is still initializing; this content was not sent."
+_INSPECTION_STAGE: ContextVar[str] = ContextVar("gemini_inspection_stage", default="not_invoked")
+_PREPARE_OUTCOME: ContextVar[str | None] = ContextVar("gemini_prepare_outcome", default=None)
+_GUIDANCE_INJECTED: ContextVar[bool] = ContextVar("gemini_guidance_injected", default=False)
+_TOKEN_CATEGORIES: ContextVar[tuple[str, ...]] = ContextVar("gemini_token_categories", default=())
+_GUIDANCE_MARKER = "<securedact-pseudonym-token-guidance>"
+_GUIDANCE_END_MARKER = "</securedact-pseudonym-token-guidance>"
+_TOKEN_PATTERN = re.compile(r"\[([A-Z][A-Z0-9_]*?)_([1-9][0-9]*)\]")
+_BARE_TOKEN_PATTERN = re.compile(r"(?<![A-Z0-9_])([A-Z][A-Z0-9_]*?)_([1-9][0-9]*)(?![A-Z0-9_])")
+_REDACTED_MARKER = "[REDACTED]"
+
+
+def _allow() -> dict[str, object]:
+    return {"decision": "allow"}
+
+
+def _deny(reason: str) -> dict[str, object]:
+    return {"decision": "deny", "reason": reason}
+
+
+@lru_cache(maxsize=1)
+def _pseudonymizable_token_categories() -> tuple[str, ...]:
+    """Return token labels from the same default policy used by the enforcer."""
+
+    policy = PolicyRegistry().get("default")
+    return tuple(
+        sorted(
+            entity_type.value.upper()
+            for entity_type in policy.automatic_pseudonymization_rules
+            if policy.action_for(entity_type) not in {PrivacyAction.ALLOW, PrivacyAction.BLOCK}
+        )
+    )
+
+
+def _token_categories_in_text(text: str) -> tuple[tuple[str, ...], bool]:
+    inspected_text = text.split(_GUIDANCE_MARKER, maxsplit=1)[0]
+    allowed = frozenset(_pseudonymizable_token_categories())
+    categories = tuple(
+        sorted(
+            {
+                category
+                for pattern in (_TOKEN_PATTERN, _BARE_TOKEN_PATTERN)
+                for match in pattern.finditer(inspected_text)
+                if (category := match.group(1)) in allowed
+            }
+        )
+    )
+    return categories, _REDACTED_MARKER in inspected_text
+
+
+def _pseudonym_guidance(categories: tuple[str, ...], *, has_redaction: bool) -> str:
+    category_text = ", ".join(categories)
+    marker_text = (
+        f" Recognized pseudonym classes in this request: {category_text}." if category_text else ""
+    )
+    if has_redaction:
+        marker_text += " [REDACTED] marks intentionally removed private content."
+    return (
+        f"{_GUIDANCE_MARKER}\n"
+        "SecuRedact privacy-token handling instruction: tokens such as [PERSON_1] or "
+        "[EMAIL_1] are intentional opaque privacy-preserving stand-ins."
+        f"{marker_text} Treat their labels as high-level semantic categories, not variables, "
+        "filesystem identifiers, or unresolved references. Preserve tokens exactly and continue "
+        "the user's task normally using them. Repeated identical tokens refer to the same "
+        "pseudonymized value within the current transformation scope; different token numbers "
+        "refer to different values. Never identify, resolve, reverse, deanonymize, search for, "
+        "reconstruct, infer, or recover an original value. Do not search the workspace, local "
+        "files, conversation history, tools, MCP servers, or web/network resources for an "
+        "original, and do not ask a tool to resolve a token. If asked to recover an original, "
+        "explain that the token is an intentional privacy-preserving pseudonym and do not perform "
+        f"the lookup.\n{_GUIDANCE_END_MARKER}"
+    )
+
+
+def _inject_pseudonym_guidance(
+    request: dict[str, object], selected_indices: list[int]
+) -> tuple[dict[str, object], bool, tuple[str, ...]]:
+    messages = request.get("messages")
+    if not isinstance(messages, list) or not selected_indices:
+        return request, False, ()
+    selected_index = selected_indices[-1]
+    if selected_index < 0 or selected_index >= len(messages):
+        return request, False, ()
+    message = messages[selected_index]
+    if not isinstance(message, Mapping):
+        return request, False, ()
+    content = message.get("content")
+    if not isinstance(content, str):
+        return request, False, ()
+    categories, has_redaction = _token_categories_in_text(content)
+    _TOKEN_CATEGORIES.set(categories)
+    if not categories and not has_redaction:
+        return request, False, categories
+    if _GUIDANCE_MARKER in content:
+        return request, False, categories
+    guidance = _pseudonym_guidance(categories, has_redaction=has_redaction)
+    guided_messages = list(messages)
+    guided_messages[selected_index] = {**message, "content": f"{content}\n\n{guidance}"}
+    _GUIDANCE_INJECTED.set(True)
+    return {**request, "messages": guided_messages}, True, categories
+
+
+def _block_reason(outcome: EnforcementOutcome, *, tool: bool = False) -> str:
+    if outcome == EnforcementOutcome.REVIEW_REQUIRED:
+        return REVIEW_BLOCK
+    if outcome == EnforcementOutcome.INTERNAL_FAILURE:
+        return FAIL_CLOSED
+    return TOOL_BLOCK if tool else PROMPT_BLOCK
+
+
+def _is_external_tool(tool_name: object) -> bool:
+    if not isinstance(tool_name, str):
+        return False
+    lowered = tool_name.casefold()
+    return lowered.startswith("mcp_") or any(
+        marker in lowered
+        for marker in ("http", "web", "search", "fetch", "request", "api", "connect")
+    )
+
+
+def _model_text_payload(
+    request: Mapping[str, object],
+) -> tuple[dict[str, object], list[int]] | None:
+    """Select the latest untrusted model-bound text field for inspection.
+
+    Earlier user content was deterministically checked by ``BeforeAgent`` in
+    its original turn. Gemini uses the ``user`` role for user turns and tool
+    results; model/router messages are provider-generated and must not replace
+    the selected untrusted input.
+    """
+
+    messages = request.get("messages")
+    if not isinstance(messages, list):
+        return None
+    latest: tuple[int, str] | None = None
+    for index, message in enumerate(messages):
+        if not isinstance(message, Mapping):
+            return None
+        role = message.get("role")
+        content = message.get("content")
+        if not isinstance(role, str) or not isinstance(content, str):
+            return None
+        if role != "user":
+            continue
+        latest = (index, content)
+    if latest is None:
+        return {"messages": []}, []
+    index, content = latest
+    return {"messages": [{"content": content}]}, [index]
+
+
+def _merge_model_text_payload(
+    request: dict[str, object], inspected: object, selected_indices: list[int]
+) -> dict[str, object] | None:
+    """Merge sanitized message content without modifying request metadata."""
+
+    if not isinstance(inspected, Mapping):
+        return None
+    original_messages = request.get("messages")
+    inspected_messages = inspected.get("messages")
+    if not isinstance(original_messages, list) or not isinstance(inspected_messages, list):
+        return None
+    if len(selected_indices) != len(inspected_messages):
+        return None
+    merged_messages = list(original_messages)
+    for index, replacement in zip(selected_indices, inspected_messages, strict=True):
+        original = original_messages[index]
+        if not isinstance(original, Mapping) or not isinstance(replacement, Mapping):
+            return None
+        content = replacement.get("content")
+        if not isinstance(content, str):
+            return None
+        merged_messages[index] = {**original, "content": content}
+    return {**request, "messages": merged_messages}
+
+
+def _inspect(
+    session_id: object, payload: object
+) -> tuple[EnforcementOutcome, PrepareOutcome | None, object | None]:
+    outcome, prepare_outcome, sanitized, stage = inspect_payload_with_prepare_outcome_stage(
+        session_id, payload, timeout_seconds=_PAYLOAD_IPC_TIMEOUT_SECONDS, runtime_scope=_SCOPE
+    )
+    _INSPECTION_STAGE.set(stage)
+    _PREPARE_OUTCOME.set(str(prepare_outcome) if prepare_outcome is not None else None)
+    return outcome, prepare_outcome, sanitized
+
+
+def _inspect_model(
+    session_id: object, payload: object
+) -> tuple[EnforcementOutcome, PrepareOutcome | None, object | None]:
+    outcome, prepare_outcome, sanitized, stage = inspect_payload_with_prepare_outcome_stage(
+        session_id,
+        payload,
+        timeout_seconds=_PAYLOAD_IPC_TIMEOUT_SECONDS,
+        runtime_scope=_SCOPE,
+        operation="inspect_model_payload",
+    )
+    _INSPECTION_STAGE.set(stage)
+    _PREPARE_OUTCOME.set(str(prepare_outcome) if prepare_outcome is not None else None)
+    return outcome, prepare_outcome, sanitized
+
+
+def _inspect_prompt(session_id: object, prompt: object) -> EnforcementOutcome:
+    outcome, stage = inspect_text_outcome_with_stage(
+        session_id,
+        prompt,
+        timeout_seconds=_PROMPT_IPC_TIMEOUT_SECONDS,
+        runtime_scope=_SCOPE,
+        operation="inspect_before_agent_text",
+    )
+    _INSPECTION_STAGE.set(stage)
+    return outcome
+
+
+def _deny_for_outcome(
+    session_id: object, outcome: EnforcementOutcome, *, tool: bool = False
+) -> dict[str, object]:
+    if outcome == EnforcementOutcome.INTERNAL_FAILURE and runtime_is_warming(
+        session_id, runtime_scope=_SCOPE
+    ):
+        return _deny(_INITIALIZING)
+    return _deny(_block_reason(outcome, tool=tool))
+
+
+def handle_event(
+    event_name: str,
+    event: object,
+    *,
+    diagnostic_observer: Callable[[str | None, EnforcementOutcome], None] | None = None,
+) -> dict[str, object]:
+    """Return only Gemini protocol JSON; malformed input fails closed."""
+
+    if not isinstance(event, Mapping):
+        return (
+            _deny(FAIL_CLOSED)
+            if event_name in {"BeforeAgent", "BeforeModel", "BeforeTool"}
+            else _allow()
+        )
+    session_id = event.get("session_id")
+    if event_name == "SessionStart":
+        start_runtime(session_id, runtime_scope=_SCOPE, health_timeout_seconds=0.1)
+        return _allow()
+    if event_name == "SessionEnd":
+        shutdown_runtime(session_id, runtime_scope=_SCOPE)
+        return _allow()
+    if event_name == "BeforeAgent":
+        prompt = event.get("prompt")
+        if not isinstance(prompt, str):
+            if diagnostic_observer is not None:
+                diagnostic_observer(None, EnforcementOutcome.INTERNAL_FAILURE)
+            return _deny(FAIL_CLOSED)
+        outcome = _inspect_prompt(session_id, prompt)
+        if diagnostic_observer is not None:
+            diagnostic_observer("prompt", outcome)
+        # Transformable text is allowed to proceed only as far as BeforeModel,
+        # where the signed core-provided sanitized text replaces it.
+        if outcome in {EnforcementOutcome.ALLOW, EnforcementOutcome.SANITIZED}:
+            return _allow()
+        return _deny_for_outcome(session_id, outcome)
+    if event_name == "BeforeModel":
+        _GUIDANCE_INJECTED.set(False)
+        _TOKEN_CATEGORIES.set(())
+        request = event.get("llm_request")
+        if not isinstance(request, dict):
+            return _deny(FAIL_CLOSED)
+        selected_model_text = _model_text_payload(request)
+        if selected_model_text is None:
+            return _deny(FAIL_CLOSED)
+        model_text, selected_indices = selected_model_text
+        outcome, prepare_outcome, sanitized = _inspect_model(session_id, model_text)
+        if outcome == EnforcementOutcome.ALLOW and prepare_outcome == PrepareOutcome.ALLOW:
+            guided_request, injected, _categories = _inject_pseudonym_guidance(
+                request, selected_indices
+            )
+            if not injected:
+                return _allow()
+            return {
+                "decision": "allow",
+                "hookSpecificOutput": {
+                    "hookEventName": "BeforeModel",
+                    "llm_request": guided_request,
+                },
+            }
+        if (
+            outcome == EnforcementOutcome.SANITIZED
+            and prepare_outcome in {PrepareOutcome.PSEUDONYMIZED, PrepareOutcome.REDACTED}
+            and isinstance(sanitized, dict)
+        ):
+            updated_request = _merge_model_text_payload(request, sanitized, selected_indices)
+            if updated_request is None:
+                return _deny(FAIL_CLOSED)
+            guided_request, _injected, _categories = _inject_pseudonym_guidance(
+                updated_request, selected_indices
+            )
+            return {
+                "decision": "allow",
+                "hookSpecificOutput": {
+                    "hookEventName": "BeforeModel",
+                    "llm_request": guided_request,
+                },
+            }
+        if (
+            outcome == EnforcementOutcome.REVIEW_REQUIRED
+            and prepare_outcome == PrepareOutcome.REVIEW_REQUIRED
+        ):
+            return _deny_for_outcome(session_id, outcome)
+        if outcome == EnforcementOutcome.BLOCKED and prepare_outcome == PrepareOutcome.BLOCKED:
+            return _deny_for_outcome(session_id, outcome)
+        return _deny_for_outcome(session_id, EnforcementOutcome.INTERNAL_FAILURE)
+    if event_name == "BeforeTool":
+        if not _is_external_tool(event.get("tool_name")):
+            return _allow()
+        tool_input = event.get("tool_input")
+        if not isinstance(tool_input, dict):
+            return _deny(FAIL_CLOSED)
+        outcome, prepare_outcome, sanitized = _inspect(session_id, tool_input)
+        if outcome == EnforcementOutcome.ALLOW and prepare_outcome == PrepareOutcome.ALLOW:
+            return _allow()
+        if (
+            outcome == EnforcementOutcome.SANITIZED
+            and prepare_outcome in {PrepareOutcome.PSEUDONYMIZED, PrepareOutcome.REDACTED}
+            and isinstance(sanitized, dict)
+        ):
+            return {
+                "decision": "allow",
+                "hookSpecificOutput": {"hookEventName": "BeforeTool", "tool_input": sanitized},
+            }
+        if (
+            outcome == EnforcementOutcome.REVIEW_REQUIRED
+            and prepare_outcome == PrepareOutcome.REVIEW_REQUIRED
+        ):
+            return _deny_for_outcome(session_id, outcome, tool=True)
+        if outcome == EnforcementOutcome.BLOCKED and prepare_outcome == PrepareOutcome.BLOCKED:
+            return _deny_for_outcome(session_id, outcome, tool=True)
+        return _deny_for_outcome(session_id, EnforcementOutcome.INTERNAL_FAILURE, tool=True)
+    return _allow()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="SecuRedact Gemini CLI hook")
+    parser.add_argument(
+        "--event",
+        required=True,
+        choices=("SessionStart", "SessionEnd", "BeforeAgent", "BeforeModel", "BeforeTool"),
+    )
+    args = parser.parse_args(argv)
+    started = time.monotonic()
+    metadata: dict[str, object] = {
+        "field_names": [],
+        "selected_field": None,
+        "enforcement_outcome": None,
+        "prepare_outcome": None,
+        "pseudonym_guidance_injected": False,
+        "token_categories": [],
+        "token_category_count": 0,
+        "inspection_transport_stage": "not_invoked",
+        "inspection_timeout_seconds": None,
+    }
+
+    def observe(selected_field: str | None, outcome: EnforcementOutcome) -> None:
+        metadata["selected_field"] = selected_field
+        metadata["enforcement_outcome"] = str(outcome)
+
+    try:
+        _INSPECTION_STAGE.set("not_invoked")
+        _PREPARE_OUTCOME.set(None)
+        _GUIDANCE_INJECTED.set(False)
+        _TOKEN_CATEGORIES.set(())
+        event = json.load(sys.stdin)
+        if isinstance(event, Mapping):
+            metadata["field_names"] = sorted(key for key in event if isinstance(key, str))
+            if args.event == "BeforeModel":
+                metadata["selected_field"] = "llm_request.messages[].content"
+        output = handle_event(args.event, event, diagnostic_observer=observe)
+        metadata["inspection_transport_stage"] = _INSPECTION_STAGE.get()
+        metadata["prepare_outcome"] = _PREPARE_OUTCOME.get()
+        token_categories = list(_TOKEN_CATEGORIES.get())
+        metadata["pseudonym_guidance_injected"] = _GUIDANCE_INJECTED.get()
+        metadata["token_categories"] = token_categories
+        metadata["token_category_count"] = len(token_categories)
+        metadata["inspection_timeout_seconds"] = (
+            _PROMPT_IPC_TIMEOUT_SECONDS
+            if args.event == "BeforeAgent"
+            else _PAYLOAD_IPC_TIMEOUT_SECONDS
+            if args.event in {"BeforeModel", "BeforeTool"}
+            else None
+        )
+    except Exception:
+        output = _deny(FAIL_CLOSED) if args.event.startswith("Before") else _allow()
+        event = {}
+    session_id = event.get("session_id") if isinstance(event, Mapping) else None
+    if isinstance(session_id, str):
+        metadata["runtime_diagnostics"] = runtime_diagnostics(
+            session_id, runtime_scope=_SCOPE, timeout_seconds=0.2
+        )
+    write_hook_receipt(
+        args.event,
+        session_id,
+        decision="block" if output.get("decision") == "deny" else "allow",
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+        runtime_scope=_SCOPE,
+        safe_metadata=metadata,
+    )
+    sys.stdout.write(json.dumps(output, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -91,6 +91,35 @@ def merge_detections(detections: list[Detection]) -> list[Detection]:
     return sorted(selected, key=lambda item: (item.start, item.end))
 
 
+def merge_detections_with_evidence(detections: list[Detection]) -> list[Detection]:
+    """Use the normal merge result and attach non-sensitive agreement/conflict evidence."""
+
+    selected = merge_detections(detections)
+    enriched: list[Detection] = []
+    for winner in selected:
+        supporting = {
+            item.source
+            for item in detections
+            if item.start == winner.start
+            and item.end == winner.end
+            and item.entity_type == winner.entity_type
+        }
+        conflicts = {
+            item.entity_type
+            for item in detections
+            if overlaps(winner, item) and item.entity_type != winner.entity_type
+        }
+        enriched.append(
+            winner.model_copy(
+                update={
+                    "supporting_sources": frozenset(supporting or {winner.source}),
+                    "conflicting_entity_types": frozenset(conflicts),
+                }
+            )
+        )
+    return enriched
+
+
 def debug_merge_detections(
     detections: list[Detection],
 ) -> tuple[list[Detection], list[MergeDecision]]:

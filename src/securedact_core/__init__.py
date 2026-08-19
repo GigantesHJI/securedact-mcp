@@ -2,12 +2,14 @@
 
 from .api import (
     ErrorCode,
+    PrepareOutcome,
     PrepareResult,
     PrepareStatus,
     RedactionRequest,
     ResponseMode,
     RestorationRequest,
     RestorationResult,
+    ReviewOption,
     SafeFinding,
     SecuredactConfigurationError,
     SecuredactEngine,
@@ -36,6 +38,7 @@ from .models import (
     Detection,
     DetectionSource,
     EntityType,
+    FindingDecision,
     IndirectDisclosureRisk,
     PartialMatch,
     PrivacyAction,
@@ -49,8 +52,14 @@ from .models import (
     Severity,
     TextSpan,
 )
-from .policies import Policy, PolicyRegistry
-from .policy_loader import LocalPolicyLoader, PolicyLoadError, PolicyLoadErrorCode
+from .policies import AutomaticPseudonymizationRule, Policy, PolicyRegistry
+from .policy_loader import (
+    AUTOMATIC_PSEUDONYMIZATION_ENV,
+    LocalPolicyLoader,
+    PolicyLoadError,
+    PolicyLoadErrorCode,
+    load_policy_registry_from_environment,
+)
 from .production import PRODUCTION_DETERMINISTIC_DETECTORS, build_production_engine
 from .profile_storage import PrivacyConfiguration, PrivacyProfileStore
 from .restoration import (
@@ -68,11 +77,13 @@ from .taxonomy import (
 )
 
 __all__ = [
+    "AUTOMATIC_PSEUDONYMIZATION_ENV",
     "CATEGORY_DEFINITIONS",
     "CRITICAL_TYPES",
     "PRODUCTION_DETERMINISTIC_DETECTORS",
     "SPECIAL_CATEGORY_TYPES",
     "AnalysisResult",
+    "AutomaticPseudonymizationRule",
     "CategoryGroup",
     "Detection",
     "DetectionSource",
@@ -80,6 +91,7 @@ __all__ = [
     "EntityType",
     "ErrorCode",
     "EvaluationReport",
+    "FindingDecision",
     "IndirectDisclosureRisk",
     "InstalledModel",
     "IntegrityStatus",
@@ -99,6 +111,7 @@ __all__ = [
     "PolicyLoadError",
     "PolicyLoadErrorCode",
     "PolicyRegistry",
+    "PrepareOutcome",
     "PrepareResult",
     "PrepareStatus",
     "PrivacyAction",
@@ -117,6 +130,7 @@ __all__ = [
     "RestorationVault",
     "ReviewAction",
     "ReviewDecision",
+    "ReviewOption",
     "SafeFinding",
     "SanitizationAudit",
     "SecuredactConfigurationError",
@@ -130,5 +144,6 @@ __all__ = [
     "category_metadata",
     "evaluate_corpus",
     "load_corpus",
+    "load_policy_registry_from_environment",
     "verify_model_pack",
 ]

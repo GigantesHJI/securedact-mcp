@@ -18,6 +18,7 @@ from .taxonomy import CRITICAL_TYPES, SPECIAL_CATEGORY_TYPES
 MAX_POLICY_FILE_BYTES = 64 * 1024
 MAX_POLICY_FILES = 64
 SUPPORTED_POLICY_SUFFIXES = frozenset({".json", ".yaml", ".yml"})
+AUTOMATIC_PSEUDONYMIZATION_ENV = "SECUREDACT_AUTOMATIC_PSEUDONYMIZATION"
 
 
 class PolicyLoadErrorCode(StrEnum):
@@ -28,6 +29,7 @@ class PolicyLoadErrorCode(StrEnum):
     SCHEMA_UNSUPPORTED = "policy_schema_unsupported"
     DUPLICATE_NAME = "policy_duplicate_name"
     INVARIANT_VIOLATION = "policy_invariant_violation"
+    SETTING_INVALID = "policy_setting_invalid"
 
 
 class PolicyLoadError(RuntimeError):
@@ -142,5 +144,25 @@ class LocalPolicyLoader:
             or policy.residual_on_failure != "block"
             or policy.expose_raw_values
             or policy.expose_mapping
+            or not protected_types.issubset(policy.low_confidence_review_types)
         ):
             raise PolicyLoadError(PolicyLoadErrorCode.INVARIANT_VIOLATION)
+
+
+def load_policy_registry_from_environment(
+    base: PolicyRegistry | None = None,
+) -> PolicyRegistry:
+    """Load local policies and apply the optional process-start privacy override.
+
+    Policy files provide the normal setting. When present, the environment
+    variable is authoritative for every loaded policy so provider runtimes cannot
+    disagree about whether automatic transformation is enabled.
+    """
+
+    registry = LocalPolicyLoader.from_environment().load(base)
+    configured = os.getenv(AUTOMATIC_PSEUDONYMIZATION_ENV)
+    if configured is None:
+        return registry
+    if configured not in {"0", "1"}:
+        raise PolicyLoadError(PolicyLoadErrorCode.SETTING_INVALID)
+    return registry.with_automatic_pseudonymization(configured == "1")

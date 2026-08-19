@@ -26,6 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from securedact_core import PrepareOutcome
+
+from .adapter import EnforcementOutcome, EnforcementResult
 from .provider_messages import FAIL_CLOSED, prompt_block
 
 _PROTOCOL_VERSION = 1
@@ -55,28 +58,38 @@ def _session_digest(session_id: object) -> str | None:
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
 
-def _runtime_directory() -> Path:
-    configured = os.environ.get("CLAUDE_PLUGIN_DATA")
+def _runtime_directory(runtime_scope: str = "claude") -> Path:
+    configured = os.environ.get("CLAUDE_PLUGIN_DATA") if runtime_scope == "claude" else None
     if configured:
         root = Path(configured)
     else:
         local_app_data = os.environ.get("LOCALAPPDATA")
+        product = "ClaudeCode" if runtime_scope == "claude" else "GeminiCli"
         root = (
-            Path(local_app_data) / "SecuRedact" / "ClaudeCode"
+            Path(local_app_data) / "SecuRedact" / product
             if local_app_data
-            else Path(tempfile.gettempdir()) / "securedact-claude"
+            else Path(tempfile.gettempdir()) / f"securedact-{runtime_scope}"
         )
     directory = root / "runtime"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     return directory
 
 
-def state_path_for_session(session_id: object) -> Path | None:
+def state_path_for_session(session_id: object, *, runtime_scope: str = "claude") -> Path | None:
     digest = _session_digest(session_id)
-    return _runtime_directory() / f"{digest}.json" if digest else None
+    filename = f"{digest}.json" if runtime_scope == "claude" else f"{runtime_scope}-{digest}.json"
+    return _runtime_directory(runtime_scope) / filename if digest else None
 
 
-def write_hook_receipt(event: str, session_id: object, *, decision: str, elapsed_ms: int) -> None:
+def write_hook_receipt(
+    event: str,
+    session_id: object,
+    *,
+    decision: str,
+    elapsed_ms: int,
+    runtime_scope: str = "claude",
+    safe_metadata: Mapping[str, object] | None = None,
+) -> None:
     """Append non-sensitive hook telemetry without affecting enforcement."""
 
     digest = _session_digest(session_id)
@@ -89,8 +102,12 @@ def write_hook_receipt(event: str, session_id: object, *, decision: str, elapsed
         "elapsed_ms": elapsed_ms,
         "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    if safe_metadata is not None:
+        payload["metadata"] = dict(safe_metadata)
     try:
-        with (_runtime_directory() / "hook-receipts.jsonl").open("a", encoding="utf-8") as receipt:
+        with (_runtime_directory(runtime_scope) / "hook-receipts.jsonl").open(
+            "a", encoding="utf-8"
+        ) as receipt:
             receipt.write(_canonical_json(payload).decode("utf-8") + "\n")
     except OSError:
         return
@@ -98,6 +115,10 @@ def write_hook_receipt(event: str, session_id: object, *, decision: str, elapsed
 
 def _lock_path(state_path: Path) -> Path:
     return state_path.with_suffix(".lock")
+
+
+def _warming_path(state_path: Path) -> Path:
+    return state_path.with_suffix(".warming")
 
 
 def _canonical_json(payload: Mapping[str, object]) -> bytes:
@@ -159,6 +180,20 @@ def _remove_state(path: Path, expected_token: bytes | None = None) -> None:
         pass
 
 
+def _write_warming(state_path: Path, session_digest: str) -> None:
+    _atomic_write_json(
+        _warming_path(state_path),
+        {"version": _PROTOCOL_VERSION, "session_digest": session_digest, "status": "warming"},
+    )
+
+
+def _remove_warming(state_path: Path) -> None:
+    try:
+        _warming_path(state_path).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _read_line(connection: socket.socket) -> bytes | None:
     chunks: list[bytes] = []
     received = 0
@@ -189,12 +224,178 @@ class _RuntimeServer(socketserver.ThreadingTCPServer):
         token: bytes,
         session_digest: str,
         decide: Callable[[str], dict[str, object] | None],
+        inspect_text: Callable[[str], EnforcementResult],
     ) -> None:
         super().__init__(("127.0.0.1", 0), _RuntimeRequestHandler)
         self.state_path = state_path
         self.token = token
         self.session_digest = session_digest
         self.decide = decide
+        self.inspect_text = inspect_text
+        self._approved_text_digests: set[str] = set()
+        self._approved_text_lock = threading.Lock()
+        self._initial_model_request_text: str | None = None
+        self._initial_model_transformation: tuple[str, str, PrepareOutcome] | None = None
+
+    @staticmethod
+    def _text_digest(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def inspect_text_result(self, text: str) -> EnforcementResult:
+        digest = self._text_digest(text)
+        with self._approved_text_lock:
+            if digest in self._approved_text_digests:
+                return EnforcementResult(
+                    EnforcementOutcome.ALLOW, prepare_outcome=PrepareOutcome.ALLOW
+                )
+        result = self.inspect_text(text)
+        if result.outcome == EnforcementOutcome.ALLOW:
+            with self._approved_text_lock:
+                self._approved_text_digests.add(digest)
+        return result
+
+    def approve_initial_model_request(self, text: str) -> None:
+        with self._approved_text_lock:
+            self._initial_model_request_text = text
+
+    def consume_initial_model_request_approval(self, payload: object) -> bool:
+        with self._approved_text_lock:
+            approved_text = self._initial_model_request_text
+            self._initial_model_request_text = None
+        if not approved_text:
+            return False
+        return self._payload_contains_text(payload, approved_text)
+
+    def cache_initial_model_transformation(
+        self, source: str, sanitized: str, outcome: PrepareOutcome
+    ) -> None:
+        with self._approved_text_lock:
+            self._initial_model_transformation = (source, sanitized, outcome)
+
+    def consume_initial_model_transformation(
+        self, payload: object
+    ) -> tuple[EnforcementResult, object] | None:
+        with self._approved_text_lock:
+            transformation = self._initial_model_transformation
+            self._initial_model_transformation = None
+        if transformation is None:
+            return None
+        source, sanitized, outcome = transformation
+        replaced, replacement_count = self._replace_payload_text(payload, source, sanitized)
+        if replacement_count == 0:
+            return None
+        return (
+            EnforcementResult(
+                EnforcementOutcome.SANITIZED,
+                prepare_outcome=outcome,
+            ),
+            replaced,
+        )
+
+    @classmethod
+    def _payload_contains_text(cls, payload: object, text: str) -> bool:
+        if isinstance(payload, str):
+            return text in payload
+        if isinstance(payload, Mapping):
+            return any(cls._payload_contains_text(value, text) for value in payload.values())
+        if isinstance(payload, list):
+            return any(cls._payload_contains_text(value, text) for value in payload)
+        return False
+
+    @classmethod
+    def _replace_payload_text(
+        cls, payload: object, source: str, sanitized: str
+    ) -> tuple[object, int]:
+        if isinstance(payload, str):
+            return payload.replace(source, sanitized), payload.count(source)
+        if isinstance(payload, Mapping):
+            replaced: dict[object, object] = {}
+            replacements = 0
+            for key, value in payload.items():
+                replaced_value, count = cls._replace_payload_text(value, source, sanitized)
+                replaced[key] = replaced_value
+                replacements += count
+            return replaced, replacements
+        if isinstance(payload, list):
+            replaced_items: list[object] = []
+            replacements = 0
+            for value in payload:
+                replaced_value, count = cls._replace_payload_text(value, source, sanitized)
+                replaced_items.append(replaced_value)
+                replacements += count
+            return replaced_items, replacements
+        return payload, 0
+
+    @staticmethod
+    def _aggregate_prepare_outcomes(
+        outcomes: list[PrepareOutcome | None], *, changed: bool
+    ) -> PrepareOutcome | None:
+        if any(outcome is None for outcome in outcomes):
+            return None
+        if not changed:
+            return PrepareOutcome.ALLOW
+        if PrepareOutcome.REDACTED in outcomes:
+            return PrepareOutcome.REDACTED
+        return PrepareOutcome.PSEUDONYMIZED
+
+    def inspect_payload_result(self, payload: object) -> tuple[EnforcementResult, object | None]:
+        """Inspect only uncached text; digests are in-memory and per daemon."""
+
+        if isinstance(payload, str):
+            result = self.inspect_text_result(payload)
+            return (
+                result,
+                result.sanitized_text
+                if result.outcome == EnforcementOutcome.SANITIZED
+                else payload,
+            )
+        if isinstance(payload, Mapping):
+            sanitized: dict[object, object] = {}
+            changed = False
+            prepare_outcomes: list[PrepareOutcome | None] = []
+            for key, value in payload.items():
+                if not isinstance(key, str):
+                    return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE), None
+                result, replacement = self.inspect_payload_result(value)
+                if result.outcome not in {EnforcementOutcome.ALLOW, EnforcementOutcome.SANITIZED}:
+                    return result, None
+                sanitized[key] = replacement
+                changed = changed or result.outcome == EnforcementOutcome.SANITIZED
+                prepare_outcomes.append(result.prepare_outcome)
+            return (
+                EnforcementResult(
+                    EnforcementOutcome.SANITIZED if changed else EnforcementOutcome.ALLOW,
+                    prepare_outcome=self._aggregate_prepare_outcomes(
+                        prepare_outcomes, changed=changed
+                    ),
+                ),
+                sanitized,
+            )
+        if isinstance(payload, list):
+            sanitized_items: list[object] = []
+            changed = False
+            prepare_outcomes = []
+            for value in payload:
+                result, replacement = self.inspect_payload_result(value)
+                if result.outcome not in {EnforcementOutcome.ALLOW, EnforcementOutcome.SANITIZED}:
+                    return result, None
+                sanitized_items.append(replacement)
+                changed = changed or result.outcome == EnforcementOutcome.SANITIZED
+                prepare_outcomes.append(result.prepare_outcome)
+            return (
+                EnforcementResult(
+                    EnforcementOutcome.SANITIZED if changed else EnforcementOutcome.ALLOW,
+                    prepare_outcome=self._aggregate_prepare_outcomes(
+                        prepare_outcomes, changed=changed
+                    ),
+                ),
+                sanitized_items,
+            )
+        if payload is None or isinstance(payload, bool | int | float):
+            return EnforcementResult(
+                EnforcementOutcome.ALLOW, prepare_outcome=PrepareOutcome.ALLOW
+            ), payload
+        return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE), None
 
     def response(self, *, ok: bool, response: dict[str, object] | None = None) -> dict[str, object]:
         unsigned: dict[str, object] = {"version": _PROTOCOL_VERSION, "ok": ok, "response": response}
@@ -224,11 +425,92 @@ class _RuntimeRequestHandler(socketserver.BaseRequestHandler):
         if not hmac.compare_digest(supplied_auth, _authentication(server.token, unsigned)):
             return
         if operation == "health":
-            _send_payload(self.request, server.response(ok=True))
+            _send_payload(
+                self.request,
+                server.response(ok=True, response={"session_digest": server.session_digest}),
+            )
             return
         if operation == "shutdown":
             _send_payload(self.request, server.response(ok=True))
             threading.Thread(target=server.shutdown, daemon=True).start()
+            return
+        if operation in {"inspect_payload", "inspect_model_payload"}:
+            payload = request.get("payload")
+            if not isinstance(payload, dict | list):
+                _send_payload(self.request, server.response(ok=False))
+                return
+            try:
+                result: EnforcementResult
+                sanitized_payload: object | None
+                cached_transformation = (
+                    server.consume_initial_model_transformation(payload)
+                    if operation == "inspect_model_payload"
+                    else None
+                )
+                if cached_transformation is not None:
+                    result, sanitized_payload = cached_transformation
+                elif (
+                    operation == "inspect_model_payload"
+                    and server.consume_initial_model_request_approval(payload)
+                ):
+                    result, sanitized_payload = (
+                        EnforcementResult(
+                            EnforcementOutcome.ALLOW,
+                            prepare_outcome=PrepareOutcome.ALLOW,
+                        ),
+                        payload,
+                    )
+                else:
+                    result, sanitized_payload = server.inspect_payload_result(payload)
+                response: dict[str, object] = {"outcome": str(result.outcome)}
+                if result.prepare_outcome is not None:
+                    response["prepare_outcome"] = str(result.prepare_outcome)
+                if result.outcome == EnforcementOutcome.SANITIZED:
+                    response["sanitized_payload"] = sanitized_payload
+                _send_payload(self.request, server.response(ok=True, response=response))
+            except Exception:
+                _send_payload(self.request, server.response(ok=False))
+            return
+        if operation in {"inspect_text", "inspect_before_agent_text"}:
+            text = request.get("text")
+            if not isinstance(text, str):
+                _send_payload(self.request, server.response(ok=False))
+                return
+            try:
+                result = server.inspect_text_result(text)
+                if (
+                    operation == "inspect_before_agent_text"
+                    and result.outcome == EnforcementOutcome.ALLOW
+                ):
+                    server.approve_initial_model_request(text)
+                elif (
+                    operation == "inspect_before_agent_text"
+                    and result.outcome == EnforcementOutcome.SANITIZED
+                    and isinstance(result.sanitized_text, str)
+                    and result.prepare_outcome
+                    in {PrepareOutcome.PSEUDONYMIZED, PrepareOutcome.REDACTED}
+                ):
+                    server.cache_initial_model_transformation(
+                        text,
+                        result.sanitized_text,
+                        result.prepare_outcome,
+                    )
+                _send_payload(
+                    self.request,
+                    server.response(
+                        ok=True,
+                        response={
+                            "outcome": str(result.outcome),
+                            **(
+                                {"prepare_outcome": str(result.prepare_outcome)}
+                                if result.prepare_outcome is not None
+                                else {}
+                            ),
+                        },
+                    ),
+                )
+            except Exception:
+                _send_payload(self.request, server.response(ok=False))
             return
         if operation != "inspect_prompt":
             _send_payload(self.request, server.response(ok=False))
@@ -264,7 +546,13 @@ def _serve(
                 enforcer_factory=lambda: enforcer,
             )
 
-        with _RuntimeServer(state_path, token, session_digest, decide) as server:
+        with _RuntimeServer(
+            state_path,
+            token,
+            session_digest,
+            decide,
+            enforcer.inspect_text,
+        ) as server:
             port = server.server_address[1]
             if not isinstance(port, int):
                 return
@@ -278,11 +566,13 @@ def _serve(
                     "token": base64.b64encode(token).decode("ascii"),
                 },
             )
+            _remove_warming(state_path)
             server.serve_forever(poll_interval=0.1)
     except Exception:
         return
     finally:
         _remove_state(state_path, token)
+        _remove_warming(state_path)
 
 
 def serve_from_command_line(state_file: str, token: str, session_digest: str) -> int:
@@ -298,9 +588,11 @@ def serve_from_command_line(state_file: str, token: str, session_digest: str) ->
     return 0
 
 
-def _request(
+def _request_with_stage(
     state: RuntimeState, payload: Mapping[str, object], timeout_seconds: float
-) -> dict[str, object] | None:
+) -> tuple[dict[str, object] | None, str]:
+    """Make one authenticated request and return privacy-safe transport status."""
+
     unsigned = {"version": _PROTOCOL_VERSION, **payload}
     request = {**unsigned, "auth": _authentication(state.token, unsigned)}
     try:
@@ -311,26 +603,134 @@ def _request(
             _send_payload(connection, request)
             raw = _read_line(connection)
         if raw is None:
-            return None
+            return None, "response_missing"
         response = json.loads(raw.decode("utf-8"))
         if not isinstance(response, Mapping):
-            return None
+            return None, "response_not_object"
         supplied_auth = response.get("auth")
         unsigned_response = {key: value for key, value in response.items() if key != "auth"}
         if not isinstance(supplied_auth, str) or not hmac.compare_digest(
             supplied_auth, _authentication(state.token, unsigned_response)
         ):
-            return None
-        return dict(response)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
+            return None, "response_hmac_invalid"
+        return dict(response), "ok"
+    except TimeoutError:
+        return None, "ipc_timeout"
+    except UnicodeDecodeError:
+        return None, "response_decode_invalid"
+    except json.JSONDecodeError:
+        return None, "response_json_invalid"
+    except OSError:
+        return None, "ipc_connection_failed"
 
 
-def _is_healthy(state_path: Path, session_digest: str) -> bool:
+def _request(
+    state: RuntimeState, payload: Mapping[str, object], timeout_seconds: float
+) -> dict[str, object] | None:
+    """Make one authenticated request while retaining the established API."""
+
+    response, _stage = _request_with_stage(state, payload, timeout_seconds)
+    return response
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Return liveness only; no process command line or other private data is read."""
+
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def runtime_diagnostics(
+    session_id: object,
+    *,
+    runtime_scope: str = "claude",
+    timeout_seconds: float = 0.2,
+) -> dict[str, object]:
+    """Return metadata-only client/daemon readiness diagnostics.
+
+    This deliberately excludes request bodies and the per-session secret.  It is
+    used only in local hook receipts and has no bearing on an enforcement result.
+    """
+
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
+    digest = _session_digest(session_id)
+    diagnostics: dict[str, object] = {
+        "runtime_scope": runtime_scope,
+        "provider": runtime_scope,
+        "state_file_path": str(state_path) if state_path is not None else None,
+        "warming_marker_path": str(_warming_path(state_path)) if state_path is not None else None,
+        "session_reference_hash": digest,
+        "secret_exists_client_side": False,
+        "daemon_pid": None,
+        "daemon_alive": False,
+        "endpoint_port": None,
+        "ready_state_flag": False,
+        "daemon_sees_same_session_reference": False,
+        "daemon_session_reference_reported": False,
+        "health_request_success": False,
+        "request_hmac_accepted": False,
+        "response_hmac_verified": False,
+        "response_parse_success": False,
+        "failure_stage": "invalid_session_reference",
+    }
+    if state_path is None or digest is None:
+        return diagnostics
+    if not state_path.exists():
+        diagnostics["failure_stage"] = (
+            "warming" if _warming_path(state_path).exists() else "state_missing"
+        )
+        return diagnostics
+    state = _load_state(state_path, digest)
+    if state is None:
+        diagnostics["failure_stage"] = "state_invalid_or_session_mismatch"
+        return diagnostics
+    diagnostics.update(
+        {
+            "secret_exists_client_side": bool(state.token),
+            "daemon_pid": state.pid,
+            "daemon_alive": _pid_is_alive(state.pid),
+            "endpoint_port": state.port,
+        }
+    )
+    response, stage = _request_with_stage(state, {"operation": "health"}, timeout_seconds)
+    diagnostics["failure_stage"] = stage
+    if response is None:
+        return diagnostics
+    diagnostics["request_hmac_accepted"] = True
+    diagnostics["response_parse_success"] = True
+    diagnostics["response_hmac_verified"] = True
+    # A valid signed response proves that the daemon accepted the state-file
+    # secret.  That secret is per session, so it is sufficient evidence of the
+    # same session even when an already-running older daemon does not yet
+    # report its digest in its health payload.
+    diagnostics["daemon_sees_same_session_reference"] = True
+    response_body = response.get("response")
+    if isinstance(response_body, Mapping):
+        diagnostics["daemon_session_reference_reported"] = True
+        diagnostics["daemon_sees_same_session_reference"] = (
+            response_body.get("session_digest") == digest
+        )
+    diagnostics["health_request_success"] = response.get("ok") is True
+    diagnostics["ready_state_flag"] = bool(
+        diagnostics["health_request_success"] and diagnostics["daemon_sees_same_session_reference"]
+    )
+    diagnostics["failure_stage"] = "ready" if diagnostics["ready_state_flag"] else "health_invalid"
+    return diagnostics
+
+
+def _is_healthy(
+    state_path: Path,
+    session_digest: str,
+    *,
+    timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> bool:
     state = _load_state(state_path, session_digest)
     if state is None:
         return False
-    response = _request(state, {"operation": "health"}, _DEFAULT_REQUEST_TIMEOUT_SECONDS)
+    response = _request(state, {"operation": "health"}, timeout_seconds)
     return response is not None and response.get("ok") is True
 
 
@@ -412,11 +812,12 @@ def ensure_runtime(
     session_id: object,
     *,
     startup_timeout_seconds: float = _STARTUP_TIMEOUT_SECONDS,
+    runtime_scope: str = "claude",
     spawn_daemon: Callable[[Path, bytes, str], None] = _spawn_daemon,
 ) -> EnsureResult:
     """Ensure this Claude session has one warmed runtime; never load it in a prompt hook."""
 
-    state_path = state_path_for_session(session_id)
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
     digest = _session_digest(session_id)
     if state_path is None or digest is None:
         return EnsureResult(ready=False, started=False)
@@ -430,6 +831,7 @@ def ensure_runtime(
             return EnsureResult(ready=True, started=False)
         _remove_state(state_path)
         token = secrets.token_bytes(32)
+        _write_warming(state_path, digest)
         spawn_daemon(state_path, token, digest)
         deadline = time.monotonic() + startup_timeout_seconds
         while time.monotonic() < deadline:
@@ -437,8 +839,10 @@ def ensure_runtime(
                 return EnsureResult(ready=True, started=True)
             time.sleep(0.05)
         _remove_state(state_path, token)
+        _remove_warming(state_path)
         return EnsureResult(ready=False, started=True)
     except Exception:
+        _remove_warming(state_path)
         return EnsureResult(ready=False, started=False)
     finally:
         _release_start_lock(state_path, lock)
@@ -447,6 +851,8 @@ def ensure_runtime(
 def start_runtime(
     session_id: object,
     *,
+    runtime_scope: str = "claude",
+    health_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
     spawn_daemon: Callable[[Path, bytes, str], None] = _spawn_daemon,
 ) -> EnsureResult:
     """Launch one session daemon without waiting for model warm-up.
@@ -456,29 +862,35 @@ def start_runtime(
     it publishes a healthy state file, ``inspect_prompt`` fails closed.
     """
 
-    state_path = state_path_for_session(session_id)
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
     digest = _session_digest(session_id)
     if state_path is None or digest is None:
         return EnsureResult(ready=False, started=False)
-    if _is_healthy(state_path, digest):
+    if _is_healthy(state_path, digest, timeout_seconds=health_timeout_seconds):
         return EnsureResult(ready=True, started=False)
     lock = _acquire_start_lock(state_path, 1.0)
     if lock is None:
         return EnsureResult(ready=False, started=False)
     try:
-        if _is_healthy(state_path, digest):
+        if _is_healthy(state_path, digest, timeout_seconds=health_timeout_seconds):
             return EnsureResult(ready=True, started=False)
         _remove_state(state_path)
+        _write_warming(state_path, digest)
         spawn_daemon(state_path, secrets.token_bytes(32), digest)
         return EnsureResult(ready=False, started=True)
     except Exception:
+        _remove_warming(state_path)
         return EnsureResult(ready=False, started=False)
     finally:
         _release_start_lock(state_path, lock)
 
 
 def inspect_prompt(
-    session_id: object, prompt: object, *, timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS
+    session_id: object,
+    prompt: object,
+    *,
+    timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    runtime_scope: str = "claude",
 ) -> dict[str, object] | None:
     """Ask a pre-warmed daemon for the existing Claude JSON decision.
 
@@ -486,7 +898,7 @@ def inspect_prompt(
     runtime result becomes the normal fail-closed Claude prompt block.
     """
 
-    state_path = state_path_for_session(session_id)
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
     digest = _session_digest(session_id)
     if state_path is None or digest is None or not isinstance(prompt, str):
         return prompt_block("claude", FAIL_CLOSED)
@@ -504,8 +916,156 @@ def inspect_prompt(
     return decision
 
 
-def shutdown_runtime(session_id: object) -> bool:
-    state_path = state_path_for_session(session_id)
+def inspect_payload_with_stage(
+    session_id: object,
+    payload: object,
+    *,
+    timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    runtime_scope: str = "claude",
+    operation: str = "inspect_payload",
+) -> tuple[EnforcementOutcome, object | None, str]:
+    """Inspect structured text leaves and retain a metadata-only transport stage."""
+
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
+    digest = _session_digest(session_id)
+    if state_path is None or digest is None or not isinstance(payload, dict | list):
+        return EnforcementOutcome.INTERNAL_FAILURE, None, "invalid_request"
+    state = _load_state(state_path, digest)
+    if state is None:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, "state_missing_or_invalid"
+    response, stage = _request_with_stage(
+        state, {"operation": operation, "payload": payload}, timeout_seconds
+    )
+    if response is None or response.get("ok") is not True:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, stage
+    value = response.get("response")
+    if not isinstance(value, Mapping) or not isinstance(value.get("outcome"), str):
+        return EnforcementOutcome.INTERNAL_FAILURE, None, "inspection_response_invalid"
+    try:
+        outcome = EnforcementOutcome(value["outcome"])
+    except ValueError:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, "inspection_outcome_invalid"
+    return outcome, value.get("sanitized_payload"), "ok"
+
+
+def inspect_payload_with_prepare_outcome_stage(
+    session_id: object,
+    payload: object,
+    *,
+    timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    runtime_scope: str = "claude",
+    operation: str = "inspect_payload",
+) -> tuple[EnforcementOutcome, PrepareOutcome | None, object | None, str]:
+    """Inspect a payload and validate the signed provider-neutral outcome."""
+
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
+    digest = _session_digest(session_id)
+    if state_path is None or digest is None or not isinstance(payload, dict | list):
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, "invalid_request"
+    state = _load_state(state_path, digest)
+    if state is None:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, "state_missing_or_invalid"
+    response, stage = _request_with_stage(
+        state, {"operation": operation, "payload": payload}, timeout_seconds
+    )
+    if response is None or response.get("ok") is not True:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, stage
+    value = response.get("response")
+    if (
+        not isinstance(value, Mapping)
+        or not isinstance(value.get("outcome"), str)
+        or not isinstance(value.get("prepare_outcome"), str)
+    ):
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, "inspection_response_invalid"
+    try:
+        outcome = EnforcementOutcome(value["outcome"])
+        prepare_outcome = PrepareOutcome(value["prepare_outcome"])
+    except ValueError:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, "inspection_outcome_invalid"
+    return outcome, prepare_outcome, value.get("sanitized_payload"), "ok"
+
+
+def inspect_payload(
+    session_id: object,
+    payload: object,
+    *,
+    timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    runtime_scope: str = "claude",
+) -> tuple[EnforcementOutcome, object | None]:
+    """Inspect structured text leaves through the warmed authenticated daemon."""
+
+    outcome, sanitized, _stage = inspect_payload_with_stage(
+        session_id, payload, timeout_seconds=timeout_seconds, runtime_scope=runtime_scope
+    )
+    return outcome, sanitized
+
+
+def inspect_text_outcome_with_stage(
+    session_id: object,
+    text: object,
+    *,
+    timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    runtime_scope: str = "claude",
+    operation: str = "inspect_text",
+) -> tuple[EnforcementOutcome, str]:
+    """Inspect one text field and retain a metadata-only transport stage."""
+
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
+    digest = _session_digest(session_id)
+    if state_path is None or digest is None or not isinstance(text, str):
+        return EnforcementOutcome.INTERNAL_FAILURE, "invalid_request"
+    state = _load_state(state_path, digest)
+    if state is None:
+        return EnforcementOutcome.INTERNAL_FAILURE, "state_missing_or_invalid"
+    response, stage = _request_with_stage(
+        state, {"operation": operation, "text": text}, timeout_seconds
+    )
+    if response is None or response.get("ok") is not True:
+        return EnforcementOutcome.INTERNAL_FAILURE, stage
+    value = response.get("response")
+    if not isinstance(value, Mapping) or not isinstance(value.get("outcome"), str):
+        return EnforcementOutcome.INTERNAL_FAILURE, "inspection_response_invalid"
+    try:
+        return EnforcementOutcome(value["outcome"]), "ok"
+    except ValueError:
+        return EnforcementOutcome.INTERNAL_FAILURE, "inspection_outcome_invalid"
+
+
+def inspect_text_outcome(
+    session_id: object,
+    text: object,
+    *,
+    timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    runtime_scope: str = "claude",
+) -> EnforcementOutcome:
+    """Inspect one text field only through the warmed authenticated daemon."""
+
+    outcome, _stage = inspect_text_outcome_with_stage(
+        session_id, text, timeout_seconds=timeout_seconds, runtime_scope=runtime_scope
+    )
+    return outcome
+
+
+def runtime_is_warming(session_id: object, *, runtime_scope: str = "claude") -> bool:
+    """Return whether a SessionStart child has published safe warming state."""
+
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
+    digest = _session_digest(session_id)
+    if state_path is None or digest is None or _load_state(state_path, digest) is not None:
+        return False
+    try:
+        payload = json.loads(_warming_path(state_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(payload, Mapping)
+        and payload.get("session_digest") == digest
+        and payload.get("status") == "warming"
+    )
+
+
+def shutdown_runtime(session_id: object, *, runtime_scope: str = "claude") -> bool:
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
     digest = _session_digest(session_id)
     if state_path is None or digest is None:
         return False

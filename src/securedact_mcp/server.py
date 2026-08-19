@@ -15,7 +15,6 @@ from pydantic import ValidationError
 
 from securedact_core import (
     InstalledModel,
-    LocalPolicyLoader,
     ModelManager,
     PolicyLoadError,
     PrivacyEngine,
@@ -24,6 +23,7 @@ from securedact_core import (
     SecuredactEngine,
     SecuredactPaths,
     build_production_engine,
+    load_policy_registry_from_environment,
 )
 from securedact_core.detectors import (
     FlairDetector,
@@ -417,7 +417,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
     lifecycle = _runtime_lifecycle(runtime)
     policy_configuration_error: str | None = None
     try:
-        privacy_engine.policies = LocalPolicyLoader.from_environment().load(privacy_engine.policies)
+        privacy_engine.policies = load_policy_registry_from_environment(privacy_engine.policies)
     except (PolicyLoadError, OSError, RuntimeError):
         policy_configuration_error = "policy_configuration_invalid"
     public_engine = SecuredactEngine(

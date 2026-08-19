@@ -14,7 +14,13 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from securedact_core import PrivacyAction, PrivacyEngine, build_production_engine
+from securedact_core import (
+    SPECIAL_CATEGORY_TYPES,
+    FindingDecision,
+    PrivacyAction,
+    PrivacyEngine,
+    build_production_engine,
+)
 from securedact_core.detectors import FlairDetector, LanguageAwareFlairDetector
 
 from .benchmark.generator import load_jsonl
@@ -61,6 +67,13 @@ class DocumentDecisionMetrics(BaseModel):
     approved_documents: int
     leaked_approved_documents: int
     audit_failure_count: int
+    review_rate: float | None = None
+    automatic_pseudonymization_rate: float | None = None
+    sensitive_category_block_or_review_rate: float | None = None
+    blocked_documents: int = 0
+    review_required_documents: int = 0
+    automatic_pseudonymized_documents: int = 0
+    sensitive_category_documents: int = 0
 
 
 class QualityReport(BaseModel):
@@ -350,6 +363,11 @@ def run_quality_evaluation(
     approved_documents = 0
     leaked_approved_documents = 0
     audit_failures = 0
+    blocked_documents = 0
+    review_required_documents = 0
+    automatic_pseudonymized_documents = 0
+    sensitive_category_documents = 0
+    protected_sensitive_documents = 0
     for loaded in samples:
         analysis = engine.analyze(loaded.sample.text, "gdpr")
         predicted = [
@@ -365,6 +383,18 @@ def run_quality_evaluation(
         result = evaluate_spans(_spans(loaded.sample), predicted)
         expected_unsafe = bool(loaded.sample.entities)
         predicted_unsafe = bool(analysis.entities or analysis.assertions)
+        blocked_documents += analysis.blocked
+        review_required_documents += analysis.requires_review
+        automatic_pseudonymized_documents += any(
+            item.decision == FindingDecision.PSEUDONYMIZE for item in analysis.entities
+        )
+        expected_sensitive = any(
+            item.entity_type in SPECIAL_CATEGORY_TYPES for item in loaded.sample.entities
+        )
+        sensitive_category_documents += expected_sensitive
+        protected_sensitive_documents += expected_sensitive and (
+            analysis.blocked or analysis.requires_review
+        )
         unsafe_correct += expected_unsafe == predicted_unsafe
         disposition = analysis.blocked or analysis.requires_review or predicted_unsafe
         disposition_correct += disposition == expected_unsafe
@@ -523,6 +553,19 @@ def run_quality_evaluation(
             approved_documents=approved_documents,
             leaked_approved_documents=leaked_approved_documents,
             audit_failure_count=audit_failures,
+            review_rate=(review_required_documents / len(samples) if samples else None),
+            automatic_pseudonymization_rate=(
+                automatic_pseudonymized_documents / len(samples) if samples else None
+            ),
+            sensitive_category_block_or_review_rate=(
+                protected_sensitive_documents / sensitive_category_documents
+                if sensitive_category_documents
+                else None
+            ),
+            blocked_documents=blocked_documents,
+            review_required_documents=review_required_documents,
+            automatic_pseudonymized_documents=automatic_pseudonymized_documents,
+            sensitive_category_documents=sensitive_category_documents,
         ),
         exact_recall_bootstrap_95=_bootstrap_recall(samples, predictions),
         sample_results=sorted(sample_results, key=lambda item: item.id),

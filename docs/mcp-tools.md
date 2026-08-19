@@ -21,10 +21,12 @@ Approved minimal result:
 {
   "schema_version": "1",
   "status": "ok",
+  "outcome": "pseudonymized",
   "policy": "strict_external_ai",
   "policy_version": 1,
   "policy_digest": "<sha256>",
   "counts": {"email": 1},
+  "action_counts": {"pseudonymize": 1},
   "sanitized_text": "Contact [EMAIL_1]"
 }
 ```
@@ -40,8 +42,9 @@ Response modes:
   does not copy the detected substring.
 - `restore_capable` stores the mapping locally and returns an opaque,
   single-use `restoration_session` on success.
-- `debug` may contain raw detector details and works only when the server was
-  started with `SECUREDACT_ENABLE_DEBUG_RESPONSES=1`.
+- `debug` adds source/confidence/decision diagnostics without original values and
+  works only when the server was started with
+  `SECUREDACT_ENABLE_DEBUG_RESPONSES=1`.
 
 ## `analyze_text`
 

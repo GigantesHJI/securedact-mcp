@@ -7,7 +7,8 @@ and send only `sanitized_text` to an external AI.
 ```text
 raw local text
   -> prepare_for_external_ai(policy="strict_external_ai")
-     -> ok: use sanitized_text only
+     -> ok/allow: use unchanged sanitized_text only
+     -> ok/pseudonymized: use transformed sanitized_text only
      -> review_required: keep everything local and review or stop
      -> blocked: stop
 ```
@@ -37,6 +38,10 @@ merged with stable precedence and lexical tie-breakers so detector order cannot
 change the outcome. Overlapping spans are resolved once; non-overlapping spans
 survive; repeated exact values receive stable typed placeholders within one
 result.
+
+Confidence-aware automatic pseudonymization is configured per entity category
+and detector source; scores from different detector families are not treated as
+one calibrated scale. See [Confidence-aware pseudonymization](confidence-pseudonymization.md).
 
 `strict_external_ai` is the recommended policy. It blocks credentials and GDPR
 special-category findings, reviews high-risk ambiguity, redacts accepted direct

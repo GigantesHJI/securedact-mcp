@@ -19,6 +19,99 @@ PROFILE_SCHEMA_VERSION = 1
 ALL_ENTITY_TYPES = frozenset(EntityType)
 
 
+class AutomaticPseudonymizationRule(BaseModel):
+    """Conservative, source-specific evidence required for automatic transformation.
+
+    Detector confidence values are not assumed to share one calibration scale. A
+    policy therefore opts categories and detector sources in independently.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_thresholds: dict[DetectionSource, float]
+    require_personal_context: bool = False
+
+    @field_validator("source_thresholds")
+    @classmethod
+    def validate_source_thresholds(
+        cls,
+        value: dict[DetectionSource, float],
+    ) -> dict[DetectionSource, float]:
+        if not value or any(threshold < 0.0 or threshold > 1.0 for threshold in value.values()):
+            raise ValueError("automatic pseudonymization thresholds must be between zero and one")
+        return value
+
+
+def _automatic_pseudonymization_rules() -> dict[EntityType, AutomaticPseudonymizationRule]:
+    regex_and_label = AutomaticPseudonymizationRule(
+        source_thresholds={
+            DetectionSource.REGEX: 0.99,
+            DetectionSource.LABEL: 0.99,
+        }
+    )
+    validated_regex_and_label = AutomaticPseudonymizationRule(
+        source_thresholds={
+            DetectionSource.REGEX: 1.0,
+            DetectionSource.LABEL: 0.99,
+        }
+    )
+    rules = {
+        entity_type: regex_and_label
+        for entity_type in {
+            EntityType.EMAIL,
+            EntityType.PHONE,
+            EntityType.ADDRESS,
+            EntityType.STREET_ADDRESS,
+            EntityType.HOUSE_NUMBER,
+            EntityType.POSTCODE,
+            EntityType.DATE_OF_BIRTH,
+            EntityType.PASSPORT_NUMBER,
+            EntityType.DRIVING_LICENCE_NUMBER,
+            EntityType.NATIONAL_ID,
+            EntityType.CUSTOMER_NUMBER,
+            EntityType.CASE_NUMBER,
+            EntityType.EMPLOYEE_ID,
+            EntityType.PAYROLL_NUMBER,
+            EntityType.PATIENT_NUMBER,
+            EntityType.MEDICAL_RECORD_NUMBER,
+            EntityType.POLICY_NUMBER,
+            EntityType.INVOICE_NUMBER,
+            EntityType.BIC_SWIFT,
+            EntityType.BANK_ACCOUNT_REFERENCE,
+            EntityType.PAYMENT_REFERENCE,
+            EntityType.CARD_EXPIRY,
+            EntityType.IPV4,
+            EntityType.IPV6,
+            EntityType.MAC_ADDRESS,
+            EntityType.DEVICE_IDENTIFIER,
+            EntityType.SENSITIVE_URL_PARAMETER,
+            EntityType.INTERNAL_URL,
+        }
+    }
+    for entity_type in {
+        EntityType.BSN,
+        EntityType.IBAN,
+        EntityType.CREDIT_CARD_NUMBER,
+    }:
+        rules[entity_type] = validated_regex_and_label
+    rules[EntityType.PERSON] = AutomaticPseudonymizationRule(
+        source_thresholds={
+            DetectionSource.LABEL: 0.95,
+            DetectionSource.CONTEXTUAL: 0.98,
+            DetectionSource.FLAIR: 0.98,
+        },
+        require_personal_context=True,
+    )
+    rules[EntityType.LOCATION] = AutomaticPseudonymizationRule(
+        source_thresholds={
+            DetectionSource.CONTEXTUAL: 0.99,
+            DetectionSource.FLAIR: 0.99,
+        },
+        require_personal_context=True,
+    )
+    return rules
+
+
 class Policy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -36,6 +129,11 @@ class Policy(BaseModel):
         {DetectionSource.FLAIR, DetectionSource.CONTEXTUAL}
     )
     review_all_contextual: bool = False
+    automatic_pseudonymization_rules: dict[EntityType, AutomaticPseudonymizationRule] = Field(
+        default_factory=_automatic_pseudonymization_rules
+    )
+    automatic_pseudonymization: bool = True
+    low_confidence_review_types: frozenset[EntityType] = CRITICAL_TYPES | SPECIAL_CATEGORY_TYPES
     replacement_mode: RedactionMode = RedactionMode.TYPED_TOKENS
     block_on_unreviewed: bool = True
     block_entity_types: frozenset[EntityType] = frozenset()
@@ -301,6 +399,16 @@ class PolicyRegistry:
         if policy.name in self._policies:
             raise ValueError(f"Duplicate privacy policy name: {policy.name}")
         self._policies[policy.name] = policy
+
+    def with_automatic_pseudonymization(self, enabled: bool) -> PolicyRegistry:
+        """Return an isolated registry with one effective automatic-transformation setting."""
+
+        return PolicyRegistry(
+            [
+                policy.model_copy(update={"automatic_pseudonymization": enabled})
+                for policy in self._policies.values()
+            ]
+        )
 
     def resolve_actions(
         self,

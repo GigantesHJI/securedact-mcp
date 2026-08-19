@@ -32,12 +32,14 @@ def test_minimal_prepare_is_approved_and_recursively_leak_free() -> None:
     assert payload == {
         "schema_version": "1",
         "status": "ok",
+        "outcome": "pseudonymized",
         "policy": "strict_external_ai",
         "policy_version": 1,
         "policy_digest": result.policy_digest,
         "counts": {"email": 1},
+        "action_counts": {"pseudonymize": 1},
         "sanitized_text": "Contact [EMAIL_1]",
-        "reason_codes": [],
+        "reason_codes": ["automatic_pseudonymization"],
     }
     assert canary not in json.dumps(payload, sort_keys=True)
     assert "mapping" not in json.dumps(payload, sort_keys=True)
@@ -82,7 +84,8 @@ def test_debug_requires_process_configuration_not_request_alone() -> None:
     assert disabled.reason_codes == ["debug_mode_disabled"]
     assert enabled.status == PrepareStatus.OK
     assert enabled.debug_details is not None
-    assert canary in json.dumps(enabled.debug_details)
+    assert canary not in json.dumps(enabled.debug_details)
+    assert enabled.debug_details[0]["decision"] == "pseudonymize"
 
 
 def test_restore_capable_uses_opaque_single_use_session() -> None:

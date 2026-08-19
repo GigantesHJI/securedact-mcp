@@ -12,7 +12,7 @@ body:
     id: version
     attributes:
       label: Version or commit
-      placeholder: "0.1.0 or commit SHA"
+      placeholder: "0.1.1 or commit SHA"
     validations:
       required: true
   - type: dropdown
@@ -62,4 +62,3 @@ body:
           required: true
         - label: This is not a security vulnerability or accidental data exposure.
           required: true
-

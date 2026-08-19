@@ -4,15 +4,23 @@
 
 1. Work from a release branch and review all changes; do not release a dirty
    worktree.
-2. Resolve every release-blocking placeholder and confirm the private security
+2. Configure and verify the repository-local release name without adding
+   credentials:
+
+   ```powershell
+   git config --local user.name "Patrick Falk"
+   git config --local --get user.name
+   ```
+
+3. Resolve every release-blocking placeholder and confirm the private security
    contact is monitored.
-3. Update the version in `pyproject.toml` and
+4. Update the version in `pyproject.toml` and
    `src/securedact_mcp/__init__.py`.
-4. Move changelog entries from `Unreleased` to `## [X.Y.Z] - YYYY-MM-DD` and
+5. Move changelog entries from `Unreleased` to `## [X.Y.Z] - YYYY-MM-DD` and
    write migration/security notes using the release-notes template.
-5. Review dependency/license changes, upstream model identities, immutable
+6. Review dependency/license changes, upstream model identities, immutable
    revisions, sizes, hashes, and model-weight terms.
-6. Update `uv.lock` intentionally and review its diff.
+7. Update `uv.lock` intentionally and review its diff.
 
 ## Verify
 

@@ -35,6 +35,13 @@ from securedact_enforced.claude_runtime import (
     state_path_for_session,
 )
 
+# A fresh Linux interpreter needs roughly three seconds to import the runtime
+# stack on CI.  Production permits up to 120 seconds because the real enforcer
+# may also load a contextual model.  Keep this process-level test comfortably
+# above measured import time while retaining a short, bounded test deadline.
+_PROCESS_STARTUP_TIMEOUT_SECONDS = 10.0
+_PROCESS_CALL_DEADLINE_SECONDS = 15.0
+
 
 def _call_with_deadline[ResultT](
     action: Callable[[], ResultT],
@@ -243,8 +250,12 @@ def test_session_start_warms_once_reuses_and_reports_health(process_runtime) -> 
         return _process_metadata(processes, state_path)
 
     first = _call_with_deadline(
-        lambda: ensure_runtime(session_id, startup_timeout_seconds=2, spawn_daemon=spawn),
-        timeout_seconds=5,
+        lambda: ensure_runtime(
+            session_id,
+            startup_timeout_seconds=_PROCESS_STARTUP_TIMEOUT_SECONDS,
+            spawn_daemon=spawn,
+        ),
+        timeout_seconds=_PROCESS_CALL_DEADLINE_SECONDS,
         stage="start",
         metadata=metadata,
     )
@@ -256,8 +267,12 @@ def test_session_start_warms_once_reuses_and_reports_health(process_runtime) -> 
     assert _health(state_path, session_id, processes) is True
 
     second = _call_with_deadline(
-        lambda: ensure_runtime(session_id, startup_timeout_seconds=2, spawn_daemon=spawn),
-        timeout_seconds=5,
+        lambda: ensure_runtime(
+            session_id,
+            startup_timeout_seconds=_PROCESS_STARTUP_TIMEOUT_SECONDS,
+            spawn_daemon=spawn,
+        ),
+        timeout_seconds=_PROCESS_CALL_DEADLINE_SECONDS,
         stage="reuse",
         metadata=metadata,
     )
@@ -308,8 +323,12 @@ def test_runtime_accepts_sequential_authenticated_health_requests(process_runtim
 
     assert (
         _call_with_deadline(
-            lambda: ensure_runtime(session_id, startup_timeout_seconds=2, spawn_daemon=spawn),
-            timeout_seconds=5,
+            lambda: ensure_runtime(
+                session_id,
+                startup_timeout_seconds=_PROCESS_STARTUP_TIMEOUT_SECONDS,
+                spawn_daemon=spawn,
+            ),
+            timeout_seconds=_PROCESS_CALL_DEADLINE_SECONDS,
             stage="sequential-health-start",
             metadata=metadata,
         ).ready
@@ -340,6 +359,35 @@ def test_runtime_accepts_sequential_authenticated_health_requests(process_runtim
     )
     processes[0].wait(timeout=2)
     assert processes[0].returncode == 0
+
+
+def test_runtime_startup_timeout_is_bounded_and_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    session_id = "bounded-startup-timeout"
+    state_path = state_path_for_session(session_id)
+    assert state_path is not None
+    spawn_count = 0
+
+    def stalled_spawn(_state_path: Path, _token: bytes, _session_digest: str) -> None:
+        nonlocal spawn_count
+        spawn_count += 1
+
+    started_at = time.monotonic()
+    result = ensure_runtime(
+        session_id,
+        startup_timeout_seconds=0.1,
+        spawn_daemon=stalled_spawn,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert result.ready is False
+    assert result.started is True
+    assert spawn_count == 1
+    assert elapsed < 1
+    assert not state_path.exists()
+    assert not claude_runtime._warming_path(state_path).exists()
 
 
 def test_runtime_diagnostics_reports_warming_without_secret(

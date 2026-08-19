@@ -79,7 +79,7 @@ def _write_model(root: Path, *, model_id: str, language: str, revision: str, dat
         "upstream_repo": f"flair/ner-{'english' if language == 'en' else 'dutch'}-large",
         "upstream_revision": revision,
         "installed_at": datetime.now(UTC).isoformat(),
-        "securedact_version": "0.1.0",
+        "securedact_version": "0.1.1",
         "entrypoint": "pytorch_model.bin",
         "files": {
             "pytorch_model.bin": {

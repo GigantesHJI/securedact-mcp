@@ -3,9 +3,24 @@
 All notable changes to this repository will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Version 0.1.0 is the first planned public server release.
+Version 0.1.0 was an unpublished release attempt. Version 0.1.1 is the first
+public server release.
 
 ## [Unreleased]
+
+## [0.1.1] - 2026-08-19
+
+### Added
+
+- First public PyPI release, including the previously prepared MCP server,
+  explicit local model installation, Claude and Gemini enforced integrations,
+  confidence-aware pseudonymisation, the automatic pseudonymisation toggle,
+  request-local PERSON alias preservation, and fail-closed local enforcement.
+
+### Fixed
+
+- Corrected the Linux cold-start budget in the process-level Claude runtime
+  fixture. Production runtime and privacy behavior are unchanged.
 
 ## [0.1.0] - 2026-08-19
 

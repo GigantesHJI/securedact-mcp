@@ -82,7 +82,7 @@ def test_release_metadata_records_artifact_lock_corpus_and_model_provenance(
     (dist / "quality-deterministic.json").write_text("{}", encoding="utf-8")
     output = dist / "provenance.json"
 
-    metadata = create_metadata(dist, output, "v0.1.0")
+    metadata = create_metadata(dist, output, "v0.1.1")
     serialized = output.read_text(encoding="utf-8")
 
     assert json.loads(serialized) == metadata

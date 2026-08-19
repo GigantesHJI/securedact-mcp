@@ -332,7 +332,7 @@ def _package_version() -> str:
     try:
         return version("securedact-mcp")
     except PackageNotFoundError:
-        return "0.1.0+source"
+        return "0.1.1+source"
 
 
 def run_quality_evaluation(

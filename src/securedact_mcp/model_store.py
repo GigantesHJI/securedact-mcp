@@ -309,7 +309,7 @@ def package_version() -> str:
     try:
         return version("securedact-mcp")
     except PackageNotFoundError:
-        return "0.1.0"
+        return "0.1.1"
 
 
 def _version_tuple(value: str) -> tuple[int, int, int]:

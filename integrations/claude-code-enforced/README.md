@@ -7,8 +7,8 @@ is downloaded by the plugin.
 
 Normal PyPI users can run `securedact-mcp setup`; it supplies the packaged copy
 of this plugin to Claude's official marketplace and plugin commands. For
-development, run `claude plugin validate --strict securedact-enforced`, then
-install the directory or expose it through a Claude Code marketplace. Ensure
+development, run `claude plugin validate --strict integrations/claude-code-enforced/securedact-enforced`,
+then install the directory or expose it through a Claude Code marketplace. Ensure
 `python -m securedact_enforced.provider_hook` succeeds in the
 same user environment and use `/hooks` to confirm the pre-tool-use registration.
 See

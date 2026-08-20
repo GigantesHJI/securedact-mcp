@@ -72,7 +72,7 @@ def test_claude_marketplace_references_the_self_contained_plugin() -> None:
     assert marketplace["name"] == "securedact"
     assert marketplace["owner"] == {
         "name": "SecuRedact",
-        "url": "https://github.com/GigantesHJI/securedact-mcp",
+        "url": "https://www.securedact.com",
     }
     assert marketplace["plugins"] == [
         {
@@ -83,7 +83,7 @@ def test_claude_marketplace_references_the_self_contained_plugin() -> None:
             "model processing and blocks or requires review when SecuRedact detects "
             "protected information.",
             "version": "0.2.1",
-            "author": {"name": "SecuRedact"},
+            "author": {"name": "SecuRedact", "url": "https://www.securedact.com"},
             "homepage": "https://github.com/GigantesHJI/securedact-mcp",
             "repository": "https://github.com/GigantesHJI/securedact-mcp",
             "license": "Apache-2.0",
@@ -151,3 +151,39 @@ def test_root_gemini_extension_is_gallery_installable() -> None:
         assert command.startswith("python -m securedact_enforced.gemini_hook")
     for event in ("BeforeAgent", "BeforeModel", "BeforeTool"):
         assert root_hooks[event][0]["hooks"][0]["timeout"] == GEMINI_INTERCEPTION_TIMEOUT_MS
+
+
+def test_claude_plugin_and_marketplace_metadata_is_complete() -> None:
+    plugin = _read_json(
+        ROOT
+        / "integrations"
+        / "claude-code-enforced"
+        / "securedact-enforced"
+        / ".claude-plugin"
+        / "plugin.json"
+    )
+    marketplace = _read_json(ROOT / ".claude-plugin" / "marketplace.json")
+    plugin_entry = marketplace["plugins"][0]
+    plugin_root = ROOT / "integrations" / "claude-code-enforced" / "securedact-enforced"
+
+    assert plugin["name"] == "securedact-enforced"
+    assert plugin["version"] == "0.2.1"
+    assert plugin["homepage"] == "https://github.com/GigantesHJI/securedact-mcp"
+    assert plugin["repository"] == "https://github.com/GigantesHJI/securedact-mcp"
+    assert plugin["author"]["url"] == "https://www.securedact.com"
+    assert (plugin_root / ".claude-plugin" / "plugin.json").is_file()
+    assert (plugin_root / "hooks" / "hooks.json").is_file()
+    assert (plugin_root / "skills" / "securedact-enforced" / "SKILL.md").is_file()
+
+    assert marketplace["name"] == "securedact"
+    assert marketplace["owner"]["name"] == "SecuRedact"
+    assert marketplace["owner"]["url"] == "https://www.securedact.com"
+    assert plugin_entry["source"] == "./integrations/claude-code-enforced/securedact-enforced"
+    assert (ROOT / plugin_entry["source"]).is_dir()
+    assert plugin_entry["version"] == plugin["version"]
+    assert plugin_entry["author"]["url"] == "https://www.securedact.com"
+
+    hook_text = (plugin_root / "hooks" / "hooks.json").read_text(encoding="utf-8")
+    assert "src/" not in hook_text
+    assert "C:\\Users\\" not in hook_text
+    assert ".." not in hook_text

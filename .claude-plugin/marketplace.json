@@ -2,7 +2,7 @@
   "name": "securedact",
   "owner": {
     "name": "SecuRedact",
-    "url": "https://github.com/GigantesHJI/securedact-mcp"
+    "url": "https://www.securedact.com"
   },
   "description": "SecuRedact local privacy and security plugins for Claude Code.",
   "version": "0.2.1",
@@ -14,7 +14,8 @@
       "description": "Local privacy enforcement for Claude Code. Checks prompts before model processing and blocks or requires review when SecuRedact detects protected information.",
       "version": "0.2.1",
       "author": {
-        "name": "SecuRedact"
+        "name": "SecuRedact",
+        "url": "https://www.securedact.com"
       },
       "homepage": "https://github.com/GigantesHJI/securedact-mcp",
       "repository": "https://github.com/GigantesHJI/securedact-mcp",

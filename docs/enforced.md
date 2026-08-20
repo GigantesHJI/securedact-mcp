@@ -86,3 +86,19 @@ The integrations never download packages or models while a hook is running.
 `setup` delegates contextual installation and verification to SecuRedact's
 existing explicit, consented model flow. It does not bypass Claude/Gemini trust,
 write provider credentials, or invoke their hosted models.
+
+### Public gallery and GitHub install
+
+The repository is a Gemini CLI extension root for gallery discovery: the
+root-level `gemini-extension.json` and `hooks/hooks.json` mirror the packaged
+and `integrations/` copies, and the `gemini-cli-extension` GitHub topic must be
+set on the public repository for daily gallery indexing. The gallery install
+command (`gemini extensions install https://github.com/GigantesHJI/securedact-mcp`)
+resolves only from a release whose tag tree contains the root manifest; until
+then use `gemini extensions install <url> --ref main`,
+`gemini extensions link .`, or `securedact-mcp setup --host gemini`.
+
+Installing the extension supplies only the hooks. The Python package must be
+installed (`pip install "securedact-mcp[ml]"`) with the local contextual models
+set up, or the hooks do not enforce anything and Gemini treats non-zero hook
+exits as warnings. No MCP server is declared by the manifest.

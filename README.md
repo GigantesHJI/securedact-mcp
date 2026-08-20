@@ -161,6 +161,13 @@ validates server startup, tool listing, calls, minimal response shape, stdout
 integrity, and shutdown. It does not prove that a real host invokes the tool for
 every prompt. See the [compatibility evidence](docs/compatibility.md).
 
+The repository is also a Gemini CLI extension root: `gemini extensions install
+https://github.com/GigantesHJI/securedact-mcp` can install the hooks. The
+`gemini-cli-extension` topic and a release whose tag tree contains the root
+manifest are required for that path to resolve; without `pip install
+"securedact-mcp[ml]"` and the local models the installed hooks do not enforce
+anything. See [SecuRedact Enforced](docs/enforced.md).
+
 ## Policies and Python API
 
 Built-ins include `default`, `strict_external_ai`, `gdpr`, `identifiers_only`,

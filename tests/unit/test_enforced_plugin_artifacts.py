@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
 from importlib import resources
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+GEMINI_EXTENSION_NAME = "securedact-enforced"
+GEMINI_EXTENSION_VERSION = "0.2.1"
+GEMINI_HOOK_EVENTS = {"SessionStart", "SessionEnd", "BeforeAgent", "BeforeModel", "BeforeTool"}
+GEMINI_INTERCEPTION_TIMEOUT_MS = 20000
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -111,3 +117,37 @@ def test_packaged_setup_resources_match_provider_integration_behavior() -> None:
         assert json.loads(
             gemini_packaged.joinpath(relative).read_text(encoding="utf-8")
         ) == _read_json(gemini_source / relative)
+
+
+def test_root_gemini_extension_is_gallery_installable() -> None:
+    root_manifest = _read_json(ROOT / "gemini-extension.json")
+    root_hooks = _read_json(ROOT / "hooks" / "hooks.json")["hooks"]
+    integration_manifest = _read_json(
+        ROOT / "integrations" / "gemini-enforced" / "securedact-enforced" / "gemini-extension.json"
+    )
+    integration_hooks = _read_json(
+        ROOT / "integrations" / "gemini-enforced" / "securedact-enforced" / "hooks" / "hooks.json"
+    )["hooks"]
+    packaged = resources.files("securedact_mcp.setup_assets").joinpath("gemini")
+    packaged_manifest = json.loads(
+        packaged.joinpath("gemini-extension.json").read_text(encoding="utf-8")
+    )
+    packaged_hooks = json.loads(packaged.joinpath("hooks/hooks.json").read_text(encoding="utf-8"))[
+        "hooks"
+    ]
+
+    assert set(root_manifest) == {"name", "version", "description"}
+    assert root_manifest["name"] == GEMINI_EXTENSION_NAME
+    assert re.fullmatch(r"^[a-zA-Z0-9-]+$", str(root_manifest["name"])) is not None
+    assert root_manifest["version"] == GEMINI_EXTENSION_VERSION
+    assert str(root_manifest["description"]).strip() != ""
+
+    assert root_manifest == integration_manifest == packaged_manifest
+    assert root_hooks == integration_hooks == packaged_hooks
+
+    assert set(root_hooks) == GEMINI_HOOK_EVENTS
+    for hooks in root_hooks.values():
+        command = hooks[0]["hooks"][0]["command"]
+        assert command.startswith("python -m securedact_enforced.gemini_hook")
+    for event in ("BeforeAgent", "BeforeModel", "BeforeTool"):
+        assert root_hooks[event][0]["hooks"][0]["timeout"] == GEMINI_INTERCEPTION_TIMEOUT_MS

@@ -78,7 +78,19 @@ is asynchronous; prompts before readiness fail closed. Receipts may record that
 guidance was injected and the recognized category labels, but never original
 values, sanitized text, or restoration mappings.
 
-For public distribution, use a dedicated `securedact-gemini` repository with
-`gemini-extension.json` at that repository root. This monorepo keeps the
-extension under `integrations/`, which is suitable for local linking but does
-not meet root-manifest gallery discovery expectations.
+For public gallery discovery, this repository is itself a Gemini CLI extension
+root: the repository `gemini-extension.json` and `hooks/hooks.json` at the
+repository root are byte-identical copies of the artifacts under
+`integrations/gemini-enforced/securedact-enforced/` and the wheel's
+`setup_assets/gemini/`. The three copies must stay identical; a unit test
+enforces that parity. Gallery indexing requires the `gemini-cli-extension`
+GitHub topic on the repository. The public install command
+(`gemini extensions install https://github.com/GigantesHJI/securedact-mcp`)
+only resolves from a release whose tag tree contains the root manifest; until
+that release exists, use `gemini extensions install <url> --ref main`,
+`gemini extensions link .`, or `securedact-mcp setup --host gemini`.
+
+Installing the extension alone is not enough. The hooks run
+`python -m securedact_enforced.gemini_hook`, so `pip install "securedact-mcp[ml]"`
+must be installed and the contextual models set up; without the Python package
+and models the hooks do not enforce anything.

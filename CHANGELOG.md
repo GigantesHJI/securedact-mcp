@@ -8,6 +8,20 @@ public server release.
 
 ## [Unreleased]
 
+### Added
+
+- Root-level `gemini-extension.json` and root `hooks/hooks.json` so the
+  repository is itself a Gemini CLI extension root for gallery discovery.
+
+### Changed
+
+- Aligned the Gemini extension artifact `version` to `0.2.1` across the
+  repository-root, `integrations/`, and wheel `setup_assets/gemini` copies; the
+  three copies are byte-identical and a unit test enforces that parity.
+
+No detection, redaction, policy, enforcement, fail-closed, hook command, or MCP
+behavior changed. The Gemini manifest declares no MCP server.
+
 ## [0.2.1] - 2026-08-20
 
 ### Added

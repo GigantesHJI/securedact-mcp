@@ -37,6 +37,7 @@ REQUIRED_FILES = {
     "NOTICE",
     "README.md",
     "SECURITY.md",
+    "server.json",
     "docs/architecture.md",
     "docs/benchmarking.md",
     "docs/benchmark-migration.md",
@@ -173,6 +174,8 @@ ALLOWED_EMAIL_DOMAINS = {
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 WINDOWS_USER_PATH_PATTERN = re.compile(r"C:\\Users\\(?!<USERNAME>\\)[^\\\s]+\\", re.IGNORECASE)
 MAX_FILE_SIZE = 5 * 1024 * 1024
+MCP_REGISTRY_SERVER_NAME = "io.github.GigantesHJI/securedact-mcp"
+MCP_REGISTRY_PACKAGE_IDENTIFIER = "securedact-mcp"
 
 
 def tracked_candidates(root: Path) -> list[Path]:
@@ -245,6 +248,63 @@ def validate_workflow_pins(root: Path) -> list[str]:
                 )
         if not re.search(r"^permissions:\s*$", content, re.MULTILINE):
             errors.append(f"workflow has no explicit top-level permissions: {path.name}")
+    return errors
+
+
+def validate_registry_metadata(root: Path) -> list[str]:
+    """Pin server.json and the README ownership marker to the package version."""
+    errors: list[str] = []
+    server_path = root / "server.json"
+    if not server_path.is_file():
+        return errors
+    try:
+        server = json.loads(server_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        return [f"invalid JSON in server.json: {error}"]
+    if not isinstance(server, dict):
+        return ["server.json must contain a JSON object"]
+
+    pyproject_path = root / "pyproject.toml"
+    pyproject: dict[str, object] = {}
+    if pyproject_path.is_file():
+        with pyproject_path.open("rb") as handle:
+            pyproject = tomllib.load(handle)
+    project = pyproject.get("project")
+    package_version = str(project.get("version", "")) if isinstance(project, dict) else ""
+
+    if server.get("name") != MCP_REGISTRY_SERVER_NAME:
+        errors.append(f"server.json name must be {MCP_REGISTRY_SERVER_NAME}")
+    if server.get("version") != package_version:
+        errors.append(f"server.json version must match the package version ({package_version})")
+
+    packages = server.get("packages")
+    if not isinstance(packages, list) or not packages:
+        errors.append("server.json must declare at least one package")
+    else:
+        package = packages[0]
+        if not isinstance(package, dict):
+            errors.append("server.json packages[0] must be an object")
+        else:
+            if package.get("registryType") != "pypi":
+                errors.append("server.json package registryType must be pypi")
+            if package.get("identifier") != MCP_REGISTRY_PACKAGE_IDENTIFIER:
+                errors.append(
+                    f"server.json package identifier must be {MCP_REGISTRY_PACKAGE_IDENTIFIER}"
+                )
+            if package.get("version") != package_version:
+                errors.append(
+                    f"server.json package version must match the package version "
+                    f"({package_version})"
+                )
+            transport = package.get("transport")
+            if not isinstance(transport, dict) or transport.get("type") != "stdio":
+                errors.append("server.json package transport must be stdio")
+
+    readme_path = root / "README.md"
+    readme = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
+    marker = f"<!-- mcp-name: {MCP_REGISTRY_SERVER_NAME} -->"
+    if marker not in readme:
+        errors.append(f"README is missing the registry ownership marker: {marker}")
     return errors
 
 
@@ -524,6 +584,7 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
         with codex_example.open("rb") as handle:
             tomllib.load(handle)
 
+    errors.extend(validate_registry_metadata(root))
     errors.extend(validate_markdown_links(root, files))
     return sorted(set(errors))
 

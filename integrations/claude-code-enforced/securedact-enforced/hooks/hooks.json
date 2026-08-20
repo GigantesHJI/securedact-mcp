@@ -32,7 +32,7 @@
           {
             "type": "command",
             "command": "python",
-            "args": ["-m", "securedact_enforced.provider_hook", "--provider", "claude"],
+            "args": ["-m", "securedact_enforced.provider_hook"],
             "timeout": 30
           }
         ]

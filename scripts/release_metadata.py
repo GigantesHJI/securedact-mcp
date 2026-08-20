@@ -19,6 +19,7 @@ from securedact_mcp.model_registry import SUPPORTED_MODELS, SUPPORTED_RUNTIME_CO
 ROOT = Path(__file__).resolve().parents[1]
 VERIFIED_CODEOWNER = "@GigantesHJI"
 VERIFIED_SECURITY_CONTACT = "info@securedact.com"
+MCP_REGISTRY_SERVER_NAME = "io.github.GigantesHJI/securedact-mcp"
 MODEL_ASSET_REVIEW_PATH = "MODEL_ASSET_LICENSES.json"
 FLAIR_LICENSE_STATUS = "reviewed_upstream_explicit_checkpoint_license_identifier_unavailable"
 
@@ -139,11 +140,28 @@ def _model_asset_review_resolved(root: Path) -> bool:
     return True
 
 
+def _registry_metadata_resolved(root: Path) -> bool:
+    path = root / "server.json"
+    if not path.is_file():
+        return False
+    try:
+        server = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    version = _version_at(root)
+    return (
+        isinstance(server, dict)
+        and server.get("name") == MCP_REGISTRY_SERVER_NAME
+        and server.get("version") == version
+    )
+
+
 def unresolved_release_blockers(root: Path = ROOT) -> list[str]:
     checks = {
         "codeowners_maintainer": _codeowners_resolved,
         "security_contact_confirmation": _security_contact_resolved,
         "model_weight_license_review": _model_asset_review_resolved,
+        "registry_metadata": _registry_metadata_resolved,
     }
     return [name for name, check in checks.items() if not check(root)]
 

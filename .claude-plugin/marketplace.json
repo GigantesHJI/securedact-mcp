@@ -5,14 +5,14 @@
     "url": "https://github.com/GigantesHJI/securedact-mcp"
   },
   "description": "SecuRedact local privacy and security plugins for Claude Code.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "plugins": [
     {
       "name": "securedact-enforced",
       "source": "./integrations/claude-code-enforced/securedact-enforced",
       "displayName": "SecuRedact Enforced",
       "description": "Local privacy enforcement for Claude Code. Checks prompts before model processing and blocks or requires review when SecuRedact detects protected information.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "SecuRedact"
       },

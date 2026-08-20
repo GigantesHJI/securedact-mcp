@@ -1,25 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 import sys
-from pathlib import Path
-from types import ModuleType
 
 import pytest
 
+from securedact_enforced import claude_runtime, provider_hook
 from securedact_enforced.adapter import EnforcementOutcome, EnforcementResult, PrivacyEnforcer
 from securedact_enforced.provider_hook import handle_event
-
-CODEX_PLUGIN_ROOT = (
-    Path(__file__).resolve().parents[2] / "integrations" / "codex-enforced" / "securedact-enforced"
-)
-CODEX_PROMPT_WRAPPER = CODEX_PLUGIN_ROOT / "scripts" / "user_prompt_submit.py"
-requires_codex_plugin = pytest.mark.skipif(
-    not CODEX_PROMPT_WRAPPER.is_file(),
-    reason="Codex Enforced plugin is not part of this release.",
-)
+from securedact_enforced.provider_messages import FAIL_CLOSED
 
 
 class RecordingEnforcer:
@@ -34,25 +24,9 @@ class RecordingEnforcer:
             outcome, "[EMAIL_1]" if outcome == EnforcementOutcome.SANITIZED else None
         )
 
-    def inspect_payload(self, payload: object) -> tuple[EnforcementResult, object | None]:
-        if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
-            return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE), None
-        result = self.inspect_text(payload["text"])
-        if result.outcome == EnforcementOutcome.SANITIZED:
-            return result, {**payload, "text": result.sanitized_text}
-        return result, payload if result.outcome == EnforcementOutcome.ALLOW else None
-
 
 def _factory(enforcer: RecordingEnforcer):
     return lambda: enforcer
-
-
-def _load_codex_prompt_wrapper() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("test_codex_prompt_wrapper", CODEX_PROMPT_WRAPPER)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_injection_language_does_not_bypass_user_prompt_enforcement() -> None:
@@ -74,7 +48,6 @@ def test_injection_language_does_not_bypass_user_prompt_enforcement() -> None:
             prompt = f"{injection} {category}"
             enforcer = RecordingEnforcer({prompt: EnforcementOutcome.SANITIZED})
             output = handle_event(
-                "codex",
                 {"hook_event_name": "UserPromptSubmit", "prompt": prompt},
                 enforcer_factory=_factory(enforcer),
             )
@@ -82,6 +55,7 @@ def test_injection_language_does_not_bypass_user_prompt_enforcement() -> None:
             assert output == {
                 "decision": "block",
                 "reason": "SecuRedact detected protected information. The prompt was not sent.",
+                "suppressOriginalPrompt": True,
             }
             assert category not in json.dumps(output)
 
@@ -100,9 +74,8 @@ def test_benign_prompt_is_allowed_and_sensitive_prompt_is_blocked() -> None:
         "turn_id": "turn-test",
         "prompt": "Explain this function.",
     }
-    assert handle_event("codex", codex_event, enforcer_factory=_factory(benign)) is None
+    assert handle_event(codex_event, enforcer_factory=_factory(benign)) is None
     output = handle_event(
-        "claude",
         {"hook_event_name": "UserPromptSubmit", "prompt": "synthetic@example.test"},
         enforcer_factory=_factory(sensitive),
     )
@@ -118,45 +91,51 @@ def test_review_failure_and_malformed_prompts_fail_closed_without_raw_content() 
     failure = RecordingEnforcer({"model absent": EnforcementOutcome.INTERNAL_FAILURE})
 
     assert handle_event(
-        "codex",
         {"hook_event_name": "UserPromptSubmit", "prompt": "synthetic health"},
         enforcer_factory=_factory(review),
     ) == {
         "decision": "block",
         "reason": "SecuRedact requires local human review before this content can be sent.",
+        "suppressOriginalPrompt": True,
     }
     for event in (
         {"hook_event_name": "UserPromptSubmit"},
         {"unexpected": "synthetic@example.test"},
     ):
-        output = handle_event("claude", event, enforcer_factory=_factory(failure))
+        output = handle_event(event, enforcer_factory=_factory(failure))
         assert output is not None
         assert "synthetic@example.test" not in json.dumps(output)
         assert output["decision"] == "block"
 
 
-def test_irrelevant_local_tool_is_untouched_and_outbound_payload_is_rewritten() -> None:
-    enforcer = RecordingEnforcer({"synthetic@example.test": EnforcementOutcome.SANITIZED})
+def test_irrelevant_local_tool_is_untouched_and_outbound_payload_is_rewritten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     assert (
         handle_event(
-            "codex",
             {
                 "hook_event_name": "PreToolUse",
                 "tool_name": "apply_patch",
                 "tool_input": {"text": "x"},
-            },
-            enforcer_factory=_factory(enforcer),
+            }
         )
         is None
     )
+    monkeypatch.setattr(
+        claude_runtime,
+        "inspect_payload",
+        lambda _session, _payload: (
+            EnforcementOutcome.SANITIZED,
+            {"text": "[EMAIL_1]", "count": 1},
+        ),
+    )
     assert handle_event(
-        "claude",
         {
+            "session_id": "session-synthetic",
             "hook_event_name": "PreToolUse",
             "tool_name": "mcp__remote__send",
             "tool_input": {"text": "synthetic@example.test", "count": 1},
-        },
-        enforcer_factory=_factory(enforcer),
+        }
     ) == {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -166,30 +145,283 @@ def test_irrelevant_local_tool_is_untouched_and_outbound_payload_is_rewritten() 
     }
 
 
-def test_outbound_block_review_failure_and_malformed_input_are_denied() -> None:
+def test_outbound_block_review_failure_and_malformed_input_are_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     for outcome in (
         EnforcementOutcome.BLOCKED,
         EnforcementOutcome.REVIEW_REQUIRED,
         EnforcementOutcome.INTERNAL_FAILURE,
     ):
-        enforcer = RecordingEnforcer({"protected": outcome})
+        monkeypatch.setattr(
+            claude_runtime,
+            "inspect_payload",
+            lambda _session, _payload, _outcome=outcome: (_outcome, None),
+        )
         output = handle_event(
-            "codex",
             {
+                "session_id": "session-synthetic",
                 "hook_event_name": "PreToolUse",
                 "tool_name": "mcp__remote__send",
                 "tool_input": {"text": "protected"},
-            },
-            enforcer_factory=_factory(enforcer),
+            }
         )
         assert output is not None
         assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
-    malformed = handle_event(
-        "claude",
-        {"hook_event_name": "PreToolUse", "tool_name": "mcp__remote__send"},
-    )
+    malformed = handle_event({"hook_event_name": "PreToolUse", "tool_name": "mcp__remote__send"})
     assert malformed is not None
     assert malformed["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_pre_tool_use_without_session_id_fails_closed_in_core_handling() -> None:
+    def unexpected_factory() -> PrivacyEnforcer:
+        raise AssertionError("PreToolUse must fail closed, never build a runtime")
+
+    output = handle_event(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__remote__send",
+            "tool_input": {"text": "synthetic@example.test"},
+        },
+        enforcer_factory=unexpected_factory,
+    )
+    assert output == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": FAIL_CLOSED,
+        }
+    }
+
+
+def test_pre_tool_use_with_empty_session_id_fails_closed() -> None:
+    output = handle_event(
+        {
+            "session_id": "",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__remote__send",
+            "tool_input": {"text": "synthetic@example.test"},
+        }
+    )
+    assert output == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": FAIL_CLOSED,
+        }
+    }
+
+
+def test_pre_tool_use_inspects_through_warmed_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, object]] = []
+
+    def fake_inspect_payload(session_id: object, payload: object):
+        calls.append((session_id, payload))
+        return EnforcementOutcome.SANITIZED, {"text": "[EMAIL_1]", "count": 1}
+
+    monkeypatch.setattr(claude_runtime, "inspect_payload", fake_inspect_payload)
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__remote__send",
+            "tool_input": {"text": "synthetic@example.test", "count": 1},
+        }
+    )
+    assert calls == [("session-synthetic", {"text": "synthetic@example.test", "count": 1})]
+    assert output == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": {"text": "[EMAIL_1]", "count": 1},
+        }
+    }
+
+
+def test_pre_tool_use_sanitizes_nested_payload_through_warmed_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        claude_runtime,
+        "inspect_payload",
+        lambda _session, _payload: (
+            EnforcementOutcome.SANITIZED,
+            {"nested": ["safe", {"email": "[EMAIL_1]"}], "count": 1},
+        ),
+    )
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__remote__send",
+            "tool_input": {"nested": ["safe", {"email": "synthetic@example.test"}], "count": 1},
+        }
+    )
+    assert output == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": {"nested": ["safe", {"email": "[EMAIL_1]"}], "count": 1},
+        }
+    }
+
+
+def test_pre_tool_use_with_session_id_never_invokes_runtime_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_factory() -> PrivacyEnforcer:
+        raise AssertionError("PreToolUse must not build a runtime when a session is present")
+
+    monkeypatch.setattr(
+        claude_runtime,
+        "inspect_payload",
+        lambda _session, _payload: (EnforcementOutcome.ALLOW, None),
+    )
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__remote__send",
+            "tool_input": {"text": "safe"},
+        },
+        enforcer_factory=unexpected_factory,
+    )
+    assert output is None
+
+
+def test_pre_tool_use_fails_closed_when_warmed_runtime_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        claude_runtime,
+        "inspect_payload",
+        lambda _session, _payload: (EnforcementOutcome.INTERNAL_FAILURE, None),
+    )
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__remote__send",
+            "tool_input": {"text": "protected"},
+        }
+    )
+    assert output == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": FAIL_CLOSED,
+        }
+    }
+
+
+def test_pre_tool_use_denies_malformed_daemon_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        claude_runtime,
+        "inspect_payload",
+        lambda _session, _payload: ("not-an-outcome", None),
+    )
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__remote__send",
+            "tool_input": {"text": "protected"},
+        }
+    )
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert output["hookSpecificOutput"]["permissionDecisionReason"] == FAIL_CLOSED
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        TimeoutError("daemon timed out"),
+        OSError("connection refused"),
+        ValueError("malformed payload"),
+        RuntimeError("unexpected runtime failure"),
+    ],
+)
+def test_pre_tool_use_denies_when_daemon_client_raises(
+    monkeypatch: pytest.MonkeyPatch, raised: Exception
+) -> None:
+    def raise_exception(_session: object, _payload: object):
+        raise raised
+
+    monkeypatch.setattr(claude_runtime, "inspect_payload", raise_exception)
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__remote__send",
+            "tool_input": {"text": "protected"},
+        }
+    )
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert output["hookSpecificOutput"]["permissionDecisionReason"] == FAIL_CLOSED
+
+
+def test_pre_tool_use_runtime_request_timeout_is_bounded() -> None:
+    assert 0 < claude_runtime._DEFAULT_REQUEST_TIMEOUT_SECONDS <= 30
+
+
+def test_cli_pre_tool_use_routes_through_warmed_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        claude_runtime,
+        "inspect_payload",
+        lambda _session, _payload: (EnforcementOutcome.SANITIZED, {"text": "[EMAIL_1]"}),
+    )
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "session_id": "session-synthetic",
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "mcp__remote__send",
+                    "tool_input": {"text": "synthetic@example.test"},
+                }
+            )
+        ),
+    )
+    stdout = io.StringIO()
+    with pytest.MonkeyPatch.context() as isolated:
+        isolated.setattr(sys, "stdout", stdout)
+        assert provider_hook.main([]) == 0
+    assert json.loads(stdout.getvalue())["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+def test_cli_pre_tool_use_without_session_id_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "mcp__remote__send",
+                    "tool_input": {"text": "synthetic@example.test"},
+                }
+            )
+        ),
+    )
+    stdout = io.StringIO()
+    with pytest.MonkeyPatch.context() as isolated:
+        isolated.setattr(sys, "stdout", stdout)
+        assert provider_hook.main([]) == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert payload["hookSpecificOutput"]["permissionDecisionReason"] == FAIL_CLOSED
 
 
 def test_adapter_recursively_preserves_non_sensitive_payload_structure() -> None:
@@ -204,118 +436,3 @@ def test_adapter_recursively_preserves_non_sensitive_payload_structure() -> None
     )
     assert result.outcome == EnforcementOutcome.SANITIZED
     assert payload == {"nested": ["safe", {"email": "[EMAIL_1]"}], "count": 1}
-
-
-@requires_codex_plugin
-def test_codex_wrapper_keeps_allow_stdout_empty_and_receipt_prompt_free(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    wrapper = _load_codex_prompt_wrapper()
-    marker_root = tmp_path / "plugin-data"
-    prompt = "UNIQUE_SYNTHETIC_PROMPT_MUST_NOT_APPEAR_IN_RECEIPTS"
-    seen_event: object | None = None
-
-    def fake_handle_event(_provider: str, event: object, *, diagnostic_observer=None):
-        nonlocal seen_event
-        seen_event = event
-        print("unexpected dependency stdout")
-        if diagnostic_observer is not None:
-            diagnostic_observer(EnforcementOutcome.ALLOW)
-        return None
-
-    monkeypatch.setattr(wrapper, "_load_handle_event", lambda: fake_handle_event)
-    monkeypatch.setenv("PLUGIN_DATA", str(marker_root))
-    monkeypatch.setenv("PLUGIN_ROOT", str(tmp_path / "plugin-root"))
-    monkeypatch.setattr(
-        sys,
-        "stdin",
-        io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": prompt})),
-    )
-    stdout = io.StringIO()
-    with pytest.MonkeyPatch.context() as isolated:
-        isolated.setattr(sys, "stdout", stdout)
-        assert wrapper._run() == 0
-
-    assert seen_event is not None
-    assert stdout.getvalue() == ""
-    marker = marker_root / "user-prompt-submit.marker"
-    receipt_text = marker.read_text(encoding="utf-8")
-    assert prompt not in receipt_text
-    receipts = [json.loads(line) for line in receipt_text.splitlines()]
-    assert receipts[-1] == {
-        "event": "UserPromptSubmit",
-        "marker": "SECUREDACT_USER_PROMPT_SUBMIT_EXECUTED",
-        "timestamp_utc": receipts[-1]["timestamp_utc"],
-        "stage": "complete",
-        "enforcement_outcome": "allow",
-        "stdout_emitted": False,
-        "stdout_payload_type": "none",
-        "captured_stdout_bytes": len(b"unexpected dependency stdout\n"),
-        "captured_stderr_bytes": 0,
-        "exit_code": 0,
-    }
-
-
-@requires_codex_plugin
-def test_codex_wrapper_uses_temp_fallback_and_emits_only_block_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    wrapper = _load_codex_prompt_wrapper()
-
-    def fake_handle_event(_provider: str, _event: object, *, diagnostic_observer=None):
-        if diagnostic_observer is not None:
-            diagnostic_observer(EnforcementOutcome.BLOCKED)
-        return {"decision": "block", "reason": "SecuRedact blocked this prompt."}
-
-    monkeypatch.setattr(wrapper, "_load_handle_event", lambda: fake_handle_event)
-    monkeypatch.delenv("PLUGIN_DATA", raising=False)
-    monkeypatch.setattr(wrapper.tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(
-        sys,
-        "stdin",
-        io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": "synthetic"})),
-    )
-    stdout = io.StringIO()
-    with pytest.MonkeyPatch.context() as isolated:
-        isolated.setattr(sys, "stdout", stdout)
-        assert wrapper._run() == 0
-
-    assert json.loads(stdout.getvalue()) == {
-        "decision": "block",
-        "reason": "SecuRedact blocked this prompt.",
-    }
-    receipts = [
-        json.loads(line)
-        for line in (tmp_path / "securedact-codex-hook.marker")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
-    assert receipts[-1]["enforcement_outcome"] == "blocked"
-    assert receipts[-1]["stdout_emitted"] is True
-    assert receipts[-1]["stdout_payload_type"] == "json_object"
-    assert receipts[-1]["exit_code"] == 0
-
-
-@requires_codex_plugin
-def test_codex_wrapper_malformed_input_fails_closed_without_persisting_input(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    wrapper = _load_codex_prompt_wrapper()
-    marker_root = tmp_path / "plugin-data"
-    malformed_input = '{"prompt":"UNIQUE_SYNTHETIC_MALFORMED_VALUE"'
-    monkeypatch.setenv("PLUGIN_DATA", str(marker_root))
-    monkeypatch.setattr(sys, "stdin", io.StringIO(malformed_input))
-    stdout = io.StringIO()
-    with pytest.MonkeyPatch.context() as isolated:
-        isolated.setattr(sys, "stdout", stdout)
-        assert wrapper._run() == 0
-
-    assert json.loads(stdout.getvalue()) == {
-        "decision": "block",
-        "reason": "SecuRedact could not validate this protected path, so it was not sent.",
-    }
-    receipt_text = (marker_root / "user-prompt-submit.marker").read_text(encoding="utf-8")
-    assert "UNIQUE_SYNTHETIC_MALFORMED_VALUE" not in receipt_text
-    assert "JSONDecodeError" in receipt_text
-    assert '"enforcement_outcome":"internal_failure"' in receipt_text
-    assert '"exit_code":0' in receipt_text

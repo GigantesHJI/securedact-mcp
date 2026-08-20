@@ -8,7 +8,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.validate_repo import tracked_candidates, validate_repository  # noqa: E402
+from scripts.validate_repo import (  # noqa: E402
+    MCP_REGISTRY_PACKAGE_IDENTIFIER,
+    MCP_REGISTRY_SERVER_NAME,
+    tracked_candidates,
+    validate_registry_metadata,
+    validate_repository,
+)
 
 
 def test_repository_is_valid() -> None:
@@ -108,3 +114,65 @@ def test_normal_model_installer_has_no_shell_or_cli_downloader_dependency() -> N
     assert "flair" in ml_dependencies
     assert "torch" in ml_dependencies
     assert "git-xet" not in ml_dependencies
+
+
+def test_server_json_registry_metadata_matches_package() -> None:
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        pyproject = tomllib.load(handle)
+    server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    package = server["packages"][0]
+
+    assert server["name"] == MCP_REGISTRY_SERVER_NAME
+    assert server["version"] == pyproject["project"]["version"]
+    assert package["registryType"] == "pypi"
+    assert package["identifier"] == MCP_REGISTRY_PACKAGE_IDENTIFIER
+    assert package["version"] == pyproject["project"]["version"]
+    assert package["transport"] == {"type": "stdio"}
+
+
+def test_readme_contains_registry_ownership_marker() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    marker = f"<!-- mcp-name: {MCP_REGISTRY_SERVER_NAME} -->"
+    assert marker in readme
+
+
+def _registry_fixture(root: Path, *, version: str, marker: bool) -> None:
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "securedact-mcp"\nversion = "0.2.1"\n',
+        encoding="utf-8",
+    )
+    readme = "<!-- mcp-name: io.github.GigantesHJI/securedact-mcp -->\n" if marker else ""
+    (root / "README.md").write_text(readme, encoding="utf-8")
+    (root / "server.json").write_text(
+        json.dumps(
+            {
+                "name": "io.github.GigantesHJI/securedact-mcp",
+                "version": version,
+                "packages": [
+                    {
+                        "registryType": "pypi",
+                        "identifier": "securedact-mcp",
+                        "version": version,
+                        "transport": {"type": "stdio"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_registry_version_drift_is_rejected(tmp_path: Path) -> None:
+    _registry_fixture(tmp_path, version="0.2.0", marker=True)
+
+    errors = validate_registry_metadata(tmp_path)
+
+    assert any("version must match" in error for error in errors)
+
+
+def test_registry_ownership_marker_drift_is_rejected(tmp_path: Path) -> None:
+    _registry_fixture(tmp_path, version="0.2.1", marker=False)
+
+    errors = validate_registry_metadata(tmp_path)
+
+    assert any("ownership marker" in error for error in errors)

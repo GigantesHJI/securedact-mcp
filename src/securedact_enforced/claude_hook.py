@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     event = _read_event()
     if not isinstance(event, dict):
         if args.event == "user-prompt-submit":
-            _emit(prompt_block("claude", FAIL_CLOSED))
+            _emit(prompt_block(FAIL_CLOSED))
         return 0
     session_id = event.get("session_id")
     started = time.monotonic()

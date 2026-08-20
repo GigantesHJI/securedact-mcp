@@ -26,6 +26,7 @@ def _copy_release_records(destination: Path) -> None:
         Path("SECURITY.md"),
         Path("pyproject.toml"),
         Path(MODEL_ASSET_REVIEW_PATH),
+        Path("server.json"),
     ):
         target = destination / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -70,6 +71,16 @@ def test_model_review_must_preserve_nonredistribution_decision(tmp_path: Path) -
     review_path.write_text(json.dumps(review), encoding="utf-8")
 
     assert unresolved_release_blockers(tmp_path) == ["model_weight_license_review"]
+
+
+def test_registry_metadata_must_match_release_version(tmp_path: Path) -> None:
+    _copy_release_records(tmp_path)
+    server_path = tmp_path / "server.json"
+    server = json.loads(server_path.read_text(encoding="utf-8"))
+    server["version"] = "9.9.9"
+    server_path.write_text(json.dumps(server), encoding="utf-8")
+
+    assert unresolved_release_blockers(tmp_path) == ["registry_metadata"]
 
 
 def test_release_metadata_records_artifact_lock_corpus_and_model_provenance(

@@ -524,7 +524,7 @@ class _RuntimeRequestHandler(socketserver.BaseRequestHandler):
         try:
             decision = server.decide(prompt)
         except Exception:
-            decision = prompt_block("claude", FAIL_CLOSED)
+            decision = prompt_block(FAIL_CLOSED)
         _send_payload(self.request, server.response(ok=True, response=decision))
 
 
@@ -543,7 +543,6 @@ def _serve(
 
         def decide(prompt: str) -> dict[str, object] | None:
             return handle_event(
-                "claude",
                 {"hook_event_name": "UserPromptSubmit", "prompt": prompt},
                 enforcer_factory=lambda: enforcer,
             )
@@ -934,18 +933,18 @@ def inspect_prompt(
     state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
     digest = _session_digest(session_id)
     if state_path is None or digest is None or not isinstance(prompt, str):
-        return prompt_block("claude", FAIL_CLOSED)
+        return prompt_block(FAIL_CLOSED)
     state = _load_state(state_path, digest)
     if state is None:
-        return prompt_block("claude", FAIL_CLOSED)
+        return prompt_block(FAIL_CLOSED)
     response = _request(state, {"operation": "inspect_prompt", "prompt": prompt}, timeout_seconds)
     if response is None or response.get("ok") is not True:
-        return prompt_block("claude", FAIL_CLOSED)
+        return prompt_block(FAIL_CLOSED)
     decision = response.get("response")
     if decision is None:
         return None
     if not isinstance(decision, dict):
-        return prompt_block("claude", FAIL_CLOSED)
+        return prompt_block(FAIL_CLOSED)
     return decision
 
 

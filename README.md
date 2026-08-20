@@ -1,5 +1,7 @@
 # Securedact MCP
 
+<!-- mcp-name: io.github.GigantesHJI/securedact-mcp -->
+
 Securedact MCP is an Apache-2.0 local MCP server and reusable Python privacy
 engine. It detects sensitive text, applies versioned policies, redacts locally,
 and validates residual output before marking sanitized content approved.

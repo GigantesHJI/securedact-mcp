@@ -8,6 +8,34 @@ public server release.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-20
+
+### Added
+
+- Official MCP Registry readiness: root-level `server.json` declaring the
+  `securedact-mcp` PyPI package with stdio transport, plus the PyPI ownership
+  marker (`mcp-name`) in the README. No MCP tool, privacy, detection,
+  restoration, enforcement, or policy semantics changed.
+- Repository and release validation now cross-check the registry metadata
+  (`server.json` name/version) and the README ownership marker against the
+  package version so they cannot drift.
+
+### Changed
+
+- Claude Code enforced `PreToolUse` now asks the warmed per-session SecuRedact
+  runtime over the authenticated loopback protocol instead of building a model
+  runtime per outbound tool call; it fails closed while that runtime is
+  unavailable or warming.
+- Aligned enforced-mode documentation, packaging, and tests with the shipped
+  Claude Code and Gemini CLI integrations. Removed the unshipped Codex enforced
+  plugin claims, dead Codex-only CLI/provider paths, and stale generated Codex
+  artifacts. Documented the Gemini `BeforeAgent`/`BeforeModel`/`BeforeTool`
+  behavior, model-bound rewriting, and the broader `BeforeTool` matcher.
+- Bumped the Claude Code enforced plugin and marketplace artifact version from
+  `0.2.0` to `0.2.1` because the shipped hook resources changed. The Gemini
+  extension stays at `0.2.0` because its shipped behavior and resources are
+  unchanged.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .app_paths import SecuredactPaths
 
 SUPPORTED_MANIFEST_SCHEMA = 1
-DEFAULT_APP_VERSION = "0.2.1"
+DEFAULT_APP_VERSION = "0.3.0"
 DEFAULT_MAX_PACK_BYTES = 6 * 1024 * 1024 * 1024
 DEFAULT_MAX_FILE_COUNT = 2_000
 MAX_MANIFEST_BYTES = 1_000_000

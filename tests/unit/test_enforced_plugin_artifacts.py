@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 GEMINI_EXTENSION_NAME = "securedact-enforced"
-GEMINI_EXTENSION_VERSION = "0.2.1"
+GEMINI_EXTENSION_VERSION = "0.3.0"
 GEMINI_HOOK_EVENTS = {"SessionStart", "SessionEnd", "BeforeAgent", "BeforeModel", "BeforeTool"}
 GEMINI_INTERCEPTION_TIMEOUT_MS = 20000
 
@@ -82,7 +82,7 @@ def test_claude_marketplace_references_the_self_contained_plugin() -> None:
             "description": "Local privacy enforcement for Claude Code. Checks prompts before "
             "model processing and blocks or requires review when SecuRedact detects "
             "protected information.",
-            "version": "0.2.1",
+            "version": "0.3.0",
             "author": {"name": "SecuRedact", "url": "https://www.securedact.com"},
             "homepage": "https://github.com/GigantesHJI/securedact-mcp",
             "repository": "https://github.com/GigantesHJI/securedact-mcp",
@@ -167,7 +167,7 @@ def test_claude_plugin_and_marketplace_metadata_is_complete() -> None:
     plugin_root = ROOT / "integrations" / "claude-code-enforced" / "securedact-enforced"
 
     assert plugin["name"] == "securedact-enforced"
-    assert plugin["version"] == "0.2.1"
+    assert plugin["version"] == "0.3.0"
     assert plugin["homepage"] == "https://github.com/GigantesHJI/securedact-mcp"
     assert plugin["repository"] == "https://github.com/GigantesHJI/securedact-mcp"
     assert plugin["author"]["url"] == "https://www.securedact.com"

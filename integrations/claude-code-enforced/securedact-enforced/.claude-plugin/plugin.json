@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "securedact-enforced",
   "displayName": "SecuRedact Enforced",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Local privacy enforcement for Claude Code. Checks prompts before model processing and blocks or requires review when SecuRedact detects protected information.",
   "author": {
     "name": "SecuRedact",

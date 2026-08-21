@@ -6,21 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version 0.1.0 was an unpublished release attempt. Version 0.1.1 is the first
 public server release.
 
-## [Unreleased]
+## [0.3.0] - 2026-08-21
 
 ### Added
 
-- Root-level `gemini-extension.json` and root `hooks/hooks.json` so the
-  repository is itself a Gemini CLI extension root for gallery discovery.
+- Improved structured GDPR Article 9 detection. Structured field-value detection
+  now correctly extracts the sensitive value instead of the field label.
+- Claude Code marketplace preparation and Gemini CLI gallery/discovery
+  preparation added since v0.2.1 (root-level `gemini-extension.json` and
+  `hooks/hooks.json`, plus the Claude marketplace manifest).
 
 ### Changed
 
-- Aligned the Gemini extension artifact `version` to `0.2.1` across the
+- Structured Article 9 misses reduced from 94 to 0 on the benchmark.
+- Exact Article 9 F1 improved from 20.29% to 31.30%; exact precision from
+  57.94% to 73.90%; exact recall from 12.30% to 19.85%.
+- English and Dutch exact F1 each improved by roughly 11 percentage points.
+- No increase in the hard-negative false-positive rate.
+- Aligned the Gemini extension artifact `version` to `0.3.0` across the
   repository-root, `integrations/`, and wheel `setup_assets/gemini` copies; the
   three copies are byte-identical and a unit test enforces that parity.
-
-No detection, redaction, policy, enforcement, fail-closed, hook command, or MCP
-behavior changed. The Gemini manifest declares no MCP server.
 
 ## [0.2.1] - 2026-08-20
 

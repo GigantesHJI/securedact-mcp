@@ -370,20 +370,15 @@ class ContextualPrivacyDetector:
             )
 
             for category, concepts in self.categories.items():
-                concept_matches = [
-                    (
-                        concept,
-                        re.search(
-                            rf"(?<!\w){re.escape(concept)}(?!\w)",
-                            sentence,
-                            re.IGNORECASE,
-                        ),
+                concept_matches: list[tuple[str, re.Match[str]]] = []
+                for concept in concepts:
+                    concept_match = re.search(
+                        rf"(?<!\w){re.escape(concept)}(?!\w)",
+                        sentence,
+                        re.IGNORECASE,
                     )
-                    for concept in concepts
-                ]
-                concept_matches = [
-                    (concept, match) for concept, match in concept_matches if match is not None
-                ]
+                    if concept_match is not None:
+                        concept_matches.append((concept, concept_match))
                 if not concept_matches:
                     continue
 

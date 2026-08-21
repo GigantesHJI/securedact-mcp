@@ -23,6 +23,53 @@ from .regex_detector import LABEL_RULES
 
 LEXICON_PATH = Path(__file__).with_name("lexicons") / "special_categories.v1.json"
 
+# Separators that bind a field label to its value.
+_SEP_RE = r"(?:[:#=]|-)"
+
+# Optional generic lead-in verbs that may precede a field label in a record
+# (e.g. "recorded ethnicity:", "vermeld etniciteit:"). These are language-general
+# phrasing patterns, not benchmark phrases.
+_LEAD_VERBS_EN = (
+    "recorded",
+    "noted",
+    "stated",
+    "documented",
+    "reported",
+    "indicated",
+    "listed",
+    "specified",
+    "provided",
+    "notified",
+    "confirmed",
+    "registered",
+)
+_LEAD_VERBS_NL = (
+    "vermeld",
+    "veld",
+    "opgegeven",
+    "genoteerd",
+    "geregistreerd",
+    "vastgelegd",
+    "aangegeven",
+    "ingevuld",
+    "genoemd",
+)
+LEAD_VERBS = _LEAD_VERBS_EN + _LEAD_VERBS_NL
+
+# Non-Article-9 form headers that may follow an Article-9 value; used only to
+# bound value spans (stop the value at the next field) and to reject a value
+# that is itself a bare field header.
+NON_SPECIAL_FIELD_HEADERS = (
+    "name",
+    "naam",
+    "nationality",
+    "nationaliteit",
+    "occupation",
+    "beroep",
+    "employer",
+    "werkgever",
+)
+
 NAME_WORD = (
     r"(?:[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ]+(?:['’.-][A-Za-zÀ-ÖØ-öø-ÿ]+)*"
     r"|[A-ZÀ-ÖØ-Þ](?:['’.-][A-Za-zÀ-ÖØ-öø-ÿ]+)+"
@@ -107,6 +154,8 @@ def _load_lexicon(path: Path = LEXICON_PATH) -> dict[str, Any]:
         raise ValueError("Unsupported special-category lexicon schema")
     if not isinstance(data.get("categories"), dict):
         raise ValueError("Special-category lexicon has no categories")
+    if "field_labels" in data and not isinstance(data["field_labels"], dict):
+        raise ValueError("Special-category lexicon field_labels must be an object")
     return cast(dict[str, Any], data)
 
 
@@ -128,12 +177,78 @@ class ContextualPrivacyDetector:
             EntityType(key): tuple(sorted(values, key=len, reverse=True))
             for key, values in data["categories"].items()
         }
+        # Field-label vocabulary: a recognised Article-9 field header (e.g.
+        # "religion:", "etniciteit:") maps to the category it discloses. A bare
+        # header is never itself a sensitive value; the value is the text that
+        # follows the separator. This cleanly separates category-name tokens from
+        # actual sensitive value concepts.
+        self.field_labels: dict[str, EntityType] = {
+            label.casefold(): EntityType(category)
+            for label, category in (data.get("field_labels") or {}).items()
+        }
+        self.lead_verbs = LEAD_VERBS
+        # Headers that terminate a value span (next field) or, if they are the
+        # whole value, cause the field to be treated as empty.
+        self._value_stop_labels: set[str] = (
+            set(self.field_labels.keys())
+            | {label.casefold() for rule in LABEL_RULES for label in rule.labels}
+            | {header.casefold() for header in NON_SPECIAL_FIELD_HEADERS}
+        )
+        self._field_patterns = self._compile_field_patterns()
+        self._next_field_re = re.compile(
+            r"(?:"
+            + "|".join(
+                re.escape(label) for label in sorted(self._value_stop_labels, key=len, reverse=True)
+            )
+            + r")\s*"
+            + _SEP_RE,
+            re.IGNORECASE,
+        )
+        # A value continues only until the next *any* field header
+        # (``Label:``/``Label =``), not just a recognised Article-9 header. Form
+        # records interleave Article-9 fields with generic headers such as
+        # ``Case:``/``Zaak:``/``Citizen:``; otherwise the value would run into the
+        # following field (normalization also collapses the source newline that
+        # used to bound it).
+        # A value continues only until the next *any* single-word field header
+        # (``Label:``/``Label =``), not just a recognised Article-9 header. Form
+        # records interleave Article-9 fields with generic single-word headers
+        # such as ``Case:``/``Zaak:``/``Citizen:``; otherwise the value would run
+        # into the following field (normalization also collapses the source
+        # newline that used to bound it). Multi-word known headers are covered by
+        # ``_next_field_re``. The pattern is deliberately single-word so a value
+        # word cannot be paired with a later colon and consumed. A hyphen is NOT a
+        # boundary separator here: values such as ``Turkish-Dutch`` must keep their
+        # internal hyphen (the hyphen separator only applies between a label and its
+        # value in ``_SEP_RE``).
+        self._value_bound_re = re.compile(
+            r"\b[A-Za-zÀ-ÖØ-öø-ÿ]+(?:-[A-Za-zÀ-ÖØ-öø-ÿ]+)*\s*[:#=]",
+            re.IGNORECASE,
+        )
         self.relations = tuple(sorted(data["relations"], key=len, reverse=True))
         self.general_markers = tuple(
             marker.casefold() for marker in data["general_discussion_markers"]
         )
         relation_pattern = "|".join(re.escape(value) for value in self.relations)
         self._relation_pattern = re.compile(rf"\b(?:{relation_pattern})\b", re.IGNORECASE)
+
+    def _compile_field_patterns(self) -> list[tuple[re.Pattern[str], EntityType]]:
+        patterns: list[tuple[re.Pattern[str], EntityType]] = []
+        for label, category in sorted(
+            self.field_labels.items(), key=lambda kv: len(kv[0]), reverse=True
+        ):
+            pattern = re.compile(
+                r"(?:(?:"
+                + "|".join(re.escape(verb) for verb in self.lead_verbs)
+                + r")\s+)?"
+                + re.escape(label)
+                + r"\s*"
+                + _SEP_RE
+                + r"\s*",
+                re.IGNORECASE,
+            )
+            patterns.append((pattern, category))
+        return patterns
 
     def detect(self, text: str) -> list[Detection]:
         detections, _ = self._analyze(text)
@@ -196,6 +311,12 @@ class ContextualPrivacyDetector:
                 precedence=20,
             )
             known_people.append(person)
+
+        # Pre-compute structured-field value spans so the per-category loop never
+        # also emits a generic value-concept match that falls inside an already
+        # extracted structured value (that would double-count the same disclosure).
+        struct_detections, struct_assertions = self._extract_structured_fields(text)
+        struct_spans = {(detection.start, detection.end) for detection in struct_detections}
 
         for sentence_start, sentence_end, sentence in self._sentences(text):
             lowered = sentence.casefold()
@@ -265,6 +386,34 @@ class ContextualPrivacyDetector:
                 ]
                 if not concept_matches:
                     continue
+
+                # A category-name token that appears in field-header position
+                # (immediately followed by a value separator) is not itself the
+                # sensitive value; it is a form label. The dedicated structured
+                # field extraction emits the adjacent value instead, so we must
+                # not also emit the bare label here (that would be the FP-A class
+                # of errors: emitting "religion" while missing "Jewish").
+                filtered_concepts = [
+                    (concept, match)
+                    for concept, match in concept_matches
+                    if not self._is_field_label_position(sentence, match)
+                ]
+                if not filtered_concepts:
+                    continue
+                # Skip value concepts that are already covered by a structured-field
+                # value span to avoid duplicate findings for the same disclosure.
+                filtered_concepts = [
+                    (concept, match)
+                    for concept, match in filtered_concepts
+                    if not self._span_contained_in(
+                        sentence_start + match.start(),
+                        sentence_start + match.end(),
+                        struct_spans,
+                    )
+                ]
+                if not filtered_concepts:
+                    continue
+                concept_matches = filtered_concepts
 
                 # Prefer the actual special-category identifier over a nearby
                 # descriptive label. This avoids replacing only "DNA profile"
@@ -402,6 +551,12 @@ class ContextualPrivacyDetector:
 
             detections.extend(self._medical_findings(text, sentence_start, sentence))
 
+        # Structured Article-9 fields were pre-computed at the start of _analyze_view;
+        # merge their detections and assertions now (after the sentence loop so any
+        # person-linking bookkeeping above has settled).
+        detections.extend(struct_detections)
+        assertions.extend(struct_assertions)
+
         # Only expose person candidates that participate in a contextual assertion.
         linked_ids = {
             subject_id
@@ -411,6 +566,128 @@ class ContextualPrivacyDetector:
         } | relationship_person_ids
         detections.extend(person for person in known_people if person.id in linked_ids)
         return self._deduplicate(detections), self._deduplicate_assertions(assertions)
+
+    def _is_field_label_position(self, sentence: str, match: re.Match[str]) -> bool:
+        """True when a matched category-name token is acting as a field header.
+
+        A header is a label immediately followed by a value separator (``:``,
+        ``=``, ``#`` or ``-``). In that position the token names the field rather
+        than being the sensitive value, so it must not be emitted as a finding.
+        """
+
+        token = sentence[match.start() : match.end()].casefold()
+        if token not in self.field_labels:
+            return False
+        after = sentence[match.end() :]
+        return bool(re.match(r"\s*" + _SEP_RE, after))
+
+    @staticmethod
+    def _span_contained_in(start: int, end: int, spans: set[tuple[int, int]]) -> bool:
+        """True when [start, end) lies entirely within one of the given spans."""
+
+        return any(s_start <= start and end <= s_end for s_start, s_end in spans)
+
+    def _extract_structured_fields(
+        self, text: str
+    ) -> tuple[list[Detection], list[SensitiveAssertion]]:
+        """Emit the value spans of recognised Article-9 field headers.
+
+        For each ``Label<sep>Value`` (or ``Label:<newline>Value``) occurrence the
+        value is extracted and emitted as the mapped category. The header token is
+        never emitted. The value is bounded by the next field header, a newline,
+        or trailing punctuation so a following form field is never swallowed.
+        """
+
+        detections: list[Detection] = []
+        assertions: list[SensitiveAssertion] = []
+        for pattern, category in self._field_patterns:
+            for match in pattern.finditer(text):
+                value_span = self._field_value_span(text, match.end())
+                if value_span is None:
+                    continue
+                start, end = value_span
+                value_text = text[start:end]
+                detections.append(
+                    Detection(
+                        start=start,
+                        end=end,
+                        text=value_text,
+                        entity_type=category,
+                        confidence=0.90,
+                        source=DetectionSource.CONTEXTUAL,
+                        rule=f"special_category_field_value_v{self.schema_version}",
+                        precedence=55,
+                        rationale_code="labelled_special_category_field",
+                    )
+                )
+                assertions.append(
+                    SensitiveAssertion(
+                        subject_entity_ids=["record-subject"],
+                        category=category,
+                        full_span_start=start,
+                        full_span_end=end,
+                        sentence_start=start,
+                        sentence_end=end,
+                        evidence_spans=[TextSpan(start=start, end=end, text=value_text)],
+                        confidence=0.90,
+                        detector=self.name,
+                        requires_review=True,
+                        rationale_code="labelled_special_category_field",
+                        negated=bool(NEGATION_PATTERN.search(value_text)),
+                        indirect_disclosure_risk=self.assess_indirect_disclosure(
+                            value_text, category
+                        ),
+                    )
+                )
+        return detections, assertions
+
+    def _field_value_span(self, text: str, sep_end: int) -> tuple[int, int] | None:
+        """Return the (start, end) of the value following a field separator."""
+
+        rest = text[sep_end:]
+        lead = len(rest) - len(rest.lstrip())
+        body = rest[lead:]
+        if not body.strip():
+            return None
+        newline = body.find("\n")
+        segment = body[:newline] if newline != -1 else body
+        # Bound the value so a following form field or prose clause is never
+        # swallowed. Normalization collapses the source newline, so the boundary
+        # must be located explicitly: stop at the next field header (any
+        # ``Label<sep>`` token) or at the first sentence terminator.
+        cut = len(segment)
+        bound = self._value_bound_re.search(segment)
+        if bound is not None:
+            cut = min(cut, bound.start())
+        known = self._next_field_re.search(segment)
+        if known is not None:
+            cut = min(cut, known.start())
+        # A whitespace-surrounded hyphen starts a new clause/bullet ("Romanian -
+        # Accommodation arranged"), not an intra-value hyphen ("Turkish-Dutch"),
+        # so it bounds the value too.
+        dash = re.search(r"\s-", segment)
+        if dash is not None:
+            cut = min(cut, dash.start())
+        terminator = re.search(r"[.?!]", segment)
+        if terminator is not None:
+            # A period glued to a single uppercase letter is an abbreviation
+            # (e.g. "St.", "J."), not a sentence boundary — keep scanning.
+            prefix = segment[: terminator.start()].rstrip()
+            if not (len(prefix) >= 2 and prefix[-2] == " " and prefix[-1].isupper()):
+                cut = min(cut, terminator.start())
+        segment = segment[:cut]
+        value = segment.rstrip(" \t\r\n;|.,:=-!?'\"[]")
+        if not value.strip():
+            return None
+        # Reject a value that is itself a bare field header (e.g. an empty
+        # "Religion: Nationality" sequence where Nationality carries no value).
+        if value.casefold() in self._value_stop_labels:
+            return None
+        start = sep_end + lead
+        end = start + len(value)
+        if end <= start:
+            return None
+        return start, end
 
     @staticmethod
     def _map_detection(view: NormalizedText, detection: Detection) -> Detection:

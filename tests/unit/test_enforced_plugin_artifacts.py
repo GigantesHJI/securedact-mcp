@@ -8,8 +8,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 GEMINI_EXTENSION_NAME = "securedact-enforced"
-GEMINI_EXTENSION_VERSION = "0.3.0"
-GEMINI_HOOK_EVENTS = {"SessionStart", "SessionEnd", "BeforeAgent", "BeforeModel", "BeforeTool"}
+GEMINI_EXTENSION_VERSION = "0.4.0"
+GEMINI_HOOK_EVENTS = {
+    "SessionStart",
+    "SessionEnd",
+    "BeforeAgent",
+    "BeforeModel",
+    "BeforeTool",
+    "AfterTool",
+}
 GEMINI_INTERCEPTION_TIMEOUT_MS = 20000
 
 
@@ -29,12 +36,19 @@ def test_claude_plugin_has_portable_hook_configuration() -> None:
     assert (plugin_root / "README.md").is_file()
     assert (plugin_root / "skills" / "securedact-enforced" / "SKILL.md").is_file()
     configured = hooks["hooks"]
-    assert set(configured) == {"SessionStart", "UserPromptSubmit", "PreToolUse", "SessionEnd"}
+    assert set(configured) == {
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "SessionEnd",
+    }
     session_start = configured["SessionStart"][0]["hooks"][0]
     prompt = configured["UserPromptSubmit"][0]["hooks"][0]
     session_end = configured["SessionEnd"][0]["hooks"][0]
     tool = configured["PreToolUse"][0]["hooks"][0]
-    for command in (session_start, prompt, session_end, tool):
+    post_tool = configured["PostToolUse"][0]["hooks"][0]
+    for command in (session_start, prompt, session_end, tool, post_tool):
         assert "C:\\Users\\" not in json.dumps(command)
         assert ".." not in json.dumps(command)
     assert session_start["command"] == "python"
@@ -62,6 +76,8 @@ def test_claude_plugin_has_portable_hook_configuration() -> None:
     ]
     assert tool["command"] == "python"
     assert tool["args"] == ["-m", "securedact_enforced.provider_hook"]
+    assert post_tool["command"] == "python"
+    assert post_tool["args"] == ["-m", "securedact_enforced.provider_hook"]
     scripts_directory = plugin_root / "scripts"
     assert not scripts_directory.exists() or not any(scripts_directory.iterdir())
 
@@ -82,7 +98,7 @@ def test_claude_marketplace_references_the_self_contained_plugin() -> None:
             "description": "Local privacy enforcement for Claude Code. Checks prompts before "
             "model processing and blocks or requires review when SecuRedact detects "
             "protected information.",
-            "version": "0.3.0",
+            "version": "0.4.0",
             "author": {"name": "SecuRedact", "url": "https://www.securedact.com"},
             "homepage": "https://github.com/GigantesHJI/securedact-mcp",
             "repository": "https://github.com/GigantesHJI/securedact-mcp",
@@ -167,7 +183,7 @@ def test_claude_plugin_and_marketplace_metadata_is_complete() -> None:
     plugin_root = ROOT / "integrations" / "claude-code-enforced" / "securedact-enforced"
 
     assert plugin["name"] == "securedact-enforced"
-    assert plugin["version"] == "0.3.0"
+    assert plugin["version"] == "0.4.0"
     assert plugin["homepage"] == "https://github.com/GigantesHJI/securedact-mcp"
     assert plugin["repository"] == "https://github.com/GigantesHJI/securedact-mcp"
     assert plugin["author"]["url"] == "https://www.securedact.com"

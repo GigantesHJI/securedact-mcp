@@ -10,7 +10,7 @@ starting the host. `required = true` checks server initialization; it does not
 force every prompt through a tool.
 
 Expected tools are `prepare_for_external_ai`, `analyze_text`, `redact_text`,
-`restore_text`, and `create_safe_copy`.
+`restore_text`, `create_safe_copy`, and `securedact_read_file`.
 
 Persistent workflow instructions should require:
 

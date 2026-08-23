@@ -7,7 +7,7 @@ turn a privacy check into an optional action.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -16,10 +16,12 @@ from securedact_core import (
     PolicyLoadError,
     PrepareOutcome,
     PrepareStatus,
+    PrivacyAction,
     RedactionRequest,
     SecuredactEngine,
     load_policy_registry_from_environment,
 )
+from securedact_core.firewall import FirewallDecision, ToolOperation
 from securedact_mcp.runtime_lifecycle import RuntimeLoadFailure
 from securedact_mcp.server import build_runtime
 
@@ -43,6 +45,7 @@ class EnforcementResult:
     outcome: EnforcementOutcome
     sanitized_text: str | None = None
     prepare_outcome: PrepareOutcome | None = None
+    entity_types: tuple[str, ...] | None = None
 
 
 class PrivacyEnforcer:
@@ -109,6 +112,9 @@ class PrivacyEnforcer:
             result = self._engine.prepare(RedactionRequest(text=text))
         except Exception:
             return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE)
+        entity_types = (
+            tuple(sorted(result.counts.keys())) if getattr(result, "counts", None) else None
+        )
         prepare_outcome = getattr(result, "outcome", None)
         if prepare_outcome is not None:
             try:
@@ -121,7 +127,11 @@ class PrivacyEnforcer:
                 return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE)
             if prepare_outcome == PrepareOutcome.ALLOW:
                 return (
-                    EnforcementResult(EnforcementOutcome.ALLOW, prepare_outcome=prepare_outcome)
+                    EnforcementResult(
+                        EnforcementOutcome.ALLOW,
+                        prepare_outcome=prepare_outcome,
+                        entity_types=entity_types,
+                    )
                     if sanitized == text
                     else EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE)
                 )
@@ -131,6 +141,7 @@ class PrivacyEnforcer:
                         EnforcementOutcome.SANITIZED,
                         sanitized,
                         prepare_outcome,
+                        entity_types=entity_types,
                     )
                     if sanitized != text
                     else EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE)
@@ -139,20 +150,28 @@ class PrivacyEnforcer:
             # Gemini path requires an explicit signed PrepareOutcome.
             if prepare_outcome is None:
                 if sanitized == text:
-                    return EnforcementResult(EnforcementOutcome.ALLOW)
-                return EnforcementResult(EnforcementOutcome.SANITIZED, sanitized)
+                    return EnforcementResult(EnforcementOutcome.ALLOW, entity_types=entity_types)
+                return EnforcementResult(
+                    EnforcementOutcome.SANITIZED, sanitized, entity_types=entity_types
+                )
             return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE)
         if result.status == PrepareStatus.REVIEW_REQUIRED:
             return (
                 EnforcementResult(
-                    EnforcementOutcome.REVIEW_REQUIRED, prepare_outcome=prepare_outcome
+                    EnforcementOutcome.REVIEW_REQUIRED,
+                    prepare_outcome=prepare_outcome,
+                    entity_types=entity_types,
                 )
                 if prepare_outcome in {None, PrepareOutcome.REVIEW_REQUIRED}
                 else EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE)
             )
         if result.status == PrepareStatus.BLOCKED:
             return (
-                EnforcementResult(EnforcementOutcome.BLOCKED, prepare_outcome=prepare_outcome)
+                EnforcementResult(
+                    EnforcementOutcome.BLOCKED,
+                    prepare_outcome=prepare_outcome,
+                    entity_types=entity_types,
+                )
                 if prepare_outcome in {None, PrepareOutcome.BLOCKED}
                 else EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE)
             )
@@ -234,3 +253,83 @@ class PrivacyEnforcer:
                 EnforcementOutcome.ALLOW, prepare_outcome=PrepareOutcome.ALLOW
             ), payload
         return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE), None
+
+
+@dataclass(frozen=True)
+class ToolResultInspection:
+    """Provider-neutral outcome of inspecting one tool result (FW-020).
+
+    The result is the model-bound payload returned by a tool. ``action`` is the
+    safe decision; ``sanitized_result`` carries the structurally-preserved
+    sanitized payload when ``action == SANITIZED``; ``reason_code`` explains a
+    block/hide decision; ``entities`` are the detected entity-type categories
+    (used for metadata-only audit, never raw values).
+    """
+
+    action: EnforcementOutcome
+    sanitized_result: object | None = None
+    reason_code: str | None = None
+    entities: tuple[str, ...] | None = None
+
+
+# An ``inspector`` turns a raw result payload into the daemon-backed enforcement
+# outcome without the provider hook knowing the transport details. It returns
+# ``(outcome, sanitized_payload, entity_types, reason_code)``.
+ToolResultInspector = Callable[
+    [object], tuple[EnforcementOutcome, object | None, tuple[str, ...] | None, str | None]
+]
+
+
+def inspect_tool_result(
+    inspector: ToolResultInspector,
+    *,
+    provider: str,
+    tool_name: str | None,
+    operation: ToolOperation | None,
+    result: object,
+) -> ToolResultInspection:
+    """Centralized, provider-neutral tool-result inspection (FW-020).
+
+    Provider hooks translate their host result schema into a single ``result``
+    payload and supply a daemon-backed ``inspector``. The shared layer never
+    re-implements content scanning; it reports the outcome, the sanitized
+    (structure-preserving) payload, the reason code, and detected entity types.
+
+    A malformed/empty result that cannot be inspected is reported as
+    ``INTERNAL_FAILURE`` so the caller fails closed (hide/block) rather than
+    leaking raw content.
+    """
+
+    try:
+        outcome, sanitized, entities, reason_code = inspector(result)
+        if not isinstance(outcome, EnforcementOutcome):
+            return ToolResultInspection(EnforcementOutcome.INTERNAL_FAILURE)
+        if outcome == EnforcementOutcome.ALLOW:
+            return ToolResultInspection(EnforcementOutcome.ALLOW, entities=entities)
+        if outcome == EnforcementOutcome.SANITIZED:
+            return ToolResultInspection(
+                EnforcementOutcome.SANITIZED,
+                sanitized_result=sanitized,
+                entities=entities,
+            )
+        # BLOCKED / REVIEW_REQUIRED / INTERNAL_FAILURE all mean the raw result
+        # must not reach the model; the provider layer hides or replaces it.
+        return ToolResultInspection(outcome, reason_code=reason_code, entities=entities)
+    except Exception:
+        return ToolResultInspection(EnforcementOutcome.INTERNAL_FAILURE)
+
+
+def firewall_decision_outcome(decision: FirewallDecision) -> EnforcementOutcome:
+    """Map a ``FirewallDecision`` onto a provider-neutral enforcement outcome.
+
+    The ``PrivacyAction`` enum is intentionally unchanged; approval and review
+    requirements are encoded on the ``FirewallDecision`` and surface here as
+    ``REVIEW_REQUIRED`` (a host-deny the user can override), while ``BLOCK``
+    becomes an unoverrideable deny.
+    """
+
+    if decision.action == PrivacyAction.BLOCK:
+        return EnforcementOutcome.BLOCKED
+    if decision.requires_approval or decision.action == PrivacyAction.REVIEW:
+        return EnforcementOutcome.REVIEW_REQUIRED
+    return EnforcementOutcome.ALLOW

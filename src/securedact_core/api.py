@@ -6,12 +6,20 @@ import threading
 from collections import Counter
 from collections.abc import Iterable
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .audit import (
+    AuditEventType,
+    build_audit_event,
+    emit_audit_event,
+    is_secret_entity_type,
+)
 from .detectors.base import Detector
 from .engine import PrivacyEngine, ReviewRequiredError, SendingBlockedError
+from .firewall import MAX_INSPECTION_TEXT_CHARS, FirewallPolicy
 from .models import (
     AnalysisResult,
     FindingDecision,
@@ -23,10 +31,16 @@ from .policies import Policy, PolicyRegistry
 from .policy_loader import PolicyLoadError, load_policy_registry_from_environment
 from .production import build_production_engine
 from .restoration import RestorationSessionError, RestorationVault
+from .safe_read import (
+    DEFAULT_READ_MAX_BYTES,
+    SafeReadError,
+    SafeReadResult,
+    read_file_safely,
+)
 from .taxonomy import SPECIAL_CATEGORY_TYPES
 
 PUBLIC_SCHEMA_VERSION: Literal["1"] = "1"
-DEFAULT_MAX_TEXT_CHARS = 1_000_000
+DEFAULT_MAX_TEXT_CHARS = MAX_INSPECTION_TEXT_CHARS
 
 
 class ResponseMode(StrEnum):
@@ -406,6 +420,147 @@ class SecuredactEngine:
             restored = self.privacy_engine.restore(request.text, mapping)
         mapping.clear()
         return RestorationResult(status=PrepareStatus.OK, restored_text=restored)
+
+    def read_file(
+        self,
+        path: str,
+        *,
+        redaction_policy: str = "strict_external_ai",
+        response_mode: ResponseMode = ResponseMode.MINIMAL,
+        max_bytes: int | None = None,
+        firewall: FirewallPolicy | None = None,
+        allowed_roots: list[str] | None = None,
+    ) -> SafeReadResult:
+        """Safely read a local file and return sanitized text (FW-011/012/013).
+
+        The file path is defended against traversal/symlink/UNC/case tricks and
+        checked against the firewall before any content is read. The surviving
+        text is sanitized through the normal ``prepare`` pipeline so PII and
+        secrets are redacted regardless of the file name.
+
+        Security-relevant outcomes (path blocked, secret detected, PII redacted)
+        also emit privacy-preserving audit events (FW-033). Audit emission can
+        never change the returned result: every emission is best-effort and
+        isolated, so a block/redact stays a block/redact even if auditing fails.
+        """
+
+        safe_filename = Path(path).name
+        captured: dict[str, PrepareResult | None] = {"result": None}
+
+        def redactor(text: str) -> str:
+            request = RedactionRequest(
+                text=text,
+                policy=redaction_policy,
+                response_mode=response_mode,
+            )
+            result = self.prepare(request)
+            captured["result"] = result
+            if result.status != PrepareStatus.OK or result.sanitized_text is None:
+                raise SafeReadError(
+                    "content_blocked",
+                    "SecuRedact refused to return the file content after sanitization",
+                )
+            return result.sanitized_text
+
+        result = read_file_safely(
+            path,
+            redactor=redactor,
+            firewall=firewall,
+            max_bytes=max_bytes if max_bytes is not None else DEFAULT_READ_MAX_BYTES,
+            allowed_roots=allowed_roots,
+        )
+        self._emit_read_audit_events(result, captured["result"], safe_filename)
+        return result
+
+    def _emit_read_audit_events(
+        self,
+        result: SafeReadResult,
+        prepared: PrepareResult | None,
+        safe_filename: str,
+    ) -> None:
+        """Emit metadata-only audit events for a completed safe-read (FW-033)."""
+
+        try:
+            if not result.ok:
+                if result.reason_code == "protected_path_blocked":
+                    emit_audit_event(
+                        build_audit_event(
+                            AuditEventType.FILE_BLOCKED,
+                            action="block",
+                            reason_code="protected_path",
+                            operation="file_read",
+                            source=safe_filename,
+                        )
+                    )
+                elif result.reason_code == "content_blocked" and prepared is not None:
+                    types = tuple(prepared.counts.keys())
+                    secret_types = tuple(t for t in types if is_secret_entity_type(t))
+                    if secret_types:
+                        emit_audit_event(
+                            build_audit_event(
+                                AuditEventType.SECRET_DETECTED,
+                                action="block",
+                                reason_code="content_blocked",
+                                entity_types=secret_types,
+                                count=sum(prepared.counts.get(t, 0) for t in secret_types),
+                                source=safe_filename,
+                                metadata={
+                                    "rule": "unknown_secret"
+                                    if "unknown_secret" in secret_types
+                                    else "credentials",
+                                },
+                            )
+                        )
+                    else:
+                        pii_types = tuple(t for t in types if t not in secret_types)
+                        emit_audit_event(
+                            build_audit_event(
+                                AuditEventType.PII_REDACTED,
+                                action="block",
+                                reason_code="content_blocked",
+                                entity_types=pii_types,
+                                count=sum(prepared.counts.get(t, 0) for t in pii_types),
+                                source=safe_filename,
+                            )
+                        )
+                return
+
+            if prepared is None:
+                return
+            if prepared.outcome in {PrepareOutcome.REDACTED, PrepareOutcome.PSEUDONYMIZED}:
+                types = tuple(prepared.counts.keys())
+                secret_types = tuple(t for t in types if is_secret_entity_type(t))
+                if secret_types:
+                    emit_audit_event(
+                        build_audit_event(
+                            AuditEventType.SECRET_DETECTED,
+                            action="redact",
+                            reason_code="content_redacted",
+                            entity_types=secret_types,
+                            count=sum(prepared.counts.get(t, 0) for t in secret_types),
+                            source=safe_filename,
+                            metadata={
+                                "rule": "unknown_secret"
+                                if "unknown_secret" in secret_types
+                                else "credentials",
+                            },
+                        )
+                    )
+                pii_types = tuple(t for t in types if not is_secret_entity_type(t))
+                if pii_types:
+                    emit_audit_event(
+                        build_audit_event(
+                            AuditEventType.PII_REDACTED,
+                            action="redact",
+                            reason_code="content_redacted",
+                            entity_types=pii_types,
+                            count=sum(prepared.counts.get(t, 0) for t in pii_types),
+                            source=safe_filename,
+                        )
+                    )
+        except Exception:
+            # Audit failure must never weaken enforcement.
+            return
 
     def close(self) -> None:
         self.restoration_vault.clear()

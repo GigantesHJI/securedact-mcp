@@ -96,6 +96,7 @@ class DetectionSource(StrEnum):
     CREDENTIALS = "credentials"
     CONTEXTUAL = "contextual"
     FLAIR = "flair"
+    ML_ARTICLE9 = "ml_article9"
 
 
 class PrivacyAction(StrEnum):

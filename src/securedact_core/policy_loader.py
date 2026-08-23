@@ -11,6 +11,7 @@ import yaml
 from pydantic import ValidationError
 
 from .app_paths import SecuredactPaths
+from .firewall import validate_firewall_policy
 from .models import PrivacyAction
 from .policies import PROFILE_SCHEMA_VERSION, Policy, PolicyRegistry
 from .taxonomy import CRITICAL_TYPES, SPECIAL_CATEGORY_TYPES
@@ -147,6 +148,11 @@ class LocalPolicyLoader:
             or not protected_types.issubset(policy.low_confidence_review_types)
         ):
             raise PolicyLoadError(PolicyLoadErrorCode.INVARIANT_VIOLATION)
+        if policy.firewall is not None:
+            try:
+                validate_firewall_policy(policy.firewall)
+            except ValueError as exc:
+                raise PolicyLoadError(PolicyLoadErrorCode.INVARIANT_VIOLATION) from exc
 
 
 def load_policy_registry_from_environment(

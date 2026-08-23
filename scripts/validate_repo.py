@@ -186,6 +186,7 @@ def tracked_candidates(root: Path) -> list[Path]:
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
+        ".kilo",
         ".tmp",
         ".venv",
         ".verify-venv",
@@ -199,6 +200,8 @@ def tracked_candidates(root: Path) -> list[Path]:
         "model-packs",
         "tmp",
         "temp",
+        "experimental",
+        "mcp-publisher",
     }
     excluded_local_files = {"regex-test.txt"}
     return sorted(
@@ -366,6 +369,7 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
             "`redact_text`",
             "`restore_text`",
             "`create_safe_copy`",
+            "`securedact_read_file`",
         )
         for statement in required_statements:
             if statement not in readme:
@@ -452,6 +456,7 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
             "redact_text",
             "restore_text",
             "create_safe_copy",
+            "securedact_read_file",
         }
         if registered_tools != expected_tools:
             errors.append(

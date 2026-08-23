@@ -101,6 +101,10 @@ temp/
 Thumbs.db
 Desktop.ini
 
+# Local agent tooling and generated publisher artifacts (not part of the repo)
+.kilo/
+mcp-publisher
+
 # PyInstaller output
 *.toc
 warn-*.txt

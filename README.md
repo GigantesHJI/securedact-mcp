@@ -77,6 +77,7 @@ See [ADR 0001](docs/adr/0001-mcp-server-product-boundary.md) and the
 | `redact_text` | Lower-level compatibility operation | Minimal by default; explicit `legacy` mode is sensitive and deprecated |
 | `restore_text` | Consume a local opaque session | Single-use by default; direct mappings require explicit trusted legacy mode |
 | `create_safe_copy` | Write approved `.txt`/`.md` content under one configured root | Returns no mapping or absolute path |
+| `securedact_read_file` | Safely read a local file and return only sanitized text | Blocks protected paths before reading; rejects traversal/symlink/binary; `minimal` by default |
 
 Response modes are `minimal`, `review`, `debug`, and `restore_capable`. Debug is
 disabled unless the process was started with

@@ -3,7 +3,8 @@
     "SessionStart": [{"hooks": [{"name": "securedact-warm", "type": "command", "command": "python -m securedact_enforced.gemini_hook --event SessionStart", "timeout": 5000}]}],
     "BeforeAgent": [{"matcher": "*", "hooks": [{"name": "securedact-before-agent", "type": "command", "command": "python -m securedact_enforced.gemini_hook --event BeforeAgent", "timeout": 20000}]}],
     "BeforeModel": [{"matcher": "*", "hooks": [{"name": "securedact-before-model", "type": "command", "command": "python -m securedact_enforced.gemini_hook --event BeforeModel", "timeout": 20000}]}],
-    "BeforeTool": [{"matcher": "^(mcp_.*|.*(http|web|search|fetch|request|api|connect).*)$", "hooks": [{"name": "securedact-before-tool", "type": "command", "command": "python -m securedact_enforced.gemini_hook --event BeforeTool", "timeout": 20000}]}],
+    "BeforeTool": [{"matcher": "^(mcp_.*|.*(http|web|search|fetch|request|api|connect).*|Read|Write|Edit|MultiEdit|NotebookEdit|Bash|Grep|Glob)$", "hooks": [{"name": "securedact-before-tool", "type": "command", "command": "python -m securedact_enforced.gemini_hook --event BeforeTool", "timeout": 20000}]}],
+    "AfterTool": [{"matcher": "^(mcp_.*|.*(http|web|search|fetch|request|api|connect).*|Read|Write|Edit|MultiEdit|NotebookEdit|Bash|Grep|Glob)$", "hooks": [{"name": "securedact-after-tool", "type": "command", "command": "python -m securedact_enforced.gemini_hook --event AfterTool", "timeout": 25000}]}],
     "SessionEnd": [{"hooks": [{"name": "securedact-stop", "type": "command", "command": "python -m securedact_enforced.gemini_hook --event SessionEnd", "timeout": 5000}]}]
   }
 }

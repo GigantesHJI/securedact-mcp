@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sys
+from pathlib import Path
 
 import pytest
 
+from securedact_core import default_firewall_policy
 from securedact_enforced import claude_runtime, provider_hook
 from securedact_enforced.adapter import EnforcementOutcome, EnforcementResult, PrivacyEnforcer
 from securedact_enforced.provider_hook import handle_event
@@ -111,9 +114,17 @@ def test_review_failure_and_malformed_prompts_fail_closed_without_raw_content() 
 def test_irrelevant_local_tool_is_untouched_and_outbound_payload_is_rewritten(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Unrecognized local tools are now content-inspected (never silently allowed);
+    # benign content is still permitted untouched when the runtime is reachable.
+    monkeypatch.setattr(
+        claude_runtime,
+        "inspect_payload",
+        lambda _session, _payload: (EnforcementOutcome.ALLOW, None),
+    )
     assert (
         handle_event(
             {
+                "session_id": "session-synthetic",
                 "hook_event_name": "PreToolUse",
                 "tool_name": "apply_patch",
                 "tool_input": {"text": "x"},
@@ -436,3 +447,163 @@ def test_adapter_recursively_preserves_non_sensitive_payload_structure() -> None
     )
     assert result.outcome == EnforcementOutcome.SANITIZED
     assert payload == {"nested": ["safe", {"email": "[EMAIL_1]"}], "count": 1}
+
+
+# --- Agent privacy firewall (FW-001 / FW-003 / FW-023 / FW-024 / FW-010) ---
+
+
+def test_claude_hook_matcher_fires_on_native_tools() -> None:
+    root = (
+        Path(__file__).resolve().parents[2]
+        / "integrations"
+        / "claude-code-enforced"
+        / "securedact-enforced"
+        / "hooks"
+        / "hooks.json"
+    )
+    hooks = json.loads(root.read_text(encoding="utf-8"))
+    matcher = hooks["hooks"]["PreToolUse"][0]["matcher"]
+    for tool in ("Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "Grep", "Glob"):
+        assert re.fullmatch(matcher, tool), tool
+    assert re.fullmatch(matcher, "mcp__fs__read_file")
+
+
+def test_protected_outbound_tool_matcher_expands_with_firewall() -> None:
+    assert provider_hook.is_protected_outbound_tool("Read", firewall_enabled=True)
+    assert provider_hook.is_protected_outbound_tool("Bash", firewall_enabled=True)
+    assert not provider_hook.is_protected_outbound_tool("Read")
+    assert not provider_hook.is_protected_outbound_tool("ApplyPatch")
+    assert provider_hook.is_protected_outbound_tool("mcp__remote__send")
+    assert provider_hook.is_protected_outbound_tool("WebFetch")
+
+
+def test_firewall_blocks_sensitive_read_before_execution() -> None:
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": ".env"},
+        },
+        firewall_policy=default_firewall_policy(),
+    )
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_firewall_blocks_ssh_path_before_execution() -> None:
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": ".ssh/id_rsa"},
+        },
+        firewall_policy=default_firewall_policy(),
+    )
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_firewall_allows_normal_read_before_execution() -> None:
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "src/app.py"},
+        },
+        firewall_policy=default_firewall_policy(),
+    )
+    assert output is None
+
+
+def test_firewall_disabled_keeps_legacy_native_tool_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(provider_hook, "load_firewall_policy_from_environment", lambda: None)
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": ".env"},
+        }
+    )
+    assert output is None
+
+
+def test_firewall_unknown_tool_is_content_inspected_not_silently_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def fake_inspect(_session: object, payload: object):
+        calls.append(payload)
+        return EnforcementOutcome.BLOCKED, None
+
+    monkeypatch.setattr(claude_runtime, "inspect_payload", fake_inspect)
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "MysteriousTool",
+            "tool_input": {"file_path": ".env"},
+        },
+        firewall_policy=default_firewall_policy(),
+    )
+    assert calls == [{"file_path": ".env"}]
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_firewall_unknown_tool_benign_input_still_inspected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def fake_inspect(_session: object, payload: object):
+        calls.append(payload)
+        return EnforcementOutcome.ALLOW, None
+
+    monkeypatch.setattr(claude_runtime, "inspect_payload", fake_inspect)
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "MysteriousTool",
+            "tool_input": {"arbitrary": "value"},
+        },
+        firewall_policy=default_firewall_policy(),
+    )
+    assert calls == [{"arbitrary": "value"}]
+    assert output is None
+
+
+def test_firewall_requires_approval_maps_to_claude_deny(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from securedact_core import FirewallPolicy, FirewallRule, ToolOperation
+
+    policy = FirewallPolicy(
+        rules=[
+            FirewallRule(
+                id="approve_scripts",
+                operations=[ToolOperation.FILE_WRITE],
+                extensions=["sh"],
+                action="allow",
+                requires_approval=True,
+            )
+        ]
+    )
+    output = handle_event(
+        {
+            "session_id": "session-synthetic",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "deploy.sh"},
+        },
+        firewall_policy=policy,
+    )
+    assert output is not None
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"

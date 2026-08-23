@@ -27,7 +27,20 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(mcp__.*|WebFetch|WebSearch)$",
+        "matcher": "^(mcp__.*|WebFetch|WebSearch|Read|Write|Edit|MultiEdit|NotebookEdit|Bash|Grep|Glob)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["-m", "securedact_enforced.provider_hook"],
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(mcp__.*|WebFetch|WebSearch|Read|Write|Edit|MultiEdit|NotebookEdit|Bash|Grep|Glob)$",
         "hooks": [
           {
             "type": "command",

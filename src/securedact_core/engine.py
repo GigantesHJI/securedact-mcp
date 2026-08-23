@@ -147,14 +147,21 @@ class PrivacyEngine:
                 detectors = [detector for detector in detectors if not detector.contextual]
                 warnings.append("contextual detector is unavailable")
 
+        seen_special: set[EntityType] = set()
         for detector in detectors:
             try:
-                language_detector = getattr(detector, "detect_for_language", None)
-                detected = (
-                    language_detector(text, language)
-                    if detector.contextual and language_detector is not None
-                    else detector.detect(text)
-                )
+                context_aware = getattr(detector, "detect_with_context", None)
+                if context_aware is not None:
+                    detected = context_aware(
+                        text, {"special_categories": seen_special, "language": language}
+                    )
+                else:
+                    language_detector = getattr(detector, "detect_for_language", None)
+                    detected = (
+                        language_detector(text, language)
+                        if detector.contextual and language_detector is not None
+                        else detector.detect(text)
+                    )
                 assertion_detector = getattr(detector, "detect_assertions", None)
                 if assertion_detector is not None:
                     assertions.extend(assertion_detector(text))
@@ -166,6 +173,11 @@ class PrivacyEngine:
                     warnings.append(warning)
                 continue
             candidates.extend(detected)
+            seen_special |= {
+                entity.entity_type
+                for entity in detected
+                if entity.entity_type in SPECIAL_CATEGORY_TYPES
+            }
 
         if self.require_contextual and not contextual_configured:
             warnings.append("contextual detector is not configured")

@@ -20,6 +20,7 @@ from securedact_core import (
     PrivacyEngine,
     RedactionRequest,
     RestorationRequest,
+    SafeReadError,
     SecuredactEngine,
     SecuredactPaths,
     build_production_engine,
@@ -30,6 +31,7 @@ from securedact_core.detectors import (
     LanguageAwareFlairDetector,
 )
 from securedact_core.engine import ReviewRequiredError, SendingBlockedError
+from securedact_core.production import article9_ml_enabled_from_environment
 
 from .model_registry import MODELS_BY_LANGUAGE
 from .model_store import (
@@ -43,6 +45,10 @@ from .runtime_lifecycle import RuntimeLifecycle, RuntimeLoadFailure
 
 DEFAULT_MAX_TEXT_CHARS = 1_000_000
 SUPPORTED_SAFE_COPY_SUFFIXES = {".md", ".txt"}
+
+# Optional external Article 9 ML layer (Bardsai). Default off; opt in per
+# deployment via SECUREDACT_ARTICLE9_ML_ENABLED=1.
+ARTICLE9_ML_ENABLED = article9_ml_enabled_from_environment()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +75,7 @@ def _build_legacy_engine() -> PrivacyEngine:
     return build_production_engine(
         require_contextual=require_flair,
         model_manager=manager,
+        article9_ml_enabled=ARTICLE9_ML_ENABLED,
     )
 
 
@@ -134,7 +141,10 @@ def build_runtime(
             )
 
         if configuration is None:
-            engine = build_production_engine(require_contextual=True)
+            engine = build_production_engine(
+                require_contextual=True,
+                article9_ml_enabled=ARTICLE9_ML_ENABLED,
+            )
             return RuntimeBundle(
                 engine,
                 _missing_model_message(["en"]),
@@ -142,7 +152,10 @@ def build_runtime(
             )
         enabled_languages = tuple(configuration.enabled_languages)
         if not active_models:
-            engine = build_production_engine(require_contextual=True)
+            engine = build_production_engine(
+                require_contextual=True,
+                article9_ml_enabled=ARTICLE9_ML_ENABLED,
+            )
             return RuntimeBundle(
                 engine,
                 "No contextual model is enabled.\n\nRun:\nsecuredact-mcp install",
@@ -150,7 +163,10 @@ def build_runtime(
                 enabled_languages,
             )
 
-        engine = build_production_engine(require_contextual=True)
+        engine = build_production_engine(
+            require_contextual=True,
+            article9_ml_enabled=ARTICLE9_ML_ENABLED,
+        )
 
         def prepare_managed_models() -> None:
             try:
@@ -202,7 +218,10 @@ def build_runtime(
             prepare_loader=prepare_managed_models,
         )
     except ModelConfigurationError:
-        engine = build_production_engine(require_contextual=True)
+        engine = build_production_engine(
+            require_contextual=True,
+            article9_ml_enabled=ARTICLE9_ML_ENABLED,
+        )
         return RuntimeBundle(
             engine,
             "The contextual model configuration could not be validated.\n\n"
@@ -210,7 +229,10 @@ def build_runtime(
             "contextual_model_manifest_invalid",
         )
     except ModelPathError:
-        engine = build_production_engine(require_contextual=True)
+        engine = build_production_engine(
+            require_contextual=True,
+            article9_ml_enabled=ARTICLE9_ML_ENABLED,
+        )
         return RuntimeBundle(
             engine,
             "The contextual model storage location is not allowed.\n\n"
@@ -686,6 +708,53 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             "status": "ok",
             "filename": filename,
             "counts": outcome["counts"],
+        }
+
+    @server.tool()
+    def securedact_read_file(
+        path: str,
+        policy: str = "strict_external_ai",
+        max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        """Safely read a local file and return only sanitized text.
+
+        Defends against path traversal, symlink/UNC escapes, and oversized or
+        binary content (FW-011/012/013), then sanitizes the text through the
+        normal preparation pipeline. Sensitive paths are blocked before any file
+        content is read.
+        """
+        lifecycle.mark_protocol_ready()
+        blocked = lifecycle.privacy_block()
+        if blocked is not None:
+            return _safe_block(
+                policy,
+                blocked.get("failure_code", "privacy_runtime_unavailable"),
+            )
+        try:
+            result = public_engine.read_file(
+                path,
+                redaction_policy=policy,
+                max_bytes=max_bytes,
+            )
+        except SafeReadError as exc:
+            return {
+                "schema_version": "1",
+                "status": "blocked",
+                "reason": exc.reason,
+                "reason_codes": [exc.code],
+            }
+        if not result.ok or result.sanitized_text is None:
+            return {
+                "schema_version": "1",
+                "status": "blocked",
+                "reason": result.reason or "file could not be read safely",
+                "reason_codes": [result.reason_code or "read_failed"],
+            }
+        return {
+            "schema_version": "1",
+            "status": "ok",
+            "path": result.path,
+            "sanitized_text": result.sanitized_text,
         }
 
     return server

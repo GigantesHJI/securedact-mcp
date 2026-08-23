@@ -17,9 +17,31 @@ from contextvars import ContextVar
 from functools import lru_cache
 
 from securedact_core import PolicyRegistry, PrepareOutcome
+from securedact_core.audit import (
+    AuditEventType,
+    build_audit_event,
+    emit_audit_event,
+    is_secret_entity_type,
+)
+from securedact_core.firewall import (
+    MAX_TOOL_RESULT_CHARS,
+    DestinationScope,
+    ToolContext,
+    ToolOperation,
+    classify_destination_scope,
+    classify_tool,
+    egress_scan_payload,
+    evaluate_firewall,
+    load_firewall_policy_from_environment,
+    recursive_text_length,
+)
 from securedact_core.models import PrivacyAction
 
-from .adapter import EnforcementOutcome
+from . import claude_runtime
+from .adapter import (
+    EnforcementOutcome,
+    firewall_decision_outcome,
+)
 from .claude_runtime import (
     inspect_payload_with_prepare_outcome_stage,
     inspect_text_outcome_with_stage,
@@ -29,7 +51,15 @@ from .claude_runtime import (
     start_runtime,
     write_hook_receipt,
 )
-from .provider_messages import FAIL_CLOSED, PROMPT_BLOCK, REVIEW_BLOCK, TOOL_BLOCK
+from .provider_messages import (
+    EGRESS_OVERSIZE,
+    FAIL_CLOSED,
+    PROMPT_BLOCK,
+    RESULT_BLOCKED,
+    RESULT_OVERSIZE,
+    REVIEW_BLOCK,
+    TOOL_BLOCK,
+)
 
 _SCOPE = "gemini"
 # A warmed BeforeAgent request contains just the user text, while BeforeModel
@@ -157,6 +187,37 @@ def _is_external_tool(tool_name: object) -> bool:
     )
 
 
+def _requires_content_inspection(operation: ToolOperation, tool_name: object) -> bool:
+    """Decide whether the tool input still needs content-based inspection."""
+
+    if operation == ToolOperation.UNKNOWN:
+        # Classification failed: never skip inspection. An unrecognized tool is
+        # at least content-inspected so PII/secrets in its input are not silently
+        # allowed through; if the runtime is unavailable it fails closed.
+        return True
+    if operation in {ToolOperation.FILE_READ, ToolOperation.FILE_WRITE}:
+        # Path policy is the relevant check; the path string is not content.
+        return False
+    if operation in {
+        ToolOperation.SHELL_EXEC,
+        ToolOperation.NETWORK_READ,
+        ToolOperation.NETWORK_WRITE,
+        ToolOperation.DATABASE_READ,
+        ToolOperation.DATABASE_WRITE,
+        ToolOperation.MCP_CALL,
+    }:
+        return True
+    lowered = tool_name.casefold() if isinstance(tool_name, str) else ""
+    if lowered.startswith("mcp_"):
+        return True
+    if lowered in {"webfetch", "websearch"}:
+        return True
+    return any(
+        marker in lowered
+        for marker in ("http", "web", "search", "fetch", "request", "api", "connect")
+    )
+
+
 def _model_text_payload(
     request: Mapping[str, object],
 ) -> tuple[dict[str, object], list[int]] | None:
@@ -251,6 +312,58 @@ def _inspect_prompt(session_id: object, prompt: object) -> EnforcementOutcome:
     return outcome
 
 
+def _inspect_result(
+    session_id: object, result: object
+) -> tuple[EnforcementOutcome, tuple[str, ...] | None, str | None, str]:
+    """Inspect a model-bound tool result through the warmed daemon (FW-020)."""
+
+    outcome, _sanitized, entities, reason_code, stage = claude_runtime.inspect_tool_result(
+        session_id,
+        result,
+        timeout_seconds=_PAYLOAD_IPC_TIMEOUT_SECONDS,
+        runtime_scope=_SCOPE,
+    )
+    return outcome, entities, reason_code, stage
+
+
+def _emit_result_audit(
+    outcome: EnforcementOutcome,
+    entities: tuple[str, ...] | None,
+    *,
+    provider: str,
+    tool_name: str | None,
+    reason_code: str | None,
+) -> None:
+    """Best-effort, metadata-only audit for a hidden tool result (FW-033)."""
+
+    try:
+        entity_types = entities or ()
+        secret_entities = tuple(e for e in entity_types if is_secret_entity_type(e))
+        action = (
+            "block"
+            if outcome in {EnforcementOutcome.BLOCKED, EnforcementOutcome.INTERNAL_FAILURE}
+            else "redact"
+        )
+        if secret_entities:
+            event_type = AuditEventType.SECRET_DETECTED
+        elif entity_types:
+            event_type = AuditEventType.PII_REDACTED
+        else:
+            event_type = AuditEventType.TOOL_BLOCKED
+        emit_audit_event(
+            build_audit_event(
+                event_type,
+                action=action,
+                reason_code=reason_code or "tool_result_hidden",
+                provider=provider,
+                tool_name=tool_name,
+                entity_types=entity_types,
+            )
+        )
+    except Exception:
+        return
+
+
 def _deny_for_outcome(
     session_id: object, outcome: EnforcementOutcome, *, tool: bool = False
 ) -> dict[str, object]:
@@ -259,6 +372,203 @@ def _deny_for_outcome(
     ):
         return _deny(_INITIALIZING)
     return _deny(_block_reason(outcome, tool=tool))
+
+
+def _emit_tool_audit(
+    outcome: EnforcementOutcome,
+    *,
+    provider: str,
+    tool_name: str | None,
+    operation: ToolOperation | None,
+    decision: object = None,
+) -> None:
+    """Best-effort, privacy-preserving firewall audit (FW-033).
+
+    Never raises; audit failure must not change or weaken the host decision.
+    """
+
+    try:
+        if outcome == EnforcementOutcome.BLOCKED:
+            event_type = AuditEventType.TOOL_BLOCKED
+            action = "block"
+        elif outcome == EnforcementOutcome.REVIEW_REQUIRED:
+            event_type = AuditEventType.APPROVAL_REQUIRED
+            action = "review"
+        else:
+            return
+        reason = getattr(decision, "reason", None)
+        emit_audit_event(
+            build_audit_event(
+                event_type,
+                action=action,
+                reason_code=reason or "tool_blocked",
+                provider=provider,
+                tool_name=tool_name,
+                operation=str(operation) if operation is not None else None,
+            )
+        )
+    except Exception:
+        return
+
+
+def _emit_egress_audit(
+    *,
+    provider: str,
+    tool_name: str | None,
+    operation: ToolOperation | None,
+    destination: str | None,
+) -> None:
+    """Best-effort, metadata-only EGRESS_BLOCKED audit for a blocked network write.
+
+    Never raises; audit failure must not change or weaken the host decision. The
+    destination is the normalized host only (no raw body/headers/credentials).
+    """
+
+    try:
+        emit_audit_event(
+            build_audit_event(
+                AuditEventType.EGRESS_BLOCKED,
+                action="block",
+                reason_code="egress_blocked",
+                provider=provider,
+                tool_name=tool_name,
+                operation=str(operation) if operation is not None else None,
+                destination=destination,
+            )
+        )
+    except Exception:
+        return
+
+
+def _apply_tool_inspection(
+    session_id: object,
+    outcome: EnforcementOutcome,
+    prepare_outcome: PrepareOutcome | None,
+    sanitized: object | None,
+    *,
+    tool_name: str | None = None,
+    operation: ToolOperation | None = None,
+) -> dict[str, object]:
+    if outcome == EnforcementOutcome.ALLOW and prepare_outcome == PrepareOutcome.ALLOW:
+        return _allow()
+    if (
+        outcome == EnforcementOutcome.SANITIZED
+        and prepare_outcome in {PrepareOutcome.PSEUDONYMIZED, PrepareOutcome.REDACTED}
+        and isinstance(sanitized, dict)
+    ):
+        return {
+            "decision": "allow",
+            "hookSpecificOutput": {"hookEventName": "BeforeTool", "tool_input": sanitized},
+        }
+    if (
+        outcome == EnforcementOutcome.REVIEW_REQUIRED
+        and prepare_outcome == PrepareOutcome.REVIEW_REQUIRED
+    ):
+        _emit_tool_audit(
+            EnforcementOutcome.REVIEW_REQUIRED,
+            provider="gemini",
+            tool_name=tool_name,
+            operation=operation,
+        )
+        return _deny_for_outcome(session_id, outcome, tool=True)
+    if outcome == EnforcementOutcome.BLOCKED and prepare_outcome == PrepareOutcome.BLOCKED:
+        _emit_tool_audit(
+            EnforcementOutcome.BLOCKED,
+            provider="gemini",
+            tool_name=tool_name,
+            operation=operation,
+        )
+        return _deny_for_outcome(session_id, outcome, tool=True)
+    return _deny_for_outcome(session_id, EnforcementOutcome.INTERNAL_FAILURE, tool=True)
+
+
+def _apply_egress_inspection(
+    session_id: object,
+    tool_name: str | None,
+    tool_input: object,
+    context: ToolContext,
+    firewall: object,
+) -> dict[str, object]:
+    """Inspect an outbound NETWORK_WRITE tool call for Gemini (FW-030).
+
+    Reuses the warmed-runtime content scanner. A secret in the outbound payload
+    is blocked; an external/unknown destination with merely-redacted PII may be
+    upgraded to REQUIRE_APPROVAL when the policy opts in. Oversize or unscannable
+    payloads fail closed. No raw request body/header/credential reaches the host.
+    """
+
+    destination = context.destination
+    if recursive_text_length(tool_input) > MAX_TOOL_RESULT_CHARS:
+        _emit_egress_audit(
+            provider="gemini",
+            tool_name=tool_name,
+            operation=context.operation,
+            destination=destination,
+        )
+        return _deny(EGRESS_OVERSIZE)
+
+    scan_payload = egress_scan_payload(tool_input)
+    try:
+        outcome, prepare_outcome, sanitized = _inspect(session_id, scan_payload)
+    except Exception:
+        # Scanner/client failure must fail closed, never allow unverified egress.
+        _emit_egress_audit(
+            provider="gemini",
+            tool_name=tool_name,
+            operation=context.operation,
+            destination=destination,
+        )
+        return _deny_for_outcome(session_id, EnforcementOutcome.INTERNAL_FAILURE, tool=True)
+
+    if (
+        firewall is not None
+        and getattr(firewall, "egress_external_require_approval", False)
+        and outcome == EnforcementOutcome.SANITIZED
+    ):
+        scope = classify_destination_scope(
+            destination, allowlist_domains=getattr(firewall, "egress_allowlist_domains", ())
+        )
+        if scope in {DestinationScope.EXTERNAL, DestinationScope.UNKNOWN}:
+            _emit_tool_audit(
+                EnforcementOutcome.REVIEW_REQUIRED,
+                provider="gemini",
+                tool_name=tool_name,
+                operation=context.operation,
+            )
+            return _deny_for_outcome(session_id, EnforcementOutcome.REVIEW_REQUIRED, tool=True)
+
+    if outcome == EnforcementOutcome.BLOCKED:
+        _emit_egress_audit(
+            provider="gemini",
+            tool_name=tool_name,
+            operation=context.operation,
+            destination=destination,
+        )
+        return _deny_for_outcome(session_id, outcome, tool=True)
+    if outcome == EnforcementOutcome.REVIEW_REQUIRED:
+        _emit_tool_audit(
+            EnforcementOutcome.REVIEW_REQUIRED,
+            provider="gemini",
+            tool_name=tool_name,
+            operation=context.operation,
+        )
+        return _deny_for_outcome(session_id, outcome, tool=True)
+    if outcome == EnforcementOutcome.INTERNAL_FAILURE:
+        _emit_egress_audit(
+            provider="gemini",
+            tool_name=tool_name,
+            operation=context.operation,
+            destination=destination,
+        )
+        return _deny_for_outcome(session_id, outcome, tool=True)
+    return _apply_tool_inspection(
+        session_id,
+        outcome,
+        prepare_outcome,
+        sanitized,
+        tool_name=tool_name,
+        operation=context.operation,
+    )
 
 
 def handle_event(
@@ -347,31 +657,99 @@ def handle_event(
             return _deny_for_outcome(session_id, outcome)
         return _deny_for_outcome(session_id, EnforcementOutcome.INTERNAL_FAILURE)
     if event_name == "BeforeTool":
-        if not _is_external_tool(event.get("tool_name")):
-            return _allow()
+        tool_name = event.get("tool_name")
         tool_input = event.get("tool_input")
         if not isinstance(tool_input, dict):
             return _deny(FAIL_CLOSED)
-        outcome, prepare_outcome, sanitized = _inspect(session_id, tool_input)
-        if outcome == EnforcementOutcome.ALLOW and prepare_outcome == PrepareOutcome.ALLOW:
+        context = classify_tool("gemini", tool_name, tool_input)
+        firewall = load_firewall_policy_from_environment()
+        if firewall is not None and firewall.enabled:
+            if context.operation != ToolOperation.UNKNOWN:
+                decision = evaluate_firewall(firewall, context)
+                outcome = firewall_decision_outcome(decision)
+                if outcome == EnforcementOutcome.BLOCKED:
+                    if context.operation == ToolOperation.NETWORK_WRITE:
+                        _emit_egress_audit(
+                            provider="gemini",
+                            tool_name=tool_name,
+                            operation=context.operation,
+                            destination=context.destination,
+                        )
+                    else:
+                        _emit_tool_audit(
+                            EnforcementOutcome.BLOCKED,
+                            provider="gemini",
+                            tool_name=tool_name,
+                            operation=context.operation,
+                            decision=decision,
+                        )
+                    return _deny_for_outcome(session_id, EnforcementOutcome.BLOCKED, tool=True)
+                if outcome == EnforcementOutcome.REVIEW_REQUIRED:
+                    _emit_tool_audit(
+                        EnforcementOutcome.REVIEW_REQUIRED,
+                        provider="gemini",
+                        tool_name=tool_name,
+                        operation=context.operation,
+                        decision=decision,
+                    )
+                    return _deny_for_outcome(
+                        session_id, EnforcementOutcome.REVIEW_REQUIRED, tool=True
+                    )
+            if not _requires_content_inspection(context.operation, tool_name):
+                return _allow()
+            if context.operation == ToolOperation.NETWORK_WRITE:
+                return _apply_egress_inspection(
+                    session_id, tool_name, tool_input, context, firewall
+                )
+            scan_payload = egress_scan_payload(tool_input)
+            outcome, prepare_outcome, sanitized = _inspect(session_id, scan_payload)
+            return _apply_tool_inspection(
+                session_id,
+                outcome,
+                prepare_outcome,
+                sanitized,
+                tool_name=tool_name,
+                operation=context.operation,
+            )
+        if not _is_external_tool(tool_name):
             return _allow()
-        if (
-            outcome == EnforcementOutcome.SANITIZED
-            and prepare_outcome in {PrepareOutcome.PSEUDONYMIZED, PrepareOutcome.REDACTED}
-            and isinstance(sanitized, dict)
-        ):
-            return {
-                "decision": "allow",
-                "hookSpecificOutput": {"hookEventName": "BeforeTool", "tool_input": sanitized},
-            }
-        if (
-            outcome == EnforcementOutcome.REVIEW_REQUIRED
-            and prepare_outcome == PrepareOutcome.REVIEW_REQUIRED
-        ):
-            return _deny_for_outcome(session_id, outcome, tool=True)
-        if outcome == EnforcementOutcome.BLOCKED and prepare_outcome == PrepareOutcome.BLOCKED:
-            return _deny_for_outcome(session_id, outcome, tool=True)
-        return _deny_for_outcome(session_id, EnforcementOutcome.INTERNAL_FAILURE, tool=True)
+        if context.operation == ToolOperation.NETWORK_WRITE:
+            return _apply_egress_inspection(session_id, tool_name, tool_input, context, firewall)
+        scan_payload = egress_scan_payload(tool_input)
+        outcome, prepare_outcome, sanitized = _inspect(session_id, scan_payload)
+        return _apply_tool_inspection(
+            session_id,
+            outcome,
+            prepare_outcome,
+            sanitized,
+            tool_name=tool_name,
+            operation=context.operation,
+        )
+    if event_name == "AfterTool":
+        # FW-020: hide sensitive tool results. Gemini's AfterTool hook can deny
+        # (which replaces the result the model sees with a safe reason) but offers
+        # no field to replace the result with a sanitized value, so a sensitive
+        # result is hidden rather than redacted.
+        tool_name = event.get("tool_name")
+        tool_response = event.get("tool_response")
+        firewall = load_firewall_policy_from_environment()
+        if firewall is None or not firewall.enabled:
+            return _allow()
+        if not isinstance(tool_response, (str, Mapping, list)):
+            return _allow()
+        outcome, entities, reason_code, stage = _inspect_result(session_id, tool_response)
+        _INSPECTION_STAGE.set(stage)
+        if outcome == EnforcementOutcome.ALLOW:
+            return _allow()
+        safe_reason = RESULT_OVERSIZE if reason_code == "result_oversize" else RESULT_BLOCKED
+        _emit_result_audit(
+            outcome,
+            entities,
+            provider="gemini",
+            tool_name=tool_name if isinstance(tool_name, str) else None,
+            reason_code=reason_code,
+        )
+        return _deny(safe_reason)
     return _allow()
 
 
@@ -380,7 +758,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--event",
         required=True,
-        choices=("SessionStart", "SessionEnd", "BeforeAgent", "BeforeModel", "BeforeTool"),
+        choices=(
+            "SessionStart",
+            "SessionEnd",
+            "BeforeAgent",
+            "BeforeModel",
+            "BeforeTool",
+            "AfterTool",
+        ),
     )
     args = parser.parse_args(argv)
     started = time.monotonic()

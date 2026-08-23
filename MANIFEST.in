@@ -12,7 +12,10 @@ recursive-include examples *.json *.md *.toml
 recursive-include integrations *.json *.md *.toml
 recursive-include benchmarks *.json *.jsonl *.md *.csv *.yml
 recursive-include scripts *.ps1 *.py
+exclude scripts/a9_assembly_parity.py scripts/a9_metrics.py
+prune scripts/experimental
 recursive-include src *.json *.py
 recursive-include tests *.json *.py
 recursive-exclude * __pycache__ *.py[cod]
+prune src/securedact_eval/experimental
 prune .github

@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .firewall import FirewallPolicy
 from .models import DetectionSource, EntityType, PrivacyAction, RedactionMode
 from .taxonomy import (
     CATEGORY_DEFINITIONS,
@@ -143,6 +144,7 @@ class Policy(BaseModel):
     default_response_mode: Literal["minimal", "review", "restore_capable"] = "minimal"
     expose_raw_values: bool = False
     expose_mapping: bool = False
+    firewall: FirewallPolicy | None = None
     built_in: bool = True
 
     @field_validator("thresholds")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import socket
 import threading
 import time
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from securedact_core import PrepareOutcome
+from securedact_core import PrepareOutcome, default_firewall_policy
 from securedact_enforced import gemini_hook
 from securedact_enforced.adapter import EnforcementOutcome, EnforcementResult, PrivacyEnforcer
 from securedact_enforced.claude_runtime import (
@@ -799,13 +800,158 @@ def test_gemini_extension_artifact_is_complete() -> None:
     manifest = json.loads((root / "gemini-extension.json").read_text(encoding="utf-8"))
     hooks = json.loads((root / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     assert manifest["name"] == "securedact-enforced"
-    assert set(hooks) == {"SessionStart", "SessionEnd", "BeforeAgent", "BeforeModel", "BeforeTool"}
+    assert set(hooks) == {
+        "SessionStart",
+        "SessionEnd",
+        "BeforeAgent",
+        "BeforeModel",
+        "BeforeTool",
+        "AfterTool",
+    }
     assert all(
         hook[0]["hooks"][0]["timeout"] == 20000
         for name, hook in hooks.items()
         if name in {"BeforeAgent", "BeforeModel", "BeforeTool"}
     )
+    assert hooks["AfterTool"][0]["hooks"][0]["timeout"] == 25000
     assert all(
         hook[0]["hooks"][0]["command"].startswith("python -m securedact_enforced.gemini_hook")
         for hook in hooks.values()
     )
+
+
+# --- Agent privacy firewall (FW-001 / FW-003 / FW-023 / FW-024 / FW-010) ---
+
+
+def test_gemini_hook_matcher_fires_on_native_tools() -> None:
+    root = (
+        Path(__file__).resolve().parents[2]
+        / "integrations"
+        / "gemini-enforced"
+        / "securedact-enforced"
+    )
+    hooks = json.loads((root / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    matcher = hooks["BeforeTool"][0]["matcher"]
+    for tool in ("Read", "Write", "Edit", "Bash", "Grep", "Glob", "mcp__fs__read"):
+        assert re.fullmatch(matcher, tool), tool
+
+
+def test_gemini_firewall_blocks_sensitive_read_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "gemini-test-session",
+            "tool_name": "Read",
+            "tool_input": {"file_path": ".env"},
+        },
+    )
+    assert output["decision"] == "deny"
+
+
+def test_gemini_firewall_blocks_credentials_json_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "gemini-test-session",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "credentials.json"},
+        },
+    )
+    assert output["decision"] == "deny"
+
+
+def test_gemini_firewall_allows_normal_read_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "gemini-test-session",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "src/app.py"},
+        },
+    )
+    assert output == {"decision": "allow"}
+
+
+def test_gemini_firewall_disabled_keeps_legacy_native_tool_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gemini_hook, "load_firewall_policy_from_environment", lambda: None)
+    output = gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "gemini-test-session",
+            "tool_name": "Read",
+            "tool_input": {"file_path": ".env"},
+        },
+    )
+    assert output == {"decision": "allow"}
+
+
+def test_gemini_firewall_unknown_tool_is_content_inspected_not_silently_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from securedact_core import default_firewall_policy
+
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    calls: list[object] = []
+
+    def fake_inspect(_session: object, payload: object):
+        calls.append(payload)
+        return EnforcementOutcome.BLOCKED, None, None
+
+    monkeypatch.setattr(gemini_hook, "_inspect", fake_inspect)
+    output = gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "gemini-test-session",
+            "tool_name": "MysteriousTool",
+            "tool_input": {"file_path": ".env"},
+        },
+    )
+    assert calls == [{"file_path": ".env"}]
+    assert output["decision"] == "deny"
+
+
+def test_gemini_firewall_requires_approval_maps_to_deny(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from securedact_core import FirewallPolicy, FirewallRule, ToolOperation
+
+    policy = FirewallPolicy(
+        rules=[
+            FirewallRule(
+                id="approve_scripts",
+                operations=[ToolOperation.FILE_WRITE],
+                extensions=["sh"],
+                action="allow",
+                requires_approval=True,
+            )
+        ]
+    )
+    monkeypatch.setattr(gemini_hook, "load_firewall_policy_from_environment", lambda: policy)
+    output = gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "gemini-test-session",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "deploy.sh"},
+        },
+    )
+    assert output["decision"] == "deny"

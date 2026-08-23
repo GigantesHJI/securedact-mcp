@@ -6,6 +6,124 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version 0.1.0 was an unpublished release attempt. Version 0.1.1 is the first
 public server release.
 
+## [0.4.0] - 2026-08-24
+
+### Added
+
+- Optional external Article 9 ML layer (Bardsai `eu-pii-anonimization-multilang-v2-preview`)
+  as a complementary semantic detector for GDPR special-category data. It is OFF by
+  default and enabled per deployment with `SECUREDACT_ARTICLE9_ML_ENABLED=1`. Design:
+  - New `DetectionSource.ML_ARTICLE9` and a merge priority slot between CONTEXTUAL (2)
+    and FLAIR (3) so a precise regex/contextual boundary still wins while the ML span
+    is recorded as supporting provenance.
+  - `BardsaiArticle9Detector` (`src/securedact_core/detectors/bardsai_detector.py`)
+    implements the `Detector` protocol. Heavy ML imports (`torch`/`transformers`) stay
+    lazy, weights load offline (`local_files_only=True`), and a missing model degrades
+    gracefully (engine warning, no crash).
+  - Category-aware routing: ADDITIVE (UNION/FALLBACK) for the FULL Bardsai covered label
+    set — racial/ethnic origin, religion, sexual orientation, health, political opinion,
+    biometric_data, and trade_union_membership. This matches the frozen A9-SOTA-001
+    `bard` component, which actually emitted biometric_data (16×) and
+    trade_union_membership (1–2×); the earlier tests asserting those two labels were
+    *suppressed* were superseded by the frozen 0.4.0 architecture and updated to assert
+    additive surfacing. genetic_data and sex_life are absent (no label in the checkpoint).
+    Every emission is a special category, so the engine routes it to REVIEW — never
+    auto-redaction.
+  - Pinned registration (revision `8e0b19766bb0dd4916d096b4f540dd46c138c760`) lives in a
+    separate `article9_ml_registry.py` module so the Flair `model_registry.py` keeps its
+    exactly-three-revisions invariant required by the repository validator.
+  - Privacy-suite and unit tests cover REVIEW bias, category suppression, merge
+    provenance, non-Article-9 label leakage, and graceful model-unavailable degradation.
+
+- Agent Privacy Firewall performance guards (FW-041): consolidated the inspection
+  size cap into a single source of truth `MAX_INSPECTION_TEXT_CHARS` (1,000,000)
+  reused by the text APIs and the safe-read path, so the two limits cannot drift.
+  Added a reproducible performance baseline (`scripts/benchmark_firewall.py`) and a
+  structural regression suite (`tests/unit/test_firewall_performance.py`) covering
+  cheap-deterministic-before-contextual ordering, oversize rejection before
+  detectors, path-block termination before content scanning, binary rejection
+  before the privacy engine, approved-text digest reuse, and isolated audit
+  emission. No async/queue/cache/telemetry architecture was added.
+- Agent Privacy Firewall backward-compatibility and security regression suite
+  (FW-042): a dedicated contract (`tests/unit/test_firewall_backward_compat.py`)
+  proving the firewall is strictly additive — the original five MCP tools keep
+  their contract, legacy policies without a `firewall` section still load, explicit
+  firewall disable restores legacy host behavior without disabling the privacy
+  engine, entity/detector behavior is unchanged, and the core security invariants
+  (`Read(".env")`/`credentials.json`/`id_rsa` BLOCK; `src/app.py` ALLOW; UNKNOWN
+  tools inspected; safe-read/symlink/traversal blocks; protected-path `ALLOW`
+  rejected as `INVARIANT_VIOLATION`; audit never serializes raw secrets/PII) hold
+  for both Claude and Gemini.
+
+- Agent Privacy Firewall: `securedact_read_file` MCP tool (FW-011) that safely
+  reads a local file, blocks protected paths before access, defends against path
+  traversal / symlink / UNC / case / rename tricks (FW-012), and returns only
+  sanitized text. Binary and oversized files are rejected in the text-only MVP
+  (FW-013). The firewall policy layer (`FirewallPolicy`), tool classification
+  (`classify_tool`), and enforced-hook matchers were added to support this.
+- Agent Privacy Firewall enforcement foundation (FW-001) and configuration
+  integration (FW-003): Claude `PreToolUse` and Gemini `BeforeTool` hooks now
+  build a `ToolContext`, evaluate the firewall, and map the decision to a host
+  permission outcome via the centralized `firewall_decision_outcome`. Firewall
+  policy is loaded from the existing JSON/YAML policy mechanism with fail-closed
+  invariants; `SECUREDACT_FIREWALL_ENABLED=0` disables it. `WARN` /
+  `REQUIRE_APPROVAL` are intentionally modeled as `FirewallDecision` fields rather
+  than new `PrivacyAction` members.
+- Agent Privacy Firewall: an `UNKNOWN` tool classification no longer silently
+  allows the tool; it is content-inspected (fail-closed when the runtime is
+  unavailable) so unrecognized tools cannot bypass enforcement.
+
+- Agent Privacy Firewall: tool-result sanitization (FW-020). Claude `PostToolUse`
+  and Gemini `AfterTool` hooks now inspect the model-bound result of protected
+  tools (native `Read`/`Write`/`Edit`/`MultiEdit`/`NotebookEdit`/`Bash`/`Grep`/
+  `Glob`, `mcp__*`, `WebFetch`/`WebSearch`) and run it through the warmed-runtime
+  inspector. Claude replaces the result with the sanitized payload via
+  `updatedToolOutput`, preserving structured shapes (e.g. Bash stdout/stderr,
+  MCP content blocks). Gemini cannot replace results, so it hides a sensitive
+  result (deny with a safe reason) rather than delivering it. Oversize results
+  and inspector failures fail closed without exposing raw PII/secrets. Tool-result
+  inspection honors `MAX_TOOL_RESULT_CHARS` and respects the firewall enable
+  switch, reusing the FW-033 audit events for metadata-only logging.
+
+- Agent Privacy Firewall: privacy-preserving audit events (FW-033). A new
+  `securedact_core/audit.py` module defines an immutable, metadata-only
+  `AuditEvent` model (`FILE_BLOCKED`, `SECRET_DETECTED`, `PII_REDACTED`,
+  `TOOL_BLOCKED`, `APPROVAL_REQUIRED`) with a no-op default sink and a
+  capturing sink for tests. Safe-read and the Claude/Gemini enforced hooks
+  emit these events for blocked paths, detected secrets, redacted PII, denied
+  tools, and approval-required decisions. Serialization allowlists metadata
+  keys and rejects raw sensitive values, and audit failure can never weaken
+  an enforcement decision. Persistent local audit-log storage/rotation is a
+  separate opt-in item (FW-044) and is intentionally not implemented here.
+
+- Agent Privacy Firewall: egress protection for outbound network tools (FW-030).
+  `classify_tool` now reliably assigns `ToolOperation.NETWORK_WRITE` to HTTP
+  `POST`/`PUT`/`PATCH`, webhooks, browser submit/navigation with payload,
+  uploads, email/send/MCP network tools, and `git push`-like operations, while
+  `NETWORK_READ` (GET/search/`WebFetch`) is never treated as a write. A
+  normalized destination is extracted and scoped `internal`/`external`/`unknown`
+  (loopback, private ranges, and an explicit allowlist are internal; an absent
+  destination is never trusted). The Claude `PreToolUse` (`_inspect_egress`) and
+  Gemini `BeforeTool` (`_apply_egress_inspection`) paths reuse the warmed privacy
+  engine to recursively scan the outbound payload (headers, body, `json`, form
+  fields) and enforce `BLOCK`/`REDACT`/`REQUIRE_APPROVAL`. Known and
+  `UNKNOWN_SECRET` credentials are blocked; PII/special-category data follows the
+  policy-driven `REDACT` action. Oversize payloads and scanner/client failures
+  fail closed (deny), never raw-allow. The destination key is excluded from
+  content scanning because it is metadata, not outbound content. Shell-based
+  exfiltration (`Bash("curl ...")`) is intentionally not labeled network egress;
+  no cross-tool taint tracking is performed (FW-031 is separate).
+
+- Agent Privacy Firewall: approval workflow for egress (FW-032). The existing
+  `requires_approval`/`REVIEW_REQUIRED` mapping is now exercised by the egress
+  path: Claude returns `permissionDecision: deny` (user override) and Gemini
+  returns `decision: deny` with a reason — no fake interactive approval protocol.
+  The opt-in `FirewallPolicy.egress_external_require_approval` flag upgrades an
+  external/unknown `NETWORK_WRITE` whose payload was merely redacted (PII) into a
+  `REQUIRE_APPROVAL` decision. Every approval-required egress emits an
+  `APPROVAL_REQUIRED` audit event, and every blocked egress emits the first
+  legitimate `EGRESS_BLOCKED` event (metadata-only, no raw body/header/credential).
+
 ## [0.3.0] - 2026-08-21
 
 ### Added

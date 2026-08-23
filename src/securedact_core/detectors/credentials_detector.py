@@ -124,6 +124,62 @@ def _entropy(value: str) -> float:
     return -sum((count / length) * math.log2(count / length) for count in counts.values())
 
 
+# Generic unknown-secret detection (FW-002).
+#
+# Conservative fallback for secret-like values that lack a recognizable vendor
+# prefix or exact known format. Detection requires BOTH:
+#   * a credential-ish assignment context (key -> value), and
+#   * a value that looks secret (class diversity + entropy via
+#     ``_plausible_generic_secret``).
+# Standalone high-entropy values (UUIDs, hashes, lockfile entries, request IDs)
+# are never flagged because they have no supporting secret label (FW-014).
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?im)(?<![\w])"
+    r"(?P<key>secret|secrets|access[_ -]?key|auth[_ -]?token|private[_ -]?token|"
+    r"credential|credentials|api[_ -]?secret|internal[_ -]?api[_ -]?secret|"
+    r"internal[_ -]?token|token|encryption[_ -]?key|signing[_ -]?key|"
+    r"secret[_ -]?token|refresh[_ -]?token|x[_ -]?api[_ -]?key|server[_ -]?secret|"
+    r"db[_ -]?secret|app[_ -]?secret)"
+    r"[\"']?\s*[:=]\s*[\"']?"
+    r"(?P<value>[A-Za-z0-9._~+/-]{16,})"
+)
+
+# Labels that are strong, direct indicators of a secret even without format
+# recognition. Weaker/indirect labels still qualify but at lower confidence.
+_STRONG_SECRET_LABELS = frozenset(
+    {
+        "secret",
+        "secrets",
+        "accesskey",
+        "authtoken",
+        "privatetoken",
+        "internaltoken",
+        "credential",
+        "credentials",
+        "apisecret",
+        "internalapisecret",
+        "encryptionkey",
+        "signingkey",
+        "serversecret",
+        "dbsecret",
+        "appsecret",
+    }
+)
+
+# Clearly synthetic placeholder values must never be treated as secrets, even
+# when paired with a secret label (FW-014 / section 8).
+_PLACEHOLDER = re.compile(
+    r"(?i)^(your[-_]?|example[-_]?|test[-_]?|dummy[-_]?|fake[-_]?|sample[-_]?)?"
+    r"(api[-_]?key|token|secret|password|passwd|client[-_]?secret|access[-_]?key|"
+    r"auth[-_]?token|changeme|replace[-_]?me|placeholder|x{6,})"
+    r"([-_]?here|[0-9]{1,4})?$"
+)
+
+# Minimum value length for a generic secret. Mirrors the assignment regex and
+# keeps short/ordinary identifiers out (FW-014).
+_MIN_GENERIC_SECRET_LENGTH = 16
+
+
 class CredentialsDetector:
     """Conservative deterministic credential detector for coding workflows."""
 
@@ -154,6 +210,7 @@ class CredentialsDetector:
 
     def _detect_view(self, text: str) -> dict[tuple[int, int, EntityType], Detection]:
         output: dict[tuple[int, int, EntityType], Detection] = {}
+        precise_spans: list[tuple[int, int]] = []
         for rule in self.rules:
             for match in rule.pattern.finditer(text):
                 group = "value" if "value" in match.re.groupindex else 0
@@ -176,7 +233,61 @@ class CredentialsDetector:
                 current = output.get(key)
                 if current is None or detection.precedence > current.precedence:
                     output[key] = detection
+                precise_spans.append((start, end))
+        for detection in self._detect_unknown_secrets(text):
+            if any(detection.start < e and s < detection.end for s, e in precise_spans):
+                # Known precise rule already covers this span; never downgrade it.
+                continue
+            key = (detection.start, detection.end, detection.entity_type)
+            current = output.get(key)
+            if current is None or detection.precedence > current.precedence:
+                output[key] = detection
         return output
+
+    def _detect_unknown_secrets(self, text: str) -> list[Detection]:
+        detections: list[Detection] = []
+        for match in _SECRET_ASSIGNMENT.finditer(text):
+            value = match.group("value")
+            if len(value) < _MIN_GENERIC_SECRET_LENGTH:
+                continue
+            if not self._plausible_generic_secret(value):
+                continue
+            if self._is_known_benign(value) or self._is_placeholder(value):
+                continue
+            normalized_key = re.sub(r"[\s_-]", "", match.group("key").lower())
+            confidence = 0.92 if normalized_key in _STRONG_SECRET_LABELS else 0.72
+            start, end = match.span("value")
+            detections.append(
+                Detection(
+                    start=start,
+                    end=end,
+                    text=value,
+                    entity_type=EntityType.UNKNOWN_SECRET,
+                    confidence=confidence,
+                    source=DetectionSource.CREDENTIALS,
+                    rule="unknown_secret",
+                    precedence=100,
+                    rationale_code="unknown_secret_context",
+                )
+            )
+        return detections
+
+    @staticmethod
+    def _is_known_benign(value: str) -> bool:
+        lowered = value.lower()
+        if lowered.startswith(("ssh-", "pk.", "-----begin")):
+            # Public keys / age keys / PEM markers are not generic secrets.
+            return True
+        if re.fullmatch(r"[0-9a-f]{32,}", lowered):
+            # Long hex strings (SHA/checksums) are benign without a secret format.
+            return True
+        if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", lowered):
+            return True
+        return False
+
+    @staticmethod
+    def _is_placeholder(value: str) -> bool:
+        return bool(_PLACEHOLDER.fullmatch(value))
 
     @staticmethod
     def _map_to_original(view: NormalizedText, detection: Detection) -> Detection:

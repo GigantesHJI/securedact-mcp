@@ -8,7 +8,7 @@ version. Replace `<ABSOLUTE_PATH_TO_PYTHON>` with the absolute interpreter path
 from the Securedact environment. JSON Windows paths must escape backslashes.
 
 Expected tools are `prepare_for_external_ai`, `analyze_text`, `redact_text`,
-`restore_text`, and `create_safe_copy`.
+`restore_text`, `create_safe_copy`, and `securedact_read_file`.
 
 Add persistent project or agent rules that require:
 

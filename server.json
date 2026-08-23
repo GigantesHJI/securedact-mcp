@@ -3,7 +3,7 @@
   "name": "io.github.GigantesHJI/securedact-mcp",
   "title": "Securedact MCP",
   "description": "Local-first privacy MCP server for sensitive AI workflows",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "repository": {
     "url": "https://github.com/GigantesHJI/securedact-mcp",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "securedact-mcp",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "registryBaseUrl": "https://pypi.org",
       "transport": {
         "type": "stdio"

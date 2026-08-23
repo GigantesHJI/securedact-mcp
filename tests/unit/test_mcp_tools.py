@@ -32,6 +32,7 @@ def test_exact_tool_registry() -> None:
         "redact_text",
         "restore_text",
         "create_safe_copy",
+        "securedact_read_file",
     }
 
 
@@ -47,6 +48,21 @@ async def test_analyze_text_returns_local_synthetic_finding() -> None:
     assert result["counts"] == {"email": 1}
     assert "alex.example@example.test" not in str(result)
     assert "entities" not in result
+
+
+@pytest.mark.asyncio
+async def test_securedact_read_file_sanitizes_and_blocks_protected(tmp_path) -> None:
+    server = _server()
+    doc = tmp_path / "doc.txt"
+    doc.write_text("Contact alex.example@example.test", encoding="utf-8")
+    result = await _call(server, "securedact_read_file", {"path": str(doc)})
+    assert result["status"] == "ok"
+    assert "[EMAIL" in result["sanitized_text"]
+
+    secret = tmp_path / ".env"
+    secret.write_text("TOKEN=abc", encoding="utf-8")
+    blocked = await _call(server, "securedact_read_file", {"path": str(secret)})
+    assert blocked["status"] == "blocked"
 
 
 @pytest.mark.asyncio

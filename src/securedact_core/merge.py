@@ -9,6 +9,10 @@ SOURCE_PRIORITY = {
     DetectionSource.REGEX: 1,
     DetectionSource.CREDENTIALS: 1,
     DetectionSource.CONTEXTUAL: 2,
+    # External Article 9 ML (Bardsai) sits below the deterministic/contextual
+    # stack but above Flair for span selection: a precise regex/contextual
+    # boundary wins over the noisier ML span, while ML still contributes recall.
+    DetectionSource.ML_ARTICLE9: 2.5,
     DetectionSource.FLAIR: 3,
 }
 
@@ -52,7 +56,7 @@ def overlaps(left: Detection, right: Detection) -> bool:
     return left.start < right.end and right.start < left.end
 
 
-def _rank(item: Detection) -> tuple[int, int, int, int, float, int, str, str, str]:
+def _rank(item: Detection) -> tuple[int, float, int, int, float, int, str, str, str]:
     # Policy-selected assertion/sentence replacement is an explicit privacy
     # decision, not a statistical guess. It must cover nested deterministic
     # findings when the policy calls for the entire assertion to be removed.
@@ -104,6 +108,19 @@ def merge_detections_with_evidence(detections: list[Detection]) -> list[Detectio
             and item.end == winner.end
             and item.entity_type == winner.entity_type
         }
+        # When an external Article 9 ML detection overlaps the winning span of the
+        # same special-category type, record it as supporting provenance even when
+        # the higher-precedence (regex/contextual/Flair) boundary was preferred.
+        # This keeps the ML signal auditable without letting its noisier exact span
+        # override a precise rule/Flair boundary.
+        ml_overlaps = any(
+            item.source == DetectionSource.ML_ARTICLE9
+            and item.entity_type == winner.entity_type
+            and overlaps(winner, item)
+            for item in detections
+        )
+        if ml_overlaps:
+            supporting.add(DetectionSource.ML_ARTICLE9)
         conflicts = {
             item.entity_type
             for item in detections

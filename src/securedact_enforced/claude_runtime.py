@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from securedact_core import PrepareOutcome
+from securedact_core.firewall import MAX_TOOL_RESULT_CHARS, recursive_text_length
 
 from .adapter import EnforcementOutcome, EnforcementResult
 from .provider_messages import FAIL_CLOSED, prompt_block
@@ -38,6 +39,10 @@ _MAX_MESSAGE_BYTES = 1_048_576
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 4.0
 _STARTUP_TIMEOUT_SECONDS = 120.0
 _LOCK_STALE_SECONDS = 180.0
+# Result inspection (FW-020) scans model-bound tool output, which is bounded by
+# ``MAX_TOOL_RESULT_CHARS``. The IPC budget is set below the host hook timeout so a
+# slow scan fails closed through the normal timeout path rather than hanging.
+_RESULT_IPC_TIMEOUT_SECONDS = 25.0
 
 
 @dataclass(frozen=True)
@@ -399,6 +404,86 @@ class _RuntimeServer(socketserver.ThreadingTCPServer):
             ), payload
         return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE), None
 
+    def inspect_tool_result(
+        self, result: object
+    ) -> tuple[EnforcementResult, object | None, tuple[str, ...]]:
+        """Inspect a tool result (FW-020), preserving structure and bounding size.
+
+        Returns ``(outcome, sanitized_payload, entity_types)``. Results above
+        ``MAX_TOOL_RESULT_CHARS`` fail closed (INTERNAL_FAILURE) without scanning
+        so an oversized payload is never returned raw. Structured results are
+        sanitized recursively so only textual leaves change, exactly like
+        ``inspect_payload_result``.
+        """
+
+        if isinstance(result, str):
+            inspected = self.inspect_text_result(result)
+            sanitized_result = (
+                inspected.sanitized_text
+                if inspected.outcome == EnforcementOutcome.SANITIZED
+                else result
+            )
+            return inspected, sanitized_result, tuple(inspected.entity_types or ())
+        if isinstance(result, Mapping):
+            if recursive_text_length(result) > MAX_TOOL_RESULT_CHARS:
+                return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE), None, ()
+            sanitized: dict[object, object] = {}
+            changed = False
+            prepare_outcomes: list[PrepareOutcome | None] = []
+            entities: set[str] = set()
+            for key, value in result.items():
+                if not isinstance(key, str):
+                    return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE), None, ()
+                sub, replacement, sub_entities = self.inspect_tool_result(value)
+                if sub.outcome not in {EnforcementOutcome.ALLOW, EnforcementOutcome.SANITIZED}:
+                    return sub, None, tuple(sub_entities)
+                sanitized[key] = replacement
+                changed = changed or sub.outcome == EnforcementOutcome.SANITIZED
+                if sub.prepare_outcome is not None:
+                    prepare_outcomes.append(sub.prepare_outcome)
+                entities.update(sub_entities)
+            return (
+                EnforcementResult(
+                    EnforcementOutcome.SANITIZED if changed else EnforcementOutcome.ALLOW,
+                    prepare_outcome=self._aggregate_prepare_outcomes(
+                        prepare_outcomes, changed=changed
+                    ),
+                ),
+                sanitized,
+                tuple(sorted(entities)),
+            )
+        if isinstance(result, list):
+            sanitized_items: list[object] = []
+            changed = False
+            prepare_outcomes = []
+            entities = set()
+            for value in result:
+                sub, replacement, sub_entities = self.inspect_tool_result(value)
+                if sub.outcome not in {EnforcementOutcome.ALLOW, EnforcementOutcome.SANITIZED}:
+                    return sub, None, tuple(sub_entities)
+                sanitized_items.append(replacement)
+                changed = changed or sub.outcome == EnforcementOutcome.SANITIZED
+                if sub.prepare_outcome is not None:
+                    prepare_outcomes.append(sub.prepare_outcome)
+                entities.update(sub_entities)
+            return (
+                EnforcementResult(
+                    EnforcementOutcome.SANITIZED if changed else EnforcementOutcome.ALLOW,
+                    prepare_outcome=self._aggregate_prepare_outcomes(
+                        prepare_outcomes, changed=changed
+                    ),
+                ),
+                sanitized_items,
+                tuple(sorted(entities)),
+            )
+        if result is None or isinstance(result, bool | int | float):
+            return (
+                EnforcementResult(EnforcementOutcome.ALLOW, prepare_outcome=PrepareOutcome.ALLOW),
+                result,
+                (),
+            )
+        return EnforcementResult(EnforcementOutcome.INTERNAL_FAILURE), None, ()
+
     def response(self, *, ok: bool, response: dict[str, object] | None = None) -> dict[str, object]:
         unsigned: dict[str, object] = {"version": _PROTOCOL_VERSION, "ok": ok, "response": response}
         return {**unsigned, "auth": _authentication(self.token, unsigned)}
@@ -469,6 +554,26 @@ class _RuntimeRequestHandler(socketserver.BaseRequestHandler):
                     response["prepare_outcome"] = str(result.prepare_outcome)
                 if result.outcome == EnforcementOutcome.SANITIZED:
                     response["sanitized_payload"] = sanitized_payload
+                _send_payload(self.request, server.response(ok=True, response=response))
+            except Exception:
+                _send_payload(self.request, server.response(ok=False))
+            return
+        if operation == "inspect_tool_result":
+            payload = request.get("payload")
+            try:
+                result, sanitized_payload, entity_types = server.inspect_tool_result(payload)
+                response = {"outcome": str(result.outcome)}
+                if result.prepare_outcome is not None:
+                    response["prepare_outcome"] = str(result.prepare_outcome)
+                if entity_types:
+                    response["entity_types"] = list(entity_types)
+                if result.outcome == EnforcementOutcome.SANITIZED:
+                    response["sanitized_payload"] = sanitized_payload
+                elif result.outcome == EnforcementOutcome.INTERNAL_FAILURE:
+                    if recursive_text_length(payload) > MAX_TOOL_RESULT_CHARS:
+                        response["reason_code"] = "result_oversize"
+                    else:
+                        response["reason_code"] = "result_inspection_failed"
                 _send_payload(self.request, server.response(ok=True, response=response))
             except Exception:
                 _send_payload(self.request, server.response(ok=False))
@@ -1030,6 +1135,46 @@ def inspect_payload(
         session_id, payload, timeout_seconds=timeout_seconds, runtime_scope=runtime_scope
     )
     return outcome, sanitized
+
+
+def inspect_tool_result(
+    session_id: object,
+    result: object,
+    *,
+    timeout_seconds: float = _RESULT_IPC_TIMEOUT_SECONDS,
+    runtime_scope: str = "claude",
+) -> tuple[EnforcementOutcome, object | None, tuple[str, ...] | None, str | None, str]:
+    """Inspect a model-bound tool result through the warmed authenticated daemon (FW-020).
+
+    Returns ``(outcome, sanitized_result, entity_types, reason_code, stage)``.
+    Oversized results and daemon failures surface as ``INTERNAL_FAILURE`` so the
+    provider hook can fail closed (hide/block) rather than returning raw content.
+    """
+
+    state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
+    digest = _session_digest(session_id)
+    if state_path is None or digest is None:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, None, "state_missing_or_invalid"
+    state = _load_state(state_path, digest)
+    if state is None:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, None, "state_missing_or_invalid"
+    response, stage = _request_with_stage(
+        state, {"operation": "inspect_tool_result", "payload": result}, timeout_seconds
+    )
+    if response is None or response.get("ok") is not True:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, None, stage
+    value = response.get("response")
+    if not isinstance(value, Mapping) or not isinstance(value.get("outcome"), str):
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, None, "inspection_response_invalid"
+    try:
+        outcome = EnforcementOutcome(value["outcome"])
+    except ValueError:
+        return EnforcementOutcome.INTERNAL_FAILURE, None, None, None, "inspection_outcome_invalid"
+    entity_types = (
+        tuple(value["entity_types"]) if isinstance(value.get("entity_types"), list) else None
+    )
+    reason_code = value.get("reason_code") if isinstance(value.get("reason_code"), str) else None
+    return outcome, value.get("sanitized_payload"), entity_types, reason_code, "ok"
 
 
 def inspect_text_outcome_with_stage(

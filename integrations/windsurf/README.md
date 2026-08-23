@@ -9,7 +9,7 @@ interpreter path from the Securedact environment. Organization allowlists may
 also control MCP availability.
 
 Expected tools are `prepare_for_external_ai`, `analyze_text`, `redact_text`,
-`restore_text`, and `create_safe_copy`.
+`restore_text`, `create_safe_copy`, and `securedact_read_file`.
 
 Persistent workflow instructions should require:
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "securedact-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local-first privacy MCP server for sensitive AI workflows"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -37,6 +37,7 @@ Documentation = "https://github.com/GigantesHJI/securedact-mcp/tree/main/docs"
 [project.optional-dependencies]
 ml = [
   "flair>=0.15,<1",
+  "gliner>=0.2.13,<1",
   "huggingface-hub>=0.28,<1",
   "torch>=2.5,<3",
   "transformers>=4.41,<5",
@@ -73,6 +74,7 @@ securedact-eval = "securedact_eval.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["securedact_mcp*", "securedact_core*", "securedact_eval*", "securedact_enforced*"]
+exclude = ["securedact_eval.experimental", "securedact_eval.experimental.*"]
 
 [tool.setuptools.package-data]
 "securedact_core.detectors" = ["lexicons/*.json"]
@@ -91,6 +93,9 @@ line-length = 100
 extend-exclude = [
   "build",
   "dist",
+  ".kilo",
+  "scripts/experimental",
+  "src/securedact_eval/experimental",
 ]
 
 [tool.ruff.lint]
@@ -123,7 +128,21 @@ strict = true
 pretty = true
 show_error_codes = true
 files = ["src/securedact_core", "src/securedact_mcp", "scripts"]
+exclude = ["src/securedact_eval/experimental", "scripts/experimental"]
 
 [[tool.mypy.overrides]]
-module = ["flair", "flair.*", "huggingface_hub", "huggingface_hub.*", "psutil", "yaml"]
+module = [
+  "flair",
+  "flair.*",
+  "huggingface_hub",
+  "huggingface_hub.*",
+  "transformers",
+  "transformers.*",
+  "torch",
+  "torch.*",
+  "gliner",
+  "gliner.*",
+  "psutil",
+  "yaml",
+]
 ignore_missing_imports = true

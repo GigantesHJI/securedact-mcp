@@ -8,16 +8,6 @@ public server release.
 
 ## [Unreleased]
 
-### Fixed
-
-- Gemini enforced `BeforeTool` now canonicalizes a structured `FILE_READ`/`FILE_WRITE`
-  path (relative paths anchor to the active workspace/cwd supplied by Gemini, absolute
-  Windows paths stay absolute, separators normalized, symlinks/`..`/UNC/URL/null-byte
-  rejected, escapes outside the workspace fail closed) **before** the firewall judges it
-  (FW-012). `BeforeAgent` remains prompt-sanitization only and never performs filesystem
-  authorization on path-like text in a natural-language prompt, so a harmless prompt that
-  mentions a filename is no longer rejected as a filesystem operation.
-
 ### Added
 
 - Enterprise Connectors foundation (Batch 1): platform-neutral connector contracts
@@ -34,6 +24,19 @@ public server release.
     identifiers can never become SSRF targets.
 - Microsoft-specific code is isolated from the core engine: no `msal`/`msgraph`
   import is pulled in by `securedact_core` or the MCP server (verified by tests).
+
+## [0.4.1] - 2026-08-24
+
+### Fixed
+
+- Gemini `FILE_READ`/`FILE_WRITE` paths are canonicalized against the active workspace
+  before firewall evaluation.
+- Safe relative/absolute in-workspace paths now work correctly.
+- Traversal/outside-root paths fail closed.
+- Windows-style separators are normalized before canonicalization so traversal protection
+  behaves consistently on Windows and POSIX/Linux.
+- UNC, URL, null-byte and uncanonicalizable paths remain fail-closed.
+- Added cross-platform regression coverage.
 
 ## [0.4.0] - 2026-08-24
 

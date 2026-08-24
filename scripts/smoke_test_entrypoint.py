@@ -18,6 +18,7 @@ EXPECTED_TOOLS = {
     "redact_text",
     "restore_text",
     "create_safe_copy",
+    "securedact_read_file",
 }
 
 

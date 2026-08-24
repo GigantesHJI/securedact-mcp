@@ -17,6 +17,7 @@ paths = [
   '''tests/unit/test_firewall_backward_compat\.py''',
   '''tests/unit/test_safe_read_file\.py''',
   '''tests/unit/test_firewall_egress\.py''',
+  '''tests/unit/test_gemini_enforced\.py''',
   '''tests/privacy/test_policy_storage_and_audit\.py''',
   '''tests/privacy_corpus/adversarial/credential_blocks\.json''',
   '''benchmarks/corpora/release_gate\.json''',

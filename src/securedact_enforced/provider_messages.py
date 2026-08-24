@@ -5,6 +5,13 @@ from __future__ import annotations
 PROMPT_BLOCK = "SecuRedact detected protected information. The prompt was not sent."
 REVIEW_BLOCK = "SecuRedact requires local human review before this content can be sent."
 FAIL_CLOSED = "SecuRedact could not validate this protected path, so it was not sent."
+# Prompt/model-stage enforcement failure that has nothing to do with a filesystem
+# path (e.g., the local runtime could not be reached to inspect a pathless
+# natural-language prompt). It must fail closed, but it must NEVER be reported as
+# a "protected path" validation failure: no file target exists before tool
+# selection, so blaming a path would be misleading and would make a harmless
+# prompt look like a blocked filesystem operation.
+PROMPT_RUNTIME_BLOCKED = "SecuRedact could not verify this request locally, so it was not sent."
 TOOL_BLOCK = "SecuRedact blocked this outbound action because it contains protected information."
 
 # FW-020 result-inspection messages. These never contain raw sensitive content;

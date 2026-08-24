@@ -25,6 +25,27 @@ public server release.
 - Microsoft-specific code is isolated from the core engine: no `msal`/`msgraph`
   import is pulled in by `securedact_core` or the MCP server (verified by tests).
 
+## [0.4.2] - 2026-08-24
+
+Patch release. It fixes local Gemini CLI enforcement so a benign prompt is no longer
+fail-closed as a "protected path" failure, and it keeps every deny path intact. No
+policy, detection, or firewall behavior changed.
+
+### Fixed
+
+- Gemini `BeforeAgent`/`BeforeModel` now lazily ensure the local enforcement runtime
+  is ready instead of relying solely on `SessionStart`.
+- Prompt-stage runtime failures now use a path-neutral fail-closed message.
+- Glob/Grep/discovery operations with no concrete file target are no longer rejected
+  as invalid protected paths.
+- Concrete `FILE_READ`/`FILE_WRITE` operations still canonicalize against the active
+  workspace before firewall evaluation.
+- Safe workspace reads allowed; `.env`/traversal/UNC/URL/null-byte cases remain
+  fail-closed.
+- Added installed-runtime/real-host regression coverage.
+- `gemini-extension.json` now tracks the package version across the root,
+  `integrations/`, and `setup_assets/` copies.
+
 ## [0.4.1] - 2026-08-24
 
 ### Fixed

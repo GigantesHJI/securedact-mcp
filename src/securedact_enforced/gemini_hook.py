@@ -46,6 +46,7 @@ from .adapter import (
     firewall_decision_outcome,
 )
 from .claude_runtime import (
+    ensure_runtime,
     inspect_payload_with_prepare_outcome_stage,
     inspect_text_outcome_with_stage,
     runtime_diagnostics,
@@ -58,6 +59,7 @@ from .provider_messages import (
     EGRESS_OVERSIZE,
     FAIL_CLOSED,
     PROMPT_BLOCK,
+    PROMPT_RUNTIME_BLOCKED,
     RESULT_BLOCKED,
     RESULT_OVERSIZE,
     REVIEW_BLOCK,
@@ -70,6 +72,11 @@ _SCOPE = "gemini"
 # Gemini's configured 20-second hook budget and fail closed on expiry.
 _PROMPT_IPC_TIMEOUT_SECONDS = 2.0
 _PAYLOAD_IPC_TIMEOUT_SECONDS = 18.0
+# Budget the hook may spend bringing the local runtime online for a prompt/model
+# stage when SessionStart did not leave a live daemon. The Gemini BeforeAgent/
+# BeforeModel hook command itself has a 20s budget, so this stays comfortably
+# inside it while giving the daemon time to load the contextual model.
+_PROMPT_RUNTIME_START_TIMEOUT_SECONDS = 5.0
 _INITIALIZING = "SecuRedact is still initializing; this content was not sent."
 _INSPECTION_STAGE: ContextVar[str] = ContextVar("gemini_inspection_stage", default="not_invoked")
 _PREPARE_OUTCOME: ContextVar[str | None] = ContextVar("gemini_prepare_outcome", default=None)
@@ -91,6 +98,46 @@ def _allow() -> dict[str, object]:
 
 def _deny(reason: str) -> dict[str, object]:
     return {"decision": "deny", "reason": reason}
+
+
+def _ensure_runtime_ready(session_id: object) -> None:
+    """Bring the local enforcement runtime online before a prompt/model stage.
+
+    ``SessionStart`` normally spawns the daemon, but a pathless natural-language
+    prompt must not fail closed merely because that one-shot spawn left no live
+    daemon (the child died, or a fresh session never fired ``SessionStart``).
+    Start it lazily here so the prompt proceeds once the engine is ready instead
+    of being misreported as a "protected path" validation failure. A healthy
+    runtime is detected immediately and costs nothing; only a cold start pays
+    the spawn-and-warm cost.
+    """
+
+    try:
+        ensure_runtime(
+            session_id,
+            runtime_scope=_SCOPE,
+            startup_timeout_seconds=_PROMPT_RUNTIME_START_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        # Startup failure must not turn into an unhandled error; inspection
+        # below fails closed on its own.
+        return
+
+
+def _deny_prompt_outcome(session_id: object, outcome: EnforcementOutcome) -> dict[str, object]:
+    """Fail closed for a prompt/model stage, but never as a "protected path".
+
+    A prompt carries no file target, so an inspection/runtime failure here is not
+    a filesystem authorization failure. Report it with the path-neutral message
+    (or the accurate "still initializing" message while the daemon warms) rather
+    than ``FAIL_CLOSED``'s "could not validate this protected path".
+    """
+
+    if outcome == EnforcementOutcome.INTERNAL_FAILURE and not runtime_is_warming(
+        session_id, runtime_scope=_SCOPE
+    ):
+        return _deny(PROMPT_RUNTIME_BLOCKED)
+    return _deny_for_outcome(session_id, outcome)
 
 
 @lru_cache(maxsize=1)
@@ -667,11 +714,11 @@ def handle_event(
     """Return only Gemini protocol JSON; malformed input fails closed."""
 
     if not isinstance(event, Mapping):
-        return (
-            _deny(FAIL_CLOSED)
-            if event_name in {"BeforeAgent", "BeforeModel", "BeforeTool"}
-            else _allow()
-        )
+        if event_name in {"BeforeAgent", "BeforeModel"}:
+            return _deny(PROMPT_RUNTIME_BLOCKED)
+        if event_name == "BeforeTool":
+            return _deny(FAIL_CLOSED)
+        return _allow()
     session_id = event.get("session_id")
     if event_name == "SessionStart":
         start_runtime(session_id, runtime_scope=_SCOPE, health_timeout_seconds=0.1)
@@ -685,11 +732,12 @@ def handle_event(
         # validation happens later at BeforeTool against the structured
         # FILE_READ/FILE_WRITE operation, never here, so a harmless prompt is
         # never rejected merely because it names a file.
+        _ensure_runtime_ready(session_id)
         prompt = event.get("prompt")
         if not isinstance(prompt, str):
             if diagnostic_observer is not None:
                 diagnostic_observer(None, EnforcementOutcome.INTERNAL_FAILURE)
-            return _deny(FAIL_CLOSED)
+            return _deny(PROMPT_RUNTIME_BLOCKED)
         outcome = _inspect_prompt(session_id, prompt)
         if diagnostic_observer is not None:
             diagnostic_observer("prompt", outcome)
@@ -697,16 +745,17 @@ def handle_event(
         # where the signed core-provided sanitized text replaces it.
         if outcome in {EnforcementOutcome.ALLOW, EnforcementOutcome.SANITIZED}:
             return _allow()
-        return _deny_for_outcome(session_id, outcome)
+        return _deny_prompt_outcome(session_id, outcome)
     if event_name == "BeforeModel":
         _GUIDANCE_INJECTED.set(False)
         _TOKEN_CATEGORIES.set(())
+        _ensure_runtime_ready(session_id)
         request = event.get("llm_request")
         if not isinstance(request, dict):
-            return _deny(FAIL_CLOSED)
+            return _deny(PROMPT_RUNTIME_BLOCKED)
         selected_model_text = _model_text_payload(request)
         if selected_model_text is None:
-            return _deny(FAIL_CLOSED)
+            return _deny(PROMPT_RUNTIME_BLOCKED)
         model_text, selected_indices = selected_model_text
         outcome, prepare_outcome, sanitized = _inspect_model(session_id, model_text)
         if outcome == EnforcementOutcome.ALLOW and prepare_outcome == PrepareOutcome.ALLOW:
@@ -729,7 +778,7 @@ def handle_event(
         ):
             updated_request = _merge_model_text_payload(request, sanitized, selected_indices)
             if updated_request is None:
-                return _deny(FAIL_CLOSED)
+                return _deny(PROMPT_RUNTIME_BLOCKED)
             guided_request, _injected, _categories = _inject_pseudonym_guidance(
                 updated_request, selected_indices
             )
@@ -747,7 +796,7 @@ def handle_event(
             return _deny_for_outcome(session_id, outcome)
         if outcome == EnforcementOutcome.BLOCKED and prepare_outcome == PrepareOutcome.BLOCKED:
             return _deny_for_outcome(session_id, outcome)
-        return _deny_for_outcome(session_id, EnforcementOutcome.INTERNAL_FAILURE)
+        return _deny_prompt_outcome(session_id, EnforcementOutcome.INTERNAL_FAILURE)
     if event_name == "BeforeTool":
         tool_name = event.get("tool_name")
         tool_input = event.get("tool_input")
@@ -762,26 +811,39 @@ def handle_event(
             # the correct lifecycle stage: BeforeAgent only sanitizes prompt
             # text; the structured FILE_READ/FILE_WRITE path is resolved here.
             if context.operation in {ToolOperation.FILE_READ, ToolOperation.FILE_WRITE}:
-                canonical = _canonicalize_tool_file_path(context.path, event.get("cwd"))
-                if canonical is None:
-                    _emit_tool_audit(
-                        EnforcementOutcome.BLOCKED,
-                        provider="gemini",
-                        tool_name=tool_name if isinstance(tool_name, str) else None,
-                        operation=context.operation,
-                        decision=None,
-                    )
-                    return _deny_for_outcome(session_id, EnforcementOutcome.BLOCKED, tool=True)
-                if context.path != canonical:
-                    context = ToolContext(
-                        provider=context.provider,
-                        tool_name=context.tool_name,
-                        operation=context.operation,
-                        path=canonical,
-                        destination=context.destination,
-                        destination_scope=context.destination_scope,
-                        payload=context.payload,
-                    )
+                if context.path is not None:
+                    # Filesystem authorization must operate on the *canonical*
+                    # target, not the raw user/tool-supplied string, so
+                    # symlink/``..``/UNC tricks cannot hide a prohibited file from
+                    # the firewall (FW-012). This is the correct lifecycle stage:
+                    # BeforeAgent only sanitizes prompt text; the structured
+                    # FILE_READ/FILE_WRITE path is resolved here.
+                    canonical = _canonicalize_tool_file_path(context.path, event.get("cwd"))
+                    if canonical is None:
+                        _emit_tool_audit(
+                            EnforcementOutcome.BLOCKED,
+                            provider="gemini",
+                            tool_name=tool_name if isinstance(tool_name, str) else None,
+                            operation=context.operation,
+                            decision=None,
+                        )
+                        return _deny_for_outcome(session_id, EnforcementOutcome.BLOCKED, tool=True)
+                    if context.path != canonical:
+                        context = ToolContext(
+                            provider=context.provider,
+                            tool_name=context.tool_name,
+                            operation=context.operation,
+                            path=canonical,
+                            destination=context.destination,
+                            destination_scope=context.destination_scope,
+                            payload=context.payload,
+                        )
+                # A FILE_READ/FILE_WRITE with no concrete file target (for
+                # example a directory/pattern search such as Glob/Grep used to
+                # *discover* a file) names no specific protected path, so it must
+                # not be fail-closed as a protected-path failure. The firewall
+                # still judges any present path below; real file targets that
+                # fail canonicalization remain blocked above.
             if context.operation != ToolOperation.UNKNOWN:
                 decision = evaluate_firewall(firewall, context)
                 outcome = firewall_decision_outcome(decision)

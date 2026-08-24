@@ -20,6 +20,7 @@ from securedact_enforced.claude_runtime import (
     _session_digest,
     state_path_for_session,
 )
+from securedact_enforced.provider_messages import PROMPT_RUNTIME_BLOCKED
 from tests.unit.test_confidence_pseudonymization import _engine as _core_engine
 
 
@@ -153,7 +154,7 @@ def test_warming_or_unavailable_runtime_denies_immediately(monkeypatch: pytest.M
     assert unavailable["decision"] == "deny"
     assert (
         unavailable["reason"]
-        == "SecuRedact could not validate this protected path, so it was not sent."
+        == "SecuRedact could not verify this request locally, so it was not sent."
     )
 
 
@@ -267,7 +268,7 @@ def test_before_model_missing_documented_message_content_fails_closed() -> None:
         "BeforeModel", {"session_id": "s", "llm_request": {"messages": [{"role": "user"}]}}
     ) == {
         "decision": "deny",
-        "reason": "SecuRedact could not validate this protected path, so it was not sent.",
+        "reason": "SecuRedact could not verify this request locally, so it was not sent.",
     }
 
 
@@ -1205,3 +1206,192 @@ def test_core_safe_read_still_allows_safe_file_and_blocks_env(
     blocked = read_file_safely(str(env), redactor=lambda text: text)
     assert not blocked.ok
     assert blocked.reason_code == "protected_path_blocked"
+
+
+# --- Real-host regression (Phase 6) -------------------------------------------
+#
+# The user typed "could you summarize the safe notes" (no filesystem path) and
+# Gemini blocked it immediately with "could not validate this protected path".
+# On the real host SessionStart's one-shot daemon was not live, so the prompt
+# hook failed closed on a prompt that names no file. The fix ensures the prompt
+# hook brings the local runtime online itself, and never reports a pathless
+# prompt failure as a "protected path" failure. The firewall/BeforeTool path
+# authorization (and its security invariants) are unchanged.
+
+
+def test_real_host_before_agent_pathless_prompt_allowed_once_runtime_ready(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Reproduce the real host: a fresh Gemini session where SessionStart never
+    # left a live daemon. With the fix, the prompt hook starts the runtime
+    # itself so a benign, pathless prompt proceeds once the engine is ready.
+    monkeypatch.setenv("SECUREDACT_REQUIRE_FLAIR", "0")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    from securedact_enforced import claude_runtime
+
+    monkeypatch.setattr(
+        gemini_hook,
+        "ensure_runtime",
+        lambda sid, **kw: claude_runtime.ensure_runtime(sid, **kw),
+    )
+    try:
+        output = gemini_hook.handle_event(
+            "BeforeAgent",
+            {"session_id": "real-host-repro", "prompt": "could you summarize the safe notes"},
+        )
+    finally:
+        claude_runtime.shutdown_runtime("real-host-repro", runtime_scope=gemini_hook._SCOPE)
+    assert output == {"decision": "allow"}
+
+
+def test_real_host_before_agent_pathless_prompt_never_claims_protected_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # When the runtime genuinely cannot be reached for a pathless prompt, the
+    # hook still fails closed (never weakens the firewall), but it must NOT claim
+    # a "protected path" could not be validated -- there is no file target.
+    monkeypatch.setattr(gemini_hook, "ensure_runtime", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        gemini_hook, "_inspect_prompt", lambda _s, _p: EnforcementOutcome.INTERNAL_FAILURE
+    )
+    monkeypatch.setattr(gemini_hook, "runtime_is_warming", lambda _s, **kwargs: False)
+    output = gemini_hook.handle_event(
+        "BeforeAgent",
+        {"session_id": "real-host-repro", "prompt": "could you summarize the safe notes"},
+    )
+    assert output["decision"] == "deny"
+    assert output["reason"] == PROMPT_RUNTIME_BLOCKED
+    assert "protected path" not in output["reason"]
+
+
+def test_real_host_normal_prompt_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gemini_hook, "_inspect_prompt", lambda _s, _p: EnforcementOutcome.ALLOW)
+    assert gemini_hook.handle_event(
+        "BeforeAgent", {"session_id": "s", "prompt": "What is 2 + 2?"}
+    ) == {"decision": "allow"}
+
+
+def test_real_host_read_safe_notes_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "safe_notes.txt").write_text("harmless meeting notes", encoding="utf-8")
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    assert _gemini_file_read(tmp_path, "safe_notes.txt", cwd=tmp_path) == {"decision": "allow"}
+
+
+def test_real_host_read_env_denied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / ".env").write_text(
+        "SYNTHETIC_API_TOKEN=sk-synthetic-not-a-real-secret-0123456789\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    assert _gemini_file_read(tmp_path, ".env", cwd=tmp_path)["decision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    "traversal",
+    (
+        "..\\outside\\secret.txt",  # Windows-style separators
+        "../outside/secret.txt",  # POSIX-style separators
+    ),
+)
+def test_real_host_read_traversal_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, traversal: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "subdir").mkdir(parents=True)
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "secret.txt").write_text(
+        "synthetic out-of-workspace content", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    assert _gemini_file_read(workspace, traversal, cwd=workspace)["decision"] == "deny"
+
+
+def test_real_host_glob_discovery_not_blocked_for_absent_file_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Workspace discovery (search/list) needed before a concrete file is chosen
+    # must not be blocked merely because no specific file target exists yet.
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    # Realistic Gemini Glob: an existing workspace directory plus a pattern.
+    out = gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "real-host-repro",
+            "tool_name": "Glob",
+            "tool_input": {"pattern": "safe_notes*", "path": str(tmp_path)},
+            "cwd": str(tmp_path),
+        },
+    )
+    assert out == {"decision": "allow"}
+    # Even a discovery call with no explicit path must not be treated as a
+    # protected-path failure before a concrete target is selected.
+    out_no_path = gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "real-host-repro",
+            "tool_name": "Glob",
+            "tool_input": {"pattern": "safe_notes*"},
+            "cwd": str(tmp_path),
+        },
+    )
+    assert out_no_path == {"decision": "allow"}
+
+
+# --- Packaging / installed-runtime regression (Phase 8) ----------------------
+#
+# The wheel must execute the intended hook implementation. This guards against
+# source-vs-installed-extension skew (e.g. a stale extension manifest version or
+# a hook command that does not point at securedact_enforced.gemini_hook).
+
+
+def test_gemini_extension_manifest_matches_package_version() -> None:
+    from importlib.metadata import version as pkg_version
+
+    root = Path(__file__).resolve().parents[2]
+    expected = pkg_version("securedact-mcp")
+    for manifest in (
+        root / "gemini-extension.json",
+        root / "integrations" / "gemini-enforced" / "securedact-enforced" / "gemini-extension.json",
+        root / "src" / "securedact_mcp" / "setup_assets" / "gemini" / "gemini-extension.json",
+    ):
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        assert data["version"] == expected, manifest
+
+
+def test_gemini_extension_assets_are_identical_and_invoke_intended_hook() -> None:
+    root = Path(__file__).resolve().parents[2]
+    copies = [
+        root / "gemini-extension.json",
+        root / "integrations" / "gemini-enforced" / "securedact-enforced" / "gemini-extension.json",
+        root / "src" / "securedact_mcp" / "setup_assets" / "gemini" / "gemini-extension.json",
+    ]
+    hooks_copies = [
+        root / "hooks" / "hooks.json",
+        root / "integrations" / "gemini-enforced" / "securedact-enforced" / "hooks" / "hooks.json",
+        root / "src" / "securedact_mcp" / "setup_assets" / "gemini" / "hooks" / "hooks.json",
+    ]
+    for group in (copies, hooks_copies):
+        contents = [p.read_text(encoding="utf-8") for p in group]
+        assert all(c == contents[0] for c in contents), group
+    # The hook command must execute the intended Gemini hook module.
+    hooks = json.loads(hooks_copies[0].read_text(encoding="utf-8"))["hooks"]
+    for hook in hooks.values():
+        assert hook[0]["hooks"][0]["command"].startswith(
+            "python -m securedact_enforced.gemini_hook"
+        )
+
+
+def test_gemini_hook_module_identity_matches_installed_package() -> None:
+    # The hook executed by the extension must be this package's module, not a
+    # stray copy; importing it resolves to the installed securedact_enforced.
+    import securedact_enforced
+
+    assert securedact_enforced.__name__ == "securedact_enforced"
+    assert hasattr(gemini_hook, "handle_event")

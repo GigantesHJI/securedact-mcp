@@ -955,3 +955,138 @@ def test_gemini_firewall_requires_approval_maps_to_deny(
         },
     )
     assert output["decision"] == "deny"
+
+
+# --- FILE_READ path canonicalization (regression for 0.4.0 Gemini block) -----
+#
+# BeforeAgent only sanitizes the prompt. It must never perform filesystem
+# authorization on path-like text in a natural-language prompt, and the
+# structured FILE_READ path must be canonicalized against the workspace before
+# the firewall judges it (FW-012).
+
+
+def test_before_agent_allow_harmless_prompt_mentioning_filename(monkeypatch) -> None:
+    monkeypatch.setattr(gemini_hook, "_inspect_prompt", lambda _s, _p: EnforcementOutcome.ALLOW)
+    output = gemini_hook.handle_event(
+        "BeforeAgent",
+        {"session_id": "s", "prompt": "Read safe_notes.txt and tell me what it contains."},
+    )
+    assert output == {"decision": "allow"}
+
+
+def test_before_agent_allow_absolute_path_prompt_mention(monkeypatch) -> None:
+    monkeypatch.setattr(gemini_hook, "_inspect_prompt", lambda _s, _p: EnforcementOutcome.ALLOW)
+    prompt = (
+        'Read "C:\\Users\\Katici\\Desktop\\securedact\\safe_notes.txt" '
+        "and tell me what it contains."
+    )
+    output = gemini_hook.handle_event("BeforeAgent", {"session_id": "s", "prompt": prompt})
+    assert output == {"decision": "allow"}
+
+
+def test_before_agent_does_not_authorize_paths_on_protected_filename_prompt(
+    monkeypatch,
+) -> None:
+    # A prompt that *names* a protected file is still only prompt-sanitized; it
+    # is not rejected as a filesystem operation.
+    monkeypatch.setattr(gemini_hook, "_inspect_prompt", lambda _s, _p: EnforcementOutcome.ALLOW)
+    output = gemini_hook.handle_event(
+        "BeforeAgent",
+        {"session_id": "s", "prompt": "What is inside .env in this project?"},
+    )
+    assert output == {"decision": "allow"}
+
+
+def _gemini_file_read(tmp_path, file_path, *, cwd=None):
+    return gemini_hook.handle_event(
+        "BeforeTool",
+        {
+            "session_id": "gemini-test-session",
+            "tool_name": "Read",
+            "tool_input": {"file_path": file_path},
+            **({"cwd": str(cwd)} if cwd is not None else {}),
+        },
+    )
+
+
+def test_before_tool_allows_relative_file_read_in_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "safe_notes.txt").write_text("harmless meeting notes", encoding="utf-8")
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = _gemini_file_read(tmp_path, "safe_notes.txt", cwd=tmp_path)
+    assert output == {"decision": "allow"}
+
+
+def test_before_tool_allows_absolute_file_read_in_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    safe = tmp_path / "safe_notes.txt"
+    safe.write_text("harmless meeting notes", encoding="utf-8")
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = _gemini_file_read(tmp_path, str(safe), cwd=tmp_path)
+    assert output == {"decision": "allow"}
+
+
+def test_before_tool_blocks_protected_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".env").write_text(
+        "SYNTHETIC_API_TOKEN=sk-synthetic-not-a-real-secret-0123456789\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = _gemini_file_read(tmp_path, ".env", cwd=tmp_path)
+    assert output["decision"] == "deny"
+
+
+def test_before_tool_blocks_traversal_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = _gemini_file_read(tmp_path, "..\\outside\\secret.txt", cwd=tmp_path)
+    assert output["decision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    (
+        "\\\\server\\share\\secret.txt",  # UNC / network path
+        "http://example.test/secret.txt",  # URL passed as a file path
+        "sneaky\x00secret.txt",  # null byte injection
+    ),
+)
+def test_before_tool_fails_closed_on_uncanonicalizable_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_path: str
+) -> None:
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = _gemini_file_read(tmp_path, bad_path, cwd=tmp_path)
+    assert output["decision"] == "deny"
+
+
+def test_core_safe_read_still_allows_safe_file_and_blocks_env(
+    tmp_path: Path,
+) -> None:
+    # Regression guard: the canonicalization primitive reused by the Gemini hook
+    # still behaves correctly for the MCP ``securedact_read_file`` core path.
+    from securedact_core.safe_read import read_file_safely
+
+    safe = tmp_path / "safe_notes.txt"
+    safe.write_text("harmless meeting notes", encoding="utf-8")
+    env = tmp_path / ".env"
+    env.write_text("SYNTHETIC_API_TOKEN=sk-synthetic-0123456789", encoding="utf-8")
+
+    allowed = read_file_safely(str(safe), redactor=lambda text: text)
+    assert allowed.ok
+    blocked = read_file_safely(str(env), redactor=lambda text: text)
+    assert not blocked.ok
+    assert blocked.reason_code == "protected_path_blocked"

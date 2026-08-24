@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version 0.1.0 was an unpublished release attempt. Version 0.1.1 is the first
 public server release.
 
+## [Unreleased]
+
+### Fixed
+
+- Gemini enforced `BeforeTool` now canonicalizes a structured `FILE_READ`/`FILE_WRITE`
+  path (relative paths anchor to the active workspace/cwd supplied by Gemini, absolute
+  Windows paths stay absolute, separators normalized, symlinks/`..`/UNC/URL/null-byte
+  rejected, escapes outside the workspace fail closed) **before** the firewall judges it
+  (FW-012). `BeforeAgent` remains prompt-sanitization only and never performs filesystem
+  authorization on path-like text in a natural-language prompt, so a harmless prompt that
+  mentions a filename is no longer rejected as a filesystem operation.
+
+### Added
+
+- Enterprise Connectors foundation (Batch 1): platform-neutral connector contracts
+  in `securedact_core/connectors/` (ARCH-001/002/003, CONN-001):
+  - `ConnectorResource`, `ResourceKind`, `ConnectorCapability`, `ConnectorIdentity`,
+    `ScanContext`, `NormalizedContent` (contracts).
+  - `ScanRequest`, `ScanResult`, `ScanStatus`, `ScanSeverity`, `ScanError`,
+    `ScanFinding` (privacy-safe result model — no raw detected values).
+  - `ConnectorScanner` base orchestration: normalize → `SecuredactEngine.prepare` →
+    translate to `ScanResult`, with size-limit and unsupported-format handling that
+    never reports a false success.
+  - Connector audit event types (`CONNECTOR_*`) added to the core `AuditEventType`.
+  - Identifier validation that rejects path-traversal / unsafe characters so platform
+    identifiers can never become SSRF targets.
+- Microsoft-specific code is isolated from the core engine: no `msal`/`msgraph`
+  import is pulled in by `securedact_core` or the MCP server (verified by tests).
+
 ## [0.4.0] - 2026-08-24
 
 ### Added

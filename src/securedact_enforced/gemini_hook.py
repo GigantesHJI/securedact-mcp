@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from functools import lru_cache
+from pathlib import Path
 
 from securedact_core import PolicyRegistry, PrepareOutcome
 from securedact_core.audit import (
@@ -36,6 +38,7 @@ from securedact_core.firewall import (
     recursive_text_length,
 )
 from securedact_core.models import PrivacyAction
+from securedact_core.safe_read import SafeReadError, resolve_safe_path
 
 from . import claude_runtime
 from .adapter import (
@@ -185,6 +188,59 @@ def _is_external_tool(tool_name: object) -> bool:
         marker in lowered
         for marker in ("http", "web", "search", "fetch", "request", "api", "connect")
     )
+
+
+def _resolve_workspace_root(cwd: object) -> Path:
+    """Return the active Gemini workspace/cwd used to anchor relative paths.
+
+    Gemini supplies a concrete ``cwd`` at ``BeforeTool`` when available; otherwise
+    the hook process inherits Gemini's working directory. Either is a safe anchor
+    because filesystem authorization only ever *narrows* what a tool may touch.
+    """
+
+    if isinstance(cwd, str) and cwd.strip():
+        try:
+            return Path(cwd).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError, ValueError):
+            pass
+    return Path(os.getcwd()).resolve(strict=False)
+
+
+def _canonicalize_tool_file_path(raw: object, cwd: object) -> str | None:
+    """Canonicalize a structured FILE_READ/FILE_WRITE path for policy evaluation.
+
+    Provider-specific key extraction lives in ``classify_tool``; this step only
+    turns that raw string into the *real* absolute target the firewall must
+    judge. It resolves relative paths against the workspace, keeps absolute paths
+    absolute, normalizes separators, follows symlinks, and rejects URLs/UNC/null
+    bytes or any resolved target that escapes the workspace (FW-012). A path that
+    cannot be safely canonicalized returns ``None`` so the caller fails closed.
+
+    The defense primitives are reused from ``securedact_core.safe_read``; this
+    adapter never invents its own canonicalization or allowed-root policy.
+    """
+
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+    lowered = text.lower().replace("\\", "/")
+    # Reject URL/UNC/null-byte inputs before any anchoring: anchoring a relative
+    # URL into the workspace would strip its scheme marker and let it slip past
+    # the canonicalizer (FW-012). ``resolve_safe_path`` still enforces these too.
+    if "\x00" in text or "://" in lowered or lowered.startswith("//") or lowered.startswith("\\\\"):
+        return None
+    root = _resolve_workspace_root(cwd)
+    candidate = Path(text)
+    # Relative paths resolve against the active workspace, never the hook
+    # process cwd, so a harmless ``safe_notes.txt`` anchors to the workspace and
+    # an absolute path keeps its location (FW-012).
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = resolve_safe_path(str(candidate), allowed_roots=[str(root)])
+    except (SafeReadError, OSError, RuntimeError, ValueError):
+        return None
+    return str(resolved)
 
 
 def _requires_content_inspection(operation: ToolOperation, tool_name: object) -> bool:
@@ -593,6 +649,11 @@ def handle_event(
         shutdown_runtime(session_id, runtime_scope=_SCOPE)
         return _allow()
     if event_name == "BeforeAgent":
+        # Prompt sanitization only. A natural-language user prompt may *mention*
+        # a filename or path; that is never filesystem authorization. Path
+        # validation happens later at BeforeTool against the structured
+        # FILE_READ/FILE_WRITE operation, never here, so a harmless prompt is
+        # never rejected merely because it names a file.
         prompt = event.get("prompt")
         if not isinstance(prompt, str):
             if diagnostic_observer is not None:
@@ -664,6 +725,32 @@ def handle_event(
         context = classify_tool("gemini", tool_name, tool_input)
         firewall = load_firewall_policy_from_environment()
         if firewall is not None and firewall.enabled:
+            # Filesystem authorization must operate on the *canonical* target,
+            # not the raw user/tool-supplied string, so symlink/``..``/UNC tricks
+            # cannot hide a prohibited file from the firewall (FW-012). This is
+            # the correct lifecycle stage: BeforeAgent only sanitizes prompt
+            # text; the structured FILE_READ/FILE_WRITE path is resolved here.
+            if context.operation in {ToolOperation.FILE_READ, ToolOperation.FILE_WRITE}:
+                canonical = _canonicalize_tool_file_path(context.path, event.get("cwd"))
+                if canonical is None:
+                    _emit_tool_audit(
+                        EnforcementOutcome.BLOCKED,
+                        provider="gemini",
+                        tool_name=tool_name if isinstance(tool_name, str) else None,
+                        operation=context.operation,
+                        decision=None,
+                    )
+                    return _deny_for_outcome(session_id, EnforcementOutcome.BLOCKED, tool=True)
+                if context.path != canonical:
+                    context = ToolContext(
+                        provider=context.provider,
+                        tool_name=context.tool_name,
+                        operation=context.operation,
+                        path=canonical,
+                        destination=context.destination,
+                        destination_scope=context.destination_scope,
+                        payload=context.payload,
+                    )
             if context.operation != ToolOperation.UNKNOWN:
                 decision = evaluate_firewall(firewall, context)
                 outcome = firewall_decision_outcome(decision)

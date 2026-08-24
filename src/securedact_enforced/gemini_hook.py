@@ -80,6 +80,9 @@ _GUIDANCE_END_MARKER = "</securedact-pseudonym-token-guidance>"
 _TOKEN_PATTERN = re.compile(r"\[([A-Z][A-Z0-9_]*?)_([1-9][0-9]*)\]")
 _BARE_TOKEN_PATTERN = re.compile(r"(?<![A-Z0-9_])([A-Z][A-Z0-9_]*?)_([1-9][0-9]*)(?![A-Z0-9_])")
 _REDACTED_MARKER = "[REDACTED]"
+# Windows drive-rooted path (``C:/...``) after separator normalization; such a
+# path is only meaningful on a Windows host.
+_WINDOWS_DRIVE_ROOT_PATTERN = re.compile(r"^[A-Za-z]:/")
 
 
 def _allow() -> dict[str, object]:
@@ -206,6 +209,22 @@ def _resolve_workspace_root(cwd: object) -> Path:
     return Path(os.getcwd()).resolve(strict=False)
 
 
+def _normalize_path_separators(text: str) -> str:
+    """Return ``text`` with Windows-style ``\\`` separators expressed as ``/``.
+
+    ``pathlib`` only treats ``\\`` as a separator on the platform it runs on, so
+    on POSIX a Windows-style path such as ``..\\outside\\secret.txt`` is a single
+    literal filename and its ``..`` traversal is invisible to ``Path.resolve``.
+    ``/`` is a valid separator for Windows paths too, so rewriting ``\\`` to ``/``
+    yields the same platform-neutral segment structure on every host and keeps
+    ``..``/``.`` segments visible to the canonicalizer (FW-012). Drive-letter
+    paths such as ``C:\\Users\\...`` stay absolute because ``C:/Users/...`` is
+    still drive-rooted on Windows.
+    """
+
+    return text.replace("\\", "/")
+
+
 def _canonicalize_tool_file_path(raw: object, cwd: object) -> str | None:
     """Canonicalize a structured FILE_READ/FILE_WRITE path for policy evaluation.
 
@@ -224,13 +243,25 @@ def _canonicalize_tool_file_path(raw: object, cwd: object) -> str | None:
         return None
     text = raw.strip()
     lowered = text.lower().replace("\\", "/")
-    # Reject URL/UNC/null-byte inputs before any anchoring: anchoring a relative
-    # URL into the workspace would strip its scheme marker and let it slip past
-    # the canonicalizer (FW-012). ``resolve_safe_path`` still enforces these too.
+    # Reject URL/UNC/null-byte inputs before any anchoring or separator
+    # normalization: anchoring a relative URL into the workspace would strip its
+    # scheme marker and let it slip past the canonicalizer, and a UNC prefix must
+    # never be reinterpreted as a local path (FW-012). ``resolve_safe_path``
+    # still enforces these too.
     if "\x00" in text or "://" in lowered or lowered.startswith("//") or lowered.startswith("\\\\"):
         return None
     root = _resolve_workspace_root(cwd)
-    candidate = Path(text)
+    # Separator normalization happens *before* ``Path(...)`` so a Windows-style
+    # tool argument is split into segments on POSIX as well; otherwise
+    # ``..\\outside\\secret.txt`` would anchor into the workspace as a literal
+    # filename and its traversal would escape review (FW-012).
+    normalized = _normalize_path_separators(text)
+    if os.name != "nt" and _WINDOWS_DRIVE_ROOT_PATTERN.match(normalized):
+        # A drive-letter absolute path is not addressable on a POSIX host, and
+        # anchoring it into the workspace would invent a bogus in-workspace
+        # target, so it fails closed instead.
+        return None
+    candidate = Path(normalized)
     # Relative paths resolve against the active workspace, never the hook
     # process cwd, so a harmless ``safe_notes.txt`` anchors to the workspace and
     # an absolute path keeps its location (FW-012).

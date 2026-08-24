@@ -1045,22 +1045,71 @@ def test_before_tool_blocks_protected_env_file(
     assert output["decision"] == "deny"
 
 
+@pytest.mark.parametrize(
+    "traversal_path",
+    (
+        "..\\outside\\secret.txt",  # Windows-style separators
+        "../outside/secret.txt",  # POSIX-style separators
+        "..\\outside/../outside/secret.txt",  # mixed separators, still outside
+        "subdir\\..\\..\\outside\\secret.txt",  # traversal through a real subdirectory
+        "./..\\outside\\secret.txt",  # explicit "." segment plus traversal
+        ".\\subdir/..\\..\\outside\\secret.txt",  # mixed separators plus "." and ".."
+    ),
+)
 def test_before_tool_blocks_traversal_outside_workspace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, traversal_path: str
 ) -> None:
+    # Separator style is not a security boundary. ``pathlib`` only splits on
+    # "\\" when it runs on Windows, so the hook normalizes Windows-style
+    # separators before constructing ``Path``; otherwise a Windows-style ".."
+    # traversal would be a single literal filename on POSIX and would silently
+    # anchor inside the workspace instead of escaping it (FW-012).
+    workspace = tmp_path / "workspace"
+    (workspace / "subdir").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("synthetic out-of-workspace content", encoding="utf-8")
     monkeypatch.setattr(
         gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
     )
-    output = _gemini_file_read(tmp_path, "..\\outside\\secret.txt", cwd=tmp_path)
+    output = _gemini_file_read(workspace, traversal_path, cwd=workspace)
     assert output["decision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    "inside_path",
+    (
+        "subdir\\safe_notes.txt",  # Windows-style separators
+        "subdir/safe_notes.txt",  # POSIX-style separators
+        "subdir\\.\\safe_notes.txt",  # "." segment, Windows-style
+        "./subdir\\safe_notes.txt",  # mixed separators
+        "subdir/../subdir\\safe_notes.txt",  # ".." that stays inside the workspace
+    ),
+)
+def test_before_tool_allows_safe_workspace_file_for_any_separator_style(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inside_path: str
+) -> None:
+    # The mirror of the traversal case: normalization must not turn a harmless
+    # in-workspace path into a denial on either platform.
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    (subdir / "safe_notes.txt").write_text("harmless meeting notes", encoding="utf-8")
+    monkeypatch.setattr(
+        gemini_hook, "load_firewall_policy_from_environment", default_firewall_policy
+    )
+    output = _gemini_file_read(tmp_path, inside_path, cwd=tmp_path)
+    assert output == {"decision": "allow"}
 
 
 @pytest.mark.parametrize(
     "bad_path",
     (
         "\\\\server\\share\\secret.txt",  # UNC / network path
+        "//server/share/secret.txt",  # UNC written with POSIX separators
         "http://example.test/secret.txt",  # URL passed as a file path
+        "file:///etc/passwd",  # file:// URL passed as a file path
         "sneaky\x00secret.txt",  # null byte injection
+        "Z:\\outside\\secret.txt",  # foreign drive-letter path
     ),
 )
 def test_before_tool_fails_closed_on_uncanonicalizable_path(
@@ -1071,6 +1120,72 @@ def test_before_tool_fails_closed_on_uncanonicalizable_path(
     )
     output = _gemini_file_read(tmp_path, bad_path, cwd=tmp_path)
     assert output["decision"] == "deny"
+
+
+# --- canonicalizer unit contract (identical on Windows and POSIX) ------------
+
+
+@pytest.mark.parametrize(
+    "raw_path",
+    (
+        "subdir\\safe_notes.txt",
+        "subdir/safe_notes.txt",
+        "subdir\\.\\safe_notes.txt",
+        "./subdir\\safe_notes.txt",
+        "subdir/../subdir\\safe_notes.txt",
+    ),
+)
+def test_canonicalize_tool_file_path_normalizes_separators(tmp_path: Path, raw_path: str) -> None:
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    target = subdir / "safe_notes.txt"
+    target.write_text("harmless meeting notes", encoding="utf-8")
+    canonical = gemini_hook._canonicalize_tool_file_path(raw_path, str(tmp_path))
+    assert canonical == str(target.resolve())
+
+
+@pytest.mark.parametrize(
+    "raw_path",
+    (
+        "..\\outside\\secret.txt",
+        "../outside/secret.txt",
+        "..\\outside/../outside/secret.txt",
+        "subdir\\..\\..\\outside\\secret.txt",
+        "\\\\server\\share\\secret.txt",
+        "//server/share/secret.txt",
+        "http://example.test/secret.txt",
+        "sneaky\x00secret.txt",
+        "Z:\\outside\\secret.txt",
+    ),
+)
+def test_canonicalize_tool_file_path_fails_closed(tmp_path: Path, raw_path: str) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "subdir").mkdir(parents=True)
+    assert gemini_hook._canonicalize_tool_file_path(raw_path, str(workspace)) is None
+
+
+def test_canonicalize_tool_file_path_keeps_native_absolute_path(tmp_path: Path) -> None:
+    # On Windows this is a drive-letter path (``C:\...``) and on POSIX an
+    # absolute ``/...`` path; both must resolve to themselves and stay allowed.
+    safe = tmp_path / "safe_notes.txt"
+    safe.write_text("harmless meeting notes", encoding="utf-8")
+    assert gemini_hook._canonicalize_tool_file_path(str(safe), str(tmp_path)) == str(safe.resolve())
+
+
+def test_canonicalize_tool_file_path_resolves_dot_to_workspace(tmp_path: Path) -> None:
+    assert gemini_hook._canonicalize_tool_file_path(".", str(tmp_path)) == str(tmp_path.resolve())
+
+
+def test_normalize_path_separators_is_platform_neutral() -> None:
+    assert gemini_hook._normalize_path_separators("..\\outside\\secret.txt") == (
+        "../outside/secret.txt"
+    )
+    assert gemini_hook._normalize_path_separators("subdir/mixed\\notes.txt") == (
+        "subdir/mixed/notes.txt"
+    )
+    assert gemini_hook._normalize_path_separators("C:\\Users\\Katici\\safe_notes.txt") == (
+        "C:/Users/Katici/safe_notes.txt"
+    )
 
 
 def test_core_safe_read_still_allows_safe_file_and_blocks_env(

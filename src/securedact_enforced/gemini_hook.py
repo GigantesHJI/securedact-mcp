@@ -72,11 +72,36 @@ _SCOPE = "gemini"
 # Gemini's configured 20-second hook budget and fail closed on expiry.
 _PROMPT_IPC_TIMEOUT_SECONDS = 2.0
 _PAYLOAD_IPC_TIMEOUT_SECONDS = 18.0
-# Budget the hook may spend bringing the local runtime online for a prompt/model
-# stage when SessionStart did not leave a live daemon. The Gemini BeforeAgent/
-# BeforeModel hook command itself has a 20s budget, so this stays comfortably
-# inside it while giving the daemon time to load the contextual model.
-_PROMPT_RUNTIME_START_TIMEOUT_SECONDS = 5.0
+# Gemini gives each hook command a 20-second budget (see the shipped
+# ``hooks/hooks.json``). A stage's lazy runtime start plus its inspection request
+# must both fit inside that budget: a hook command killed for exceeding it
+# returns no decision at all, and Gemini treats a missing response as a warning
+# rather than a deny, so an over-budget stage would fail *open*. The reserve
+# covers this hook process's own interpreter/module start plus receipt writing.
+_HOST_HOOK_BUDGET_SECONDS = 20.0
+_HOST_HOOK_RESERVE_SECONDS = 4.0
+_MINIMUM_RUNTIME_START_SECONDS = 0.5
+
+
+def _runtime_start_budget_seconds(inspection_timeout_seconds: float) -> float:
+    """Return the lazy runtime-start budget this stage may spend.
+
+    A fresh install legitimately needs longer to bring the local engine online
+    than an already warm session, so the prompt stage (small inspection budget)
+    gets the remaining host budget, while a stage that reserves a large
+    inspection budget keeps only a short start budget. Both stay inside the host
+    hook budget, and both still fail closed when the runtime is not ready.
+    """
+
+    return max(
+        _MINIMUM_RUNTIME_START_SECONDS,
+        _HOST_HOOK_BUDGET_SECONDS - _HOST_HOOK_RESERVE_SECONDS - inspection_timeout_seconds,
+    )
+
+
+# Budget the prompt stage may spend bringing the local runtime online when
+# SessionStart did not leave a live daemon.
+_PROMPT_RUNTIME_START_TIMEOUT_SECONDS = _runtime_start_budget_seconds(_PROMPT_IPC_TIMEOUT_SECONDS)
 _INITIALIZING = "SecuRedact is still initializing; this content was not sent."
 _INSPECTION_STAGE: ContextVar[str] = ContextVar("gemini_inspection_stage", default="not_invoked")
 _PREPARE_OUTCOME: ContextVar[str | None] = ContextVar("gemini_prepare_outcome", default=None)
@@ -100,7 +125,7 @@ def _deny(reason: str) -> dict[str, object]:
     return {"decision": "deny", "reason": reason}
 
 
-def _ensure_runtime_ready(session_id: object) -> None:
+def _ensure_runtime_ready(session_id: object, *, inspection_timeout_seconds: float) -> None:
     """Bring the local enforcement runtime online before a prompt/model stage.
 
     ``SessionStart`` normally spawns the daemon, but a pathless natural-language
@@ -109,14 +134,16 @@ def _ensure_runtime_ready(session_id: object) -> None:
     Start it lazily here so the prompt proceeds once the engine is ready instead
     of being misreported as a "protected path" validation failure. A healthy
     runtime is detected immediately and costs nothing; only a cold start pays
-    the spawn-and-warm cost.
+    the spawn-and-warm cost, bounded so this stage stays inside the host hook
+    budget. A start that is already in flight is waited for rather than
+    duplicated, so a session never runs competing daemons.
     """
 
     try:
         ensure_runtime(
             session_id,
             runtime_scope=_SCOPE,
-            startup_timeout_seconds=_PROMPT_RUNTIME_START_TIMEOUT_SECONDS,
+            startup_timeout_seconds=_runtime_start_budget_seconds(inspection_timeout_seconds),
         )
     except Exception:
         # Startup failure must not turn into an unhandled error; inspection
@@ -732,7 +759,7 @@ def handle_event(
         # validation happens later at BeforeTool against the structured
         # FILE_READ/FILE_WRITE operation, never here, so a harmless prompt is
         # never rejected merely because it names a file.
-        _ensure_runtime_ready(session_id)
+        _ensure_runtime_ready(session_id, inspection_timeout_seconds=_PROMPT_IPC_TIMEOUT_SECONDS)
         prompt = event.get("prompt")
         if not isinstance(prompt, str):
             if diagnostic_observer is not None:
@@ -749,7 +776,7 @@ def handle_event(
     if event_name == "BeforeModel":
         _GUIDANCE_INJECTED.set(False)
         _TOKEN_CATEGORIES.set(())
-        _ensure_runtime_ready(session_id)
+        _ensure_runtime_ready(session_id, inspection_timeout_seconds=_PAYLOAD_IPC_TIMEOUT_SECONDS)
         request = event.get("llm_request")
         if not isinstance(request, dict):
             return _deny(PROMPT_RUNTIME_BLOCKED)

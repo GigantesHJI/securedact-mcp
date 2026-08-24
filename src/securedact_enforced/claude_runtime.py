@@ -39,6 +39,16 @@ _MAX_MESSAGE_BYTES = 1_048_576
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 4.0
 _STARTUP_TIMEOUT_SECONDS = 120.0
 _LOCK_STALE_SECONDS = 180.0
+# Bounded readiness polling. ``ensure_runtime`` never sleeps for a fixed period;
+# it polls the published state at this interval until its deadline and then fails
+# closed.
+_STARTUP_POLL_INTERVAL_SECONDS = 0.05
+_MINIMUM_HEALTH_TIMEOUT_SECONDS = 0.05
+# A warming marker is published by the parent immediately before the child is
+# spawned and re-published by that child with its own pid. Until the child claims
+# it, the marker is only trusted for this short hand-off window so a child that
+# never started cannot block a later start.
+_WARMING_HANDOFF_SECONDS = 10.0
 # Result inspection (FW-020) scans model-bound tool output, which is bounded by
 # ``MAX_TOOL_RESULT_CHARS``. The IPC budget is set below the host hook timeout so a
 # slow scan fails closed through the normal timeout path rather than hanging.
@@ -65,19 +75,43 @@ def _session_digest(session_id: object) -> str | None:
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
 
-def _runtime_directory(runtime_scope: str = "claude") -> Path:
+def _runtime_state_root(runtime_scope: str) -> Path:
+    """Return the per-user root that holds this scope's runtime state.
+
+    The state file carries the daemon endpoint plus the per-session HMAC secret,
+    so it must live in a directory owned by the current user on every supported
+    platform. Windows keeps ``%LOCALAPPDATA%``. POSIX hosts have no
+    ``LOCALAPPDATA``, so they use the per-user state (Linux) or application
+    support (macOS) directory rather than a shared temporary directory that any
+    local account could pre-create or replace with a symlink. A shared temporary
+    directory remains the last resort only when no home directory is resolvable.
+
+    ``XDG_RUNTIME_DIR`` is deliberately not used: it is absent for non-login and
+    service sessions, while the per-user state directory is always resolvable.
+    """
+
+    product = "ClaudeCode" if runtime_scope == "claude" else "GeminiCli"
     configured = os.environ.get("CLAUDE_PLUGIN_DATA") if runtime_scope == "claude" else None
     if configured:
-        root = Path(configured)
-    else:
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        product = "ClaudeCode" if runtime_scope == "claude" else "GeminiCli"
-        root = (
-            Path(local_app_data) / "SecuRedact" / product
-            if local_app_data
-            else Path(tempfile.gettempdir()) / f"securedact-{runtime_scope}"
-        )
-    directory = root / "runtime"
+        return Path(configured)
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "SecuRedact" / product
+    try:
+        home: Path | None = Path.home()
+    except (OSError, RuntimeError):
+        home = None
+    if home is None:
+        return Path(tempfile.gettempdir()) / f"securedact-{runtime_scope}"
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "SecuRedact" / product
+    state_home = os.environ.get("XDG_STATE_HOME")
+    base = Path(state_home) if state_home else home / ".local" / "state"
+    return base / "SecuRedact" / product
+
+
+def _runtime_directory(runtime_scope: str = "claude") -> Path:
+    directory = _runtime_state_root(runtime_scope) / "runtime"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     return directory
 
@@ -187,11 +221,84 @@ def _remove_state(path: Path, expected_token: bytes | None = None) -> None:
         pass
 
 
-def _write_warming(state_path: Path, session_digest: str) -> None:
-    _atomic_write_json(
-        _warming_path(state_path),
-        {"version": _PROTOCOL_VERSION, "session_digest": session_digest, "status": "warming"},
-    )
+def _write_warming(state_path: Path, session_digest: str, *, pid: int | None = None) -> None:
+    """Publish metadata-only warming state for one starting session runtime.
+
+    ``pid`` is set by the starting child itself so a prompt hook can distinguish a
+    runtime that is still loading from one whose child died before publishing
+    state. No request content is ever written here.
+    """
+
+    payload: dict[str, object] = {
+        "version": _PROTOCOL_VERSION,
+        "session_digest": session_digest,
+        "status": "warming",
+    }
+    if pid is not None:
+        payload["pid"] = pid
+    _atomic_write_json(_warming_path(state_path), payload)
+
+
+def _load_warming(state_path: Path, session_digest: str) -> Mapping[str, object] | None:
+    """Return this session's warming marker, or ``None`` when it is absent."""
+
+    try:
+        payload = json.loads(_warming_path(state_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("session_digest") != session_digest
+        or payload.get("status") != "warming"
+    ):
+        return None
+    return payload
+
+
+def _warming_age_seconds(state_path: Path) -> float | None:
+    try:
+        return time.time() - _warming_path(state_path).stat().st_mtime
+    except OSError:
+        return None
+
+
+def _warming_child_pid(state_path: Path, session_digest: str) -> int | None:
+    """Return the pid a starting child claimed, or ``None`` when unclaimed."""
+
+    marker = _load_warming(state_path, session_digest)
+    if marker is None:
+        return None
+    pid = marker.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    return pid
+
+
+def _warming_claimed_by_live_child(state_path: Path, session_digest: str) -> bool:
+    """Return whether a live child process currently owns the warming marker."""
+
+    pid = _warming_child_pid(state_path, session_digest)
+    return pid is not None and _pid_is_alive(pid)
+
+
+def _start_is_in_flight(state_path: Path, session_digest: str) -> bool:
+    """Return whether another start for this session is still warming up.
+
+    Each daemon loads its own contextual runtime and only one can own the state
+    file, so a second daemon must never be spawned while a live child is still
+    warming. The starting child claims the warming marker with its own pid, so
+    that pid is authoritative: a child that died is detected immediately. A
+    marker no child has claimed yet is trusted only for the short hand-off window
+    between the parent's write and the child's claim.
+    """
+
+    marker = _load_warming(state_path, session_digest)
+    if marker is None:
+        return False
+    if _warming_child_pid(state_path, session_digest) is not None:
+        return _warming_claimed_by_live_child(state_path, session_digest)
+    age_seconds = _warming_age_seconds(state_path)
+    return age_seconds is not None and abs(age_seconds) <= _WARMING_HANDOFF_SECONDS
 
 
 def _remove_warming(state_path: Path) -> None:
@@ -199,6 +306,20 @@ def _remove_warming(state_path: Path) -> None:
         _warming_path(state_path).unlink()
     except FileNotFoundError:
         pass
+
+
+def _remove_unclaimed_warming(state_path: Path, session_digest: str) -> None:
+    """Drop a warming marker unless a live child still owns it.
+
+    A child that is still loading owns the marker, so removing it would both hide
+    the accurate "initializing" state from the hook and invite a competing
+    daemon. A marker no live child claimed is removed so the next start retries
+    immediately instead of waiting out a stale marker.
+    """
+
+    if _warming_claimed_by_live_child(state_path, session_digest):
+        return
+    _remove_warming(state_path)
 
 
 def _read_line(connection: socket.socket) -> bytes | None:
@@ -682,15 +803,24 @@ def _serve(
 
 
 def serve_from_command_line(state_file: str, token: str, session_digest: str) -> int:
-    """Daemon entry point used only by the SessionStart-spawned child process."""
+    """Daemon entry point used only by the hook-spawned child process."""
 
     try:
         decoded_token = base64.b64decode(token.encode("ascii"), validate=True)
     except (ValueError, UnicodeDecodeError):
         return 1
+    state_path = Path(state_file)
+    # Claim the warming marker with this child's pid before loading anything, so
+    # a prompt hook can tell a live warm-up from a child that died early and
+    # never spawns a competing daemon. This is metadata only; no request content
+    # is written.
+    try:
+        _write_warming(state_path, session_digest, pid=os.getpid())
+    except OSError:
+        return 1
     from .adapter import PrivacyEnforcer
 
-    _serve(Path(state_file), decoded_token, session_digest, PrivacyEnforcer.from_environment)
+    _serve(state_path, decoded_token, session_digest, PrivacyEnforcer.from_environment)
     return 0
 
 
@@ -871,6 +1001,32 @@ def _is_healthy(
     return response is not None and response.get("ok") is True
 
 
+def _health_timeout_within(deadline: float) -> float:
+    """Bound one health probe by the startup budget that is still available."""
+
+    remaining = deadline - time.monotonic()
+    return min(_DEFAULT_REQUEST_TIMEOUT_SECONDS, max(_MINIMUM_HEALTH_TIMEOUT_SECONDS, remaining))
+
+
+def _await_healthy(state_path: Path, session_digest: str, deadline: float) -> bool:
+    """Poll published state until the daemon answers health or the budget ends.
+
+    Readiness is always bounded: there is no unbounded wait and no fixed sleep.
+    Callers fail closed when this returns ``False``.
+    """
+
+    while time.monotonic() < deadline:
+        if _is_healthy(
+            state_path, session_digest, timeout_seconds=_health_timeout_within(deadline)
+        ):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(_STARTUP_POLL_INTERVAL_SECONDS, remaining))
+    return False
+
+
 def _acquire_start_lock(state_path: Path, timeout_seconds: float) -> int | None:
     path = _lock_path(state_path)
     deadline = time.monotonic() + timeout_seconds
@@ -952,34 +1108,49 @@ def ensure_runtime(
     runtime_scope: str = "claude",
     spawn_daemon: Callable[[Path, bytes, str], None] = _spawn_daemon,
 ) -> EnsureResult:
-    """Ensure this Claude session has one warmed runtime; never load it in a prompt hook."""
+    """Ensure this session has exactly one warmed runtime, within a bounded budget.
+
+    ``startup_timeout_seconds`` bounds the *whole* call - lock acquisition, health
+    probing, and warm-up - so a provider hook stage cannot outlive the host's hook
+    budget (being killed mid-check would leave the host without a decision).
+    Readiness is polled, never slept for a fixed period, and an unavailable
+    runtime always fails closed.
+    """
 
     state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
     digest = _session_digest(session_id)
     if state_path is None or digest is None:
         return EnsureResult(ready=False, started=False)
-    if _is_healthy(state_path, digest):
+    deadline = time.monotonic() + startup_timeout_seconds
+    if _is_healthy(state_path, digest, timeout_seconds=_health_timeout_within(deadline)):
         return EnsureResult(ready=True, started=False)
-    lock = _acquire_start_lock(state_path, startup_timeout_seconds)
+    lock = _acquire_start_lock(state_path, max(0.0, deadline - time.monotonic()))
     if lock is None:
         return EnsureResult(ready=False, started=False)
+    published_warming = False
     try:
-        if _is_healthy(state_path, digest):
+        if _is_healthy(state_path, digest, timeout_seconds=_health_timeout_within(deadline)):
             return EnsureResult(ready=True, started=False)
+        if _start_is_in_flight(state_path, digest):
+            # A live child (SessionStart, or an earlier prompt stage) is already
+            # loading this session's runtime. Wait for it inside the remaining
+            # budget instead of spawning a competing daemon, and leave its
+            # warming marker in place so the hook can still report the accurate
+            # "initializing" state and fail closed.
+            return EnsureResult(ready=_await_healthy(state_path, digest, deadline), started=False)
         _remove_state(state_path)
         token = secrets.token_bytes(32)
         _write_warming(state_path, digest)
+        published_warming = True
         spawn_daemon(state_path, token, digest)
-        deadline = time.monotonic() + startup_timeout_seconds
-        while time.monotonic() < deadline:
-            if _is_healthy(state_path, digest):
-                return EnsureResult(ready=True, started=True)
-            time.sleep(0.05)
+        if _await_healthy(state_path, digest, deadline):
+            return EnsureResult(ready=True, started=True)
         _remove_state(state_path, token)
-        _remove_warming(state_path)
+        _remove_unclaimed_warming(state_path, digest)
         return EnsureResult(ready=False, started=True)
     except Exception:
-        _remove_warming(state_path)
+        if published_warming:
+            _remove_unclaimed_warming(state_path, digest)
         return EnsureResult(ready=False, started=False)
     finally:
         _release_start_lock(state_path, lock)
@@ -994,9 +1165,11 @@ def start_runtime(
 ) -> EnsureResult:
     """Launch one session daemon without waiting for model warm-up.
 
-    Claude Code must not spend prompt-hook budget loading a contextual model.
-    The session hook therefore starts the child and returns immediately. Until
-    it publishes a healthy state file, ``inspect_prompt`` fails closed.
+    Claude Code and Gemini CLI must not spend prompt-hook budget loading a
+    contextual model. The session hook therefore starts the child and returns
+    immediately. Until it publishes a healthy state file, prompt inspection fails
+    closed. A start that is already in flight is reported as warming rather than
+    duplicated, so a session never runs competing daemons.
     """
 
     state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
@@ -1008,15 +1181,20 @@ def start_runtime(
     lock = _acquire_start_lock(state_path, 1.0)
     if lock is None:
         return EnsureResult(ready=False, started=False)
+    published_warming = False
     try:
         if _is_healthy(state_path, digest, timeout_seconds=health_timeout_seconds):
             return EnsureResult(ready=True, started=False)
+        if _start_is_in_flight(state_path, digest):
+            return EnsureResult(ready=False, started=True)
         _remove_state(state_path)
         _write_warming(state_path, digest)
+        published_warming = True
         spawn_daemon(state_path, secrets.token_bytes(32), digest)
         return EnsureResult(ready=False, started=True)
     except Exception:
-        _remove_warming(state_path)
+        if published_warming:
+            _remove_unclaimed_warming(state_path, digest)
         return EnsureResult(ready=False, started=False)
     finally:
         _release_start_lock(state_path, lock)
@@ -1224,21 +1402,13 @@ def inspect_text_outcome(
 
 
 def runtime_is_warming(session_id: object, *, runtime_scope: str = "claude") -> bool:
-    """Return whether a SessionStart child has published safe warming state."""
+    """Return whether a starting child has published safe warming state."""
 
     state_path = state_path_for_session(session_id, runtime_scope=runtime_scope)
     digest = _session_digest(session_id)
     if state_path is None or digest is None or _load_state(state_path, digest) is not None:
         return False
-    try:
-        payload = json.loads(_warming_path(state_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
-    return (
-        isinstance(payload, Mapping)
-        and payload.get("session_digest") == digest
-        and payload.get("status") == "warming"
-    )
+    return _load_warming(state_path, digest) is not None
 
 
 def shutdown_runtime(session_id: object, *, runtime_scope: str = "claude") -> bool:

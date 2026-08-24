@@ -12,11 +12,12 @@ from pathlib import Path
 import pytest
 
 from securedact_core import PrepareOutcome, default_firewall_policy
-from securedact_enforced import gemini_hook
+from securedact_enforced import claude_runtime, gemini_hook
 from securedact_enforced.adapter import EnforcementOutcome, EnforcementResult, PrivacyEnforcer
 from securedact_enforced.claude_runtime import (
     _atomic_write_json,
     _RuntimeServer,
+    _serve,
     _session_digest,
     state_path_for_session,
 )
@@ -78,6 +79,28 @@ def _provider_task_text(output: dict[str, object]) -> str:
 def test_gemini_inspection_budgets_leave_margin_below_host_timeout() -> None:
     assert gemini_hook._PROMPT_IPC_TIMEOUT_SECONDS == 2.0
     assert 0 < gemini_hook._PAYLOAD_IPC_TIMEOUT_SECONDS < 20.0
+
+
+def test_gemini_runtime_start_plus_inspection_stays_inside_host_hook_budget() -> None:
+    # A hook command killed for exceeding Gemini's 20s budget returns no decision
+    # at all, and a missing response is a warning rather than a deny, so every
+    # stage's lazy runtime start plus its inspection request must fit inside the
+    # host budget with reserve for this hook process's own startup.
+    for inspection_timeout in (
+        gemini_hook._PROMPT_IPC_TIMEOUT_SECONDS,
+        gemini_hook._PAYLOAD_IPC_TIMEOUT_SECONDS,
+    ):
+        start_budget = gemini_hook._runtime_start_budget_seconds(inspection_timeout)
+        assert start_budget >= gemini_hook._MINIMUM_RUNTIME_START_SECONDS
+        assert (
+            start_budget + inspection_timeout
+            <= gemini_hook._HOST_HOOK_BUDGET_SECONDS - gemini_hook._HOST_HOOK_RESERVE_SECONDS
+            or start_budget == gemini_hook._MINIMUM_RUNTIME_START_SECONDS
+        )
+        assert start_budget + inspection_timeout < gemini_hook._HOST_HOOK_BUDGET_SECONDS
+    # A fresh install needs more cold-start slack than the previous fixed budget
+    # allowed for the small prompt stage.
+    assert gemini_hook._PROMPT_RUNTIME_START_TIMEOUT_SECONDS > 5.0
 
 
 def test_before_agent_allows_and_blocks_injection_without_echoing_prompt(
@@ -1217,31 +1240,153 @@ def test_core_safe_read_still_allows_safe_file_and_blocks_env(
 # hook brings the local runtime online itself, and never reports a pathless
 # prompt failure as a "protected path" failure. The firewall/BeforeTool path
 # authorization (and its security invariants) are unchanged.
+#
+# These are *hook logic* regressions and are deterministic: they drive the real
+# readiness contract (real ``ensure_runtime``, real state publication, real
+# authenticated loopback inspection) with the daemon served in-process, so they
+# never depend on launching a detached OS daemon or on how long a cold CI
+# interpreter needs to start one. The real process-level daemon lifecycle is
+# covered separately by ``tests/integration/test_enforced_runtime_lifecycle.py``.
+
+
+@pytest.fixture
+def in_process_gemini_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Serve the session runtime in-process instead of spawning an OS daemon.
+
+    ``ensure_runtime``, health publication, the warming marker, and the
+    authenticated loopback protocol are all the production ones; only the
+    ``spawn_daemon`` seam is replaced with a thread, exactly as the runtime
+    lifecycle tests do for the Claude scope.
+    """
+
+    monkeypatch.setenv("SECUREDACT_REQUIRE_FLAIR", "0")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    enforcer = _core_enforcer()
+    threads: list[threading.Thread] = []
+    spawns: list[str] = []
+    sessions: list[str] = []
+
+    def spawn(state_path: Path, token: bytes, session_digest: str) -> None:
+        spawns.append(session_digest)
+        thread = threading.Thread(
+            target=_serve,
+            args=(state_path, token, session_digest, lambda: enforcer),
+            daemon=True,
+        )
+        threads.append(thread)
+        thread.start()
+
+    def start_lazily(session_id: object, **options: object) -> object:
+        sessions.append(str(session_id))
+        return claude_runtime.ensure_runtime(
+            session_id,
+            spawn_daemon=spawn,
+            **options,  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(gemini_hook, "ensure_runtime", start_lazily)
+    yield start_lazily, spawns, sessions
+
+    for session_id in set(sessions):
+        claude_runtime.shutdown_runtime(session_id, runtime_scope=gemini_hook._SCOPE)
+    for thread in threads:
+        thread.join(timeout=5)
 
 
 def test_real_host_before_agent_pathless_prompt_allowed_once_runtime_ready(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    in_process_gemini_runtime,
 ) -> None:
     # Reproduce the real host: a fresh Gemini session where SessionStart never
-    # left a live daemon. With the fix, the prompt hook starts the runtime
-    # itself so a benign, pathless prompt proceeds once the engine is ready.
-    monkeypatch.setenv("SECUREDACT_REQUIRE_FLAIR", "0")
+    # left a live daemon. With the fix the prompt hook starts the runtime itself,
+    # and only once readiness succeeds is the prompt inspected, so a benign,
+    # pathless prompt proceeds instead of being denied.
+    _start_lazily, spawns, _sessions = in_process_gemini_runtime
+    session_id = "real-host-repro"
+    state_path = state_path_for_session(session_id, runtime_scope=gemini_hook._SCOPE)
+    assert state_path is not None
+    assert not state_path.exists()  # no healthy runtime initially
+
+    stages: list[str] = []
+    original_inspect = gemini_hook._inspect_prompt
+
+    def observed_inspect(session: object, prompt: object) -> EnforcementOutcome:
+        stages.append("inspect_prompt")
+        return original_inspect(session, prompt)
+
+    with pytest.MonkeyPatch.context() as observer:
+        observer.setattr(gemini_hook, "_inspect_prompt", observed_inspect)
+        output = gemini_hook.handle_event(
+            "BeforeAgent",
+            {"session_id": session_id, "prompt": "could you summarize the safe notes"},
+        )
+
+    assert output == {"decision": "allow"}
+    # Lazy readiness ran first and prompt inspection followed it.
+    assert spawns and stages == ["inspect_prompt"]
+    assert state_path.exists()
+    assert not claude_runtime._warming_path(state_path).exists()
+
+
+def test_real_host_before_agent_reuses_ready_runtime_without_redundant_spawn(
+    in_process_gemini_runtime,
+) -> None:
+    # An already healthy runtime must be detected immediately: no second daemon
+    # is started for the same session, and the benign prompt still proceeds.
+    start_lazily, spawns, _sessions = in_process_gemini_runtime
+    session_id = "real-host-warm"
+
+    first = start_lazily(session_id, runtime_scope=gemini_hook._SCOPE, startup_timeout_seconds=10.0)
+
+    assert first.ready is True
+    assert first.started is True
+    assert len(spawns) == 1
+
+    for _ in range(2):
+        assert gemini_hook.handle_event(
+            "BeforeAgent",
+            {"session_id": session_id, "prompt": "could you summarize the safe notes"},
+        ) == {"decision": "allow"}
+
+    assert len(spawns) == 1
+
+
+def test_real_host_before_agent_fails_closed_when_lazy_start_never_becomes_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real readiness path runs, the start genuinely never becomes healthy,
+    # and the prompt is denied with the path-neutral runtime message: a pathless
+    # prompt names no file, so it is never reported as a protected-path failure.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    from securedact_enforced import claude_runtime
+    session_id = "real-host-unavailable"
+    state_path = state_path_for_session(session_id, runtime_scope=gemini_hook._SCOPE)
+    assert state_path is not None
+    spawns: list[str] = []
+
+    def never_starts(_state_path: Path, _token: bytes, session_digest: str) -> None:
+        spawns.append(session_digest)
 
     monkeypatch.setattr(
         gemini_hook,
         "ensure_runtime",
-        lambda sid, **kw: claude_runtime.ensure_runtime(sid, **kw),
+        lambda session, **options: claude_runtime.ensure_runtime(
+            session,
+            runtime_scope=gemini_hook._SCOPE,
+            startup_timeout_seconds=0.2,
+            spawn_daemon=never_starts,
+        ),
     )
-    try:
-        output = gemini_hook.handle_event(
-            "BeforeAgent",
-            {"session_id": "real-host-repro", "prompt": "could you summarize the safe notes"},
-        )
-    finally:
-        claude_runtime.shutdown_runtime("real-host-repro", runtime_scope=gemini_hook._SCOPE)
-    assert output == {"decision": "allow"}
+
+    output = gemini_hook.handle_event(
+        "BeforeAgent",
+        {"session_id": session_id, "prompt": "could you summarize the safe notes"},
+    )
+
+    assert spawns == [_session_digest(session_id)]
+    assert output["decision"] == "deny"
+    assert output["reason"] == PROMPT_RUNTIME_BLOCKED
+    assert "protected path" not in str(output["reason"])
+    # A start that never produced a live child leaves no stale warming marker.
+    assert not claude_runtime._warming_path(state_path).exists()
 
 
 def test_real_host_before_agent_pathless_prompt_never_claims_protected_path(

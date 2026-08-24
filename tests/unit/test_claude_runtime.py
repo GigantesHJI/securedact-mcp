@@ -7,6 +7,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -388,6 +389,166 @@ def test_runtime_startup_timeout_is_bounded_and_fails_closed(
     assert elapsed < 1
     assert not state_path.exists()
     assert not claude_runtime._warming_path(state_path).exists()
+
+
+# --- Cross-platform startup contract (Linux/macOS/Windows) --------------------
+#
+# The state file holds the daemon endpoint and the per-session HMAC secret, and
+# the lifecycle must behave the same on every supported host. These tests pin the
+# platform-dependent parts without needing that platform: only a per-user
+# directory is ever used, one bounded budget covers the whole readiness call, a
+# live warming child is never duplicated, and a dead one is recovered.
+
+# No live process ever owns this pid on Windows or POSIX (both are far above the
+# platform maximum), so it models a child that died before publishing state.
+_DEAD_PID = 2**31 - 1
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected_parts"),
+    [
+        ("win32", ("SecuRedact", "ClaudeCode", "runtime")),
+        ("darwin", ("Library", "Application Support", "SecuRedact", "ClaudeCode", "runtime")),
+        ("linux", (".local", "state", "SecuRedact", "ClaudeCode", "runtime")),
+    ],
+)
+def test_runtime_state_directory_is_per_user_on_every_supported_platform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    expected_parts: tuple[str, ...],
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setattr(claude_runtime.sys, "platform", platform)
+    if platform == "win32":
+        monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
+    else:
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    directory = claude_runtime._runtime_directory()
+
+    assert directory.parts[-len(expected_parts) :] == expected_parts
+    # The runtime state must live under the per-user home, never at or directly
+    # inside the shared system temp directory where any local account could
+    # pre-create or symlink the session secret.
+    resolved = directory.resolve()
+    assert home.resolve() in resolved.parents
+    assert resolved != Path(tempfile.gettempdir()).resolve()
+    assert resolved.parent != Path(tempfile.gettempdir()).resolve()
+    assert str(home) in str(directory)
+
+
+def test_posix_runtime_state_directory_honours_xdg_state_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(claude_runtime.sys, "platform", "linux")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
+
+    gemini_directory = claude_runtime._runtime_directory("gemini")
+
+    assert gemini_directory == tmp_path / "state" / "SecuRedact" / "GeminiCli" / "runtime"
+    assert gemini_directory.is_dir()
+
+
+def test_lazy_start_waits_for_a_live_warming_child_without_competing_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    session_id = "warming-in-flight"
+    state_path = state_path_for_session(session_id)
+    assert state_path is not None
+    digest = _session_digest(session_id) or ""
+    # A live child already claimed the warm-up (this test process stands in for
+    # the daemon that is still loading its contextual runtime).
+    claude_runtime._write_warming(state_path, digest, pid=os.getpid())
+    spawns: list[str] = []
+
+    started_at = time.monotonic()
+    result = ensure_runtime(
+        session_id,
+        startup_timeout_seconds=0.2,
+        spawn_daemon=lambda _path, _token, session_digest: spawns.append(session_digest),
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert spawns == []
+    assert result.ready is False
+    assert result.started is False
+    assert elapsed < 2
+    # The in-flight marker survives, so the hook still reports the accurate
+    # "initializing" state instead of a generic runtime failure.
+    assert claude_runtime.runtime_is_warming(session_id) is True
+
+
+def test_stale_state_and_dead_warming_marker_are_recovered_by_a_new_start(
+    warmed_runtime,
+) -> None:
+    _enforcer, spawn, spawn_count = warmed_runtime
+    session_id = "session-a"
+    state_path = state_path_for_session(session_id)
+    assert state_path is not None
+    digest = _session_digest(session_id) or ""
+    _atomic_write_json(
+        state_path,
+        {
+            "version": 1,
+            "port": 9,
+            "pid": _DEAD_PID,
+            "session_digest": digest,
+            "token": base64.b64encode(b"x" * 32).decode("ascii"),
+        },
+    )
+    claude_runtime._write_warming(state_path, digest, pid=_DEAD_PID)
+
+    result = ensure_runtime(session_id, startup_timeout_seconds=5, spawn_daemon=spawn)
+
+    assert result.ready is True
+    assert result.started is True
+    assert spawn_count() == 1
+    state = claude_runtime._load_state(state_path, digest)
+    assert state is not None
+    assert state.pid == os.getpid()
+    assert not claude_runtime._warming_path(state_path).exists()
+
+
+def test_ensure_runtime_bounds_the_whole_call_under_lock_contention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One budget must cover lock acquisition *and* warm-up: a provider hook that
+    # spends two full budgets can be killed by the host before it answers, and a
+    # host that never receives a decision does not block.
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "plugin-data"))
+    session_id = "lock-contended-start"
+    state_path = state_path_for_session(session_id)
+    assert state_path is not None
+    spawns: list[str] = []
+    lock = claude_runtime._acquire_start_lock(state_path, 1.0)
+    assert lock is not None
+
+    try:
+        started_at = time.monotonic()
+        result = ensure_runtime(
+            session_id,
+            startup_timeout_seconds=1.0,
+            spawn_daemon=lambda _path, _token, session_digest: spawns.append(session_digest),
+        )
+        elapsed = time.monotonic() - started_at
+    finally:
+        claude_runtime._release_start_lock(state_path, lock)
+
+    assert result.ready is False
+    assert result.started is False
+    assert spawns == []
+    assert elapsed < 1.6
 
 
 def test_runtime_diagnostics_reports_warming_without_secret(

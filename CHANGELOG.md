@@ -10,6 +10,18 @@ public server release.
 
 ### Added
 
+- Compliance control catalog (COMP-001): declarative `SEC-XXX-###` control catalog
+  in `securedact_core/compliance/catalog.py` mapping existing technical controls to
+  GDPR, EU AI Act, NIS2, ISO/IEC 27001, SOC 2, DORA, PCI DSS, NEN 7510, and BIO2,
+  with a CI anti-drift integrity check (`validate_catalog_integrity`).
+- Compliance evidence fields (COMP-002): additive, default-empty `control_ids` and
+  `policy_digest` on `FirewallDecision` and `AuditEvent`; firewall decisions carry a
+  stable policy digest and rule-attributed control ids, propagated into emitted
+  audit events. No enforcement or schema behavior changed for legacy callers.
+- Compliance documentation (COMP-003): `docs/compliance/` with a mandatory
+  `limitations.md` stating SecuRedact does not establish organizational compliance,
+  plus `README.md`, `control-catalog.md`, and `compliance-matrix.md`.
+
 - Enterprise Connectors foundation (Batch 1): platform-neutral connector contracts
   in `securedact_core/connectors/` (ARCH-001/002/003, CONN-001):
   - `ConnectorResource`, `ResourceKind`, `ConnectorCapability`, `ConnectorIdentity`,
@@ -24,6 +36,27 @@ public server release.
     identifiers can never become SSRF targets.
 - Microsoft-specific code is isolated from the core engine: no `msal`/`msgraph`
   import is pulled in by `securedact_core` or the MCP server (verified by tests).
+
+### Fixed
+
+- Cross-platform runtime startup hardening (no behavior change to enforcement or
+  fail-closed guarantees):
+  - Runtime state now lives under a per-user directory on every platform
+    (`%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS,
+    `~/.local/state` honoring `XDG_STATE_HOME` on Linux) instead of the shared
+    system temp directory, so the session secret cannot be pre-created or
+    symlinked by another local account.
+  - `ensure_runtime` / `start_runtime` now bound the *whole* call (lock acquire +
+    health probe + model warm-up) to a single deadline derived from the host hook
+    budget, so a prompt-hook stage can never outlive its budget and be killed
+    mid-check.
+  - A still-warming start is reused (waited for) rather than duplicated: a child
+    daemon claims the warming marker with its own pid, and a second start waits for
+    that live child instead of spawning a competing daemon; a stale state or dead
+    warming marker is recovered by a fresh start.
+- Gemini hook prompt-stage runtime start budget is now derived from the 20s host
+  hook budget (reserving headroom) rather than a fixed 5s, keeping the real
+  runtime lifecycle contract separate from the hermetic hook logic.
 
 ## [0.4.2] - 2026-08-24
 

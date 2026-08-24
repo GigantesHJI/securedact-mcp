@@ -50,6 +50,15 @@ class AuditEventType(StrEnum):
     FILE_READ = "FILE_READ"
     EGRESS_BLOCKED = "EGRESS_BLOCKED"
     POLICY_OVERRIDE = "POLICY_OVERRIDE"
+    CONNECTOR_RESOURCE_ACCESSED = "CONNECTOR_RESOURCE_ACCESSED"
+    CONNECTOR_SCAN_STARTED = "CONNECTOR_SCAN_STARTED"
+    CONNECTOR_SCAN_COMPLETED = "CONNECTOR_SCAN_COMPLETED"
+    CONNECTOR_FINDING = "CONNECTOR_FINDING"
+    CONNECTOR_POLICY_BLOCKED = "CONNECTOR_POLICY_BLOCKED"
+    CONNECTOR_REDACTION_CREATED = "CONNECTOR_REDACTION_CREATED"
+    CONNECTOR_WRITE_COMPLETED = "CONNECTOR_WRITE_COMPLETED"
+    CONNECTOR_PERMISSION_DENIED = "CONNECTOR_PERMISSION_DENIED"
+    CONNECTOR_ERROR = "CONNECTOR_ERROR"
 
 
 # Credential / secret entity types that should be reported as SECRET_DETECTED
@@ -88,6 +97,22 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "session_reference_hash",
         "policy_version",
         "detector",
+        "org_id",
+        "tenant_id",
+        "integration_id",
+        "user_id",
+        "resource_kind",
+        "policy",
+        "policy_digest",
+        "status",
+        "scan_error_code",
+        "stage",
+        "correlation_id",
+        "control_ids",
+        "framework_tags",
+        "data_classifications",
+        "approval_identity",
+        "approval_reason",
     }
 )
 
@@ -144,12 +169,19 @@ class AuditEvent:
     count: int | None = None
     event_id: str | None = None
     timestamp_utc: str | None = None
+    # COMP-002 evidence fields (additive, default-empty, never serialized as raw
+    # values). ``control_ids`` references the catalogued SEC- controls this event
+    # enacts; ``policy_digest`` is the firewall policy hash that produced it.
+    control_ids: tuple[str, ...] | None = None
+    policy_digest: str | None = None
     metadata: Mapping[str, Scalar] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Normalize the optional collection so callers may pass a list/dict.
         if self.entity_types is not None and not isinstance(self.entity_types, tuple):
             object.__setattr__(self, "entity_types", tuple(self.entity_types))
+        if self.control_ids is not None and not isinstance(self.control_ids, tuple):
+            object.__setattr__(self, "control_ids", tuple(self.control_ids))
         if not isinstance(self.metadata, Mapping):
             object.__setattr__(self, "metadata", dict(self.metadata))
 
@@ -176,6 +208,8 @@ class AuditEvent:
             "count": self.count,
             "event_id": self.event_id,
             "timestamp_utc": self.timestamp_utc,
+            "control_ids": list(self.control_ids) if self.control_ids else None,
+            "policy_digest": self.policy_digest,
         }
         safe_metadata = _sanitize_metadata(self.metadata)
         if safe_metadata:
@@ -309,6 +343,8 @@ def build_audit_event(
     metadata: Mapping[str, Scalar] | None = None,
     event_id: str | None = None,
     timestamp_utc: str | None = None,
+    control_ids: tuple[str, ...] | None = None,
+    policy_digest: str | None = None,
 ) -> AuditEvent:
     """Construct an ``AuditEvent`` with a generated id/timestamp when omitted."""
 
@@ -328,5 +364,7 @@ def build_audit_event(
         count=count,
         event_id=event_id or _make_event_id(),
         timestamp_utc=timestamp_utc or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        control_ids=control_ids,
+        policy_digest=policy_digest,
         metadata=metadata or {},
     )

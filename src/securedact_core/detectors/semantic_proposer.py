@@ -96,7 +96,7 @@ class BgeM3Article9Proposer:
                     local_dir_use_symlinks=False,
                 )
             )
-            tokenizer = AutoTokenizer.from_pretrained(local)  # type: ignore[no-untyped-call]
+            tokenizer = AutoTokenizer.from_pretrained(local)
             model = AutoModelForSequenceClassification.from_pretrained(local)
             model.eval()
             id2label = {int(key): str(value) for key, value in model.config.id2label.items()}

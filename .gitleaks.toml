@@ -1,19 +1,25 @@
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "Synthetic tests, corpora, and prompts contain deliberate inactive canaries"
-paths = [
-  '''tests/.*''',
-  '''benchmarks/corpora/.*''',
-  '''examples/synthetic-test-prompts\.md''',
-]
+# Synthetic secret fixtures used by the credential/firewall detector tests and
+# the firewall benchmark. These are DELIBERATE fake secrets (example.com /
+# securedact.com style, no real credentials) that exist only to validate
+# SecuRedact's credential/firewall detection behavior. They are allowlisted by
+# EXACT file path so that generic-api-key, aws-access-token, private-key and
+# every other rule stay fully active for all production source, docs, configs,
+# workflows, manifests, scripts outside the benchmark fixture, and every other
+# file. Do not broaden this to a blanket `tests/.*` or `scripts/.*` allowlist.
 
 [[allowlists]]
-description = "Synthetic credential detector test"
+description = "Synthetic credential/firewall test fixtures (deliberate fake secrets)"
 paths = [
+  '''tests/unit/test_credentials_detector\.py''',
+  '''tests/unit/test_firewall_backward_compat\.py''',
+  '''tests/unit/test_safe_read_file\.py''',
+  '''tests/unit/test_firewall_egress\.py''',
   '''tests/privacy/test_policy_storage_and_audit\.py''',
-]
-stopwords = [
-  "token="
+  '''tests/privacy_corpus/adversarial/credential_blocks\.json''',
+  '''benchmarks/corpora/release_gate\.json''',
+  '''examples/synthetic-test-prompts\.md''',
+  '''scripts/benchmark_firewall\.py''',
 ]

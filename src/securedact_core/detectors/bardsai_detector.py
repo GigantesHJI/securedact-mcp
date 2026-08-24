@@ -114,7 +114,7 @@ class BardsaiArticle9Detector:
                     local_dir_use_symlinks=False,
                 )
             )
-            tokenizer = AutoTokenizer.from_pretrained(local_dir)  # type: ignore[no-untyped-call]
+            tokenizer = AutoTokenizer.from_pretrained(local_dir)
             model = AutoModelForTokenClassification.from_pretrained(local_dir)
             model.to(self.device)
             model.eval()

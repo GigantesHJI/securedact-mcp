@@ -70,6 +70,7 @@ Protect a piece of text in seconds (deterministic-only demo, no model needed):
 
 ```python
 import os
+
 os.environ["SECUREDACT_REQUIRE_FLAIR"] = "0"  # deterministic detectors only
 from securedact_core import RedactionRequest, SecuredactEngine
 
@@ -80,7 +81,7 @@ result = engine.prepare(
         policy="strict_external_ai",
     )
 )
-print(result.status)          # "ok"
+print(result.status)  # "ok"
 print(result.sanitized_text)  # "Contact [EMAIL_1], IBAN [IBAN_1]"
 ```
 

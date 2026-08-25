@@ -86,12 +86,16 @@ Quick deterministic demo (no model needed):
 
 ```python
 import os
+
 os.environ["SECUREDACT_REQUIRE_FLAIR"] = "0"
 from securedact_core import RedactionRequest, SecuredactEngine
+
 engine = SecuredactEngine.from_environment()
-r = engine.prepare(RedactionRequest(
-    text="Contact alex@example.test, IBAN NL91ABNA0417164300",
-    policy="strict_external_ai"))
+r = engine.prepare(
+    RedactionRequest(
+        text="Contact alex@example.test, IBAN NL91ABNA0417164300", policy="strict_external_ai"
+    )
+)
 print(r.status, r.sanitized_text)
 ```
 

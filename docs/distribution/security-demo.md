@@ -25,17 +25,18 @@ credentials is stopped.
 
 ```python
 import os
+
 os.environ["SECUREDACT_REQUIRE_FLAIR"] = "0"
 from securedact_core import RedactionRequest, SecuredactEngine
 
 engine = SecuredactEngine.from_environment()
-cs = "client" + "_secret=EXAMPLE" + "abcd1234efgh"   # synthetic
+cs = "client" + "_secret=EXAMPLE" + "abcd1234efgh"  # synthetic
 pw = "pass" + "word: example" + "passw0rd" + "demo"  # synthetic
 content = f"{cs}\n{pw}\n# benign comment\n"
 
 result = engine.prepare(RedactionRequest(text=content, policy="strict_external_ai"))
-print(result.status)   # blocked
-print(result.counts)   # {'api_token': 1, 'password': 1}
+print(result.status)  # blocked
+print(result.counts)  # {'api_token': 1, 'password': 1}
 ```
 
 **Expected:** the content is **blocked** (`status == "blocked"`) because
@@ -58,9 +59,9 @@ text = (
     "Note: regular business meeting at 10am."
 )
 result = engine.prepare(RedactionRequest(text=text, policy="gdpr"))
-print(result.status)          # ok
+print(result.status)  # ok
 print(result.sanitized_text)  # Customer: Jane Example, Email: [EMAIL_1], IBAN: [IBAN_1], ...
-print(result.counts)          # {'email': 1, 'iban': 1, ...}
+print(result.counts)  # {'email': 1, 'iban': 1, ...}
 ```
 
 **Expected:** PII is detected and replaced with stable placeholders
@@ -76,17 +77,18 @@ how the firewall evaluates them.
 
 ```python
 from securedact_core.firewall import (
-    classify_tool, classify_destination_scope,
-    default_firewall_policy, evaluate_firewall,
+    classify_tool,
+    classify_destination_scope,
+    default_firewall_policy,
+    evaluate_firewall,
 )
 
 scope = classify_destination_scope("https://api.example-external.test/v1")
-ctx = classify_tool("claude", "WebFetch",
-                    {"url": "https://api.example-external.test/v1/data"})
+ctx = classify_tool("claude", "WebFetch", {"url": "https://api.example-external.test/v1/data"})
 decision = evaluate_firewall(default_firewall_policy(), ctx)
 
-print(scope.value)        # external
-print(ctx.operation.value) # network_read
+print(scope.value)  # external
+print(ctx.operation.value)  # network_read
 print(decision.action.value)  # allow (default policy)
 ```
 
@@ -110,8 +112,8 @@ with tempfile.TemporaryDirectory() as tmp:
     p = Path(tmp) / "notes.txt"
     p.write_text("Team standup at 10am. Agenda: roadmap and hiring.\n", encoding="utf-8")
     res = engine.read_file(str(p), redaction_policy="strict_external_ai")
-    print(res.ok)             # True
-    print(res.sanitized_text) # unchanged benign text
+    print(res.ok)  # True
+    print(res.sanitized_text)  # unchanged benign text
 ```
 
 **Expected:** the file is read and returned unchanged because it contains no
@@ -125,8 +127,8 @@ defended regardless of content.
 ```python
 prompt = "Summarize this lead: jane.example@example.org, IBAN NL91ABNA0417164300"
 result = engine.prepare(RedactionRequest(text=prompt, policy="strict_external_ai"))
-print(result.status)         # ok
-print(result.sanitized_text) # Summarize this lead: [EMAIL_1], IBAN [IBAN_1]
+print(result.status)  # ok
+print(result.sanitized_text)  # Summarize this lead: [EMAIL_1], IBAN [IBAN_1]
 ```
 
 **Expected:** the host receives only `sanitized_text` (placeholders) to forward

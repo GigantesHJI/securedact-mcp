@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import inspect
 import os
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import anyio
 from mcp import types as mcp_types
 from mcp.server.fastmcp import FastMCP
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from securedact_core import (
     InstalledModel,
@@ -471,12 +472,61 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
 
     @server.tool()
     def prepare_for_external_ai(
-        text: str,
-        policy: str = "strict_external_ai",
-        language: str = "auto",
-        response_mode: str = "minimal",
+        text: Annotated[
+            str,
+            Field(
+                description=(
+                    "Free text to inspect and sanitize locally before it is sent to an external "
+                    "AI service. All processing happens on this machine; this tool never transmits "
+                    "the text to any provider."
+                )
+            ),
+        ],
+        policy: Annotated[
+            str,
+            Field(
+                description=(
+                    "Named redaction policy controlling which entity types are masked or blocked. "
+                    "Defaults to 'strict_external_ai'. Common values include 'strict_external_ai' "
+                    "and 'default'; other policies may be registered in your environment. An unknown "
+                    "name returns a policy_not_found error."
+                )
+            ),
+        ] = "strict_external_ai",
+        language: Annotated[
+            str,
+            Field(
+                description=(
+                    "Hint for the contextual detection language. One of 'auto' (detect "
+                    "automatically), 'en', or 'nl'. Defaults to 'auto'."
+                )
+            ),
+        ] = "auto",
+        response_mode: Annotated[
+            str,
+            Field(
+                description=(
+                    "Amount of detail returned. 'minimal' returns only the approved result and "
+                    "counts; 'review' adds per-detection findings for human review; 'debug' adds "
+                    "engine internals (only when debug responses are enabled); 'restore_capable' "
+                    "additionally returns a local restoration_session for later trusted restore_text. "
+                    "Defaults to 'minimal'."
+                )
+            ),
+        ] = "minimal",
     ) -> dict[str, Any]:
-        """Recommended: scan text locally for PII, secrets, and credentials, then return only approved, redacted output safe for external AI."""
+        """Use this before sending user-supplied or potentially sensitive text to an external AI service.
+
+        SecuRedact inspects and sanitizes the text locally and returns the policy-approved
+        representation; this tool does not transmit the text externally. It is the recommended
+        default for outbound AI workflows. Use analyze_text for inspection-only classifications,
+        redact_text for the lower-level compatibility path, create_safe_copy when a sanitized file
+        is required, and restore_text only to reverse a prior local session in a trusted context.
+
+        Returns a JSON object with 'status' ('ok', 'review_required', or 'blocked'), 'sanitized_text'
+        (present only when approved), 'counts', 'policy', and optionally 'restoration_session'
+        (when response_mode is 'restore_capable').
+        """
         lifecycle.mark_protocol_ready()
         invalid = _validate_text(text)
         if invalid is not None:
@@ -502,11 +552,48 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
 
     @server.tool()
     def analyze_text(
-        text: str,
-        policy: str = "default",
-        response_mode: str = "minimal",
+        text: Annotated[
+            str,
+            Field(
+                description=(
+                    "Free text to inspect locally for sensitive content. Processing is on this "
+                    "machine only; the original text is never modified or transmitted."
+                )
+            ),
+        ],
+        policy: Annotated[
+            str,
+            Field(
+                description=(
+                    "Named analysis policy controlling which detectors and entity types apply. "
+                    "Defaults to 'default'. Common values include 'default'; other policies may be "
+                    "registered in your environment. An unknown name returns a policy_not_found error."
+                )
+            ),
+        ] = "default",
+        response_mode: Annotated[
+            str,
+            Field(
+                description=(
+                    "Level of detail returned. 'minimal' returns only status and entity-type counts; "
+                    "'review' additionally returns a 'findings' list with spans and entity types; "
+                    "'debug' additionally returns 'debug_details' (only when debug responses are "
+                    "enabled). Defaults to 'minimal'."
+                )
+            ),
+        ] = "minimal",
     ) -> dict[str, Any]:
-        """Lower-level local analysis tool: inspect text for PII, secrets, and sensitive content; raw details require enabled debug mode."""
+        """Inspect text locally and report detected sensitive content without producing sanitized output.
+
+        Use this when you need to understand what PII, secrets, or credentials are present (counts,
+        entity types, and, with review/debug modes, positions) but do not need redacted text for
+        transmission. The original text is not modified and no sanitized representation is returned.
+        For a policy-approved, ready-to-send result use prepare_for_external_ai; for a sanitized file
+        use create_safe_copy; for reversing a prior local session use restore_text.
+
+        Returns a JSON object with 'status' ('ok', 'review_required', or 'blocked'), 'policy',
+        'policy_version', 'policy_digest', 'counts' (entity-type tallies), and, when response_mode is
+        'review' or 'debug', a 'findings' list. 'debug' additionally returns 'debug_details'."""
         lifecycle.mark_protocol_ready()
         invalid = _validate_text(text)
         if invalid is not None:
@@ -568,11 +655,49 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
 
     @server.tool()
     def redact_text(
-        text: str,
-        policy: str = "default",
-        response_mode: str = "minimal",
+        text: Annotated[
+            str,
+            Field(
+                description=(
+                    "Free text to redact locally. Processing is on this machine; nothing is "
+                    "transmitted externally."
+                )
+            ),
+        ],
+        policy: Annotated[
+            str,
+            Field(
+                description=(
+                    "Named redaction policy controlling which entity types are masked or blocked. "
+                    "Defaults to 'default'. Common values include 'default' and 'strict_external_ai'; "
+                    "other policies may be registered. An unknown name returns a policy_not_found error."
+                )
+            ),
+        ] = "default",
+        response_mode: Annotated[
+            str,
+            Field(
+                description=(
+                    "Normal modes behave like prepare_for_external_ai: 'minimal', 'review', and "
+                    "'debug' return the approved result with increasing detail. The special value "
+                    "'legacy' returns raw local-review redaction internals (including a mapping that "
+                    "reveals original values) under deprecation_code 'legacy_sensitive_response'; it "
+                    "must never be sent to an external service. Defaults to 'minimal'."
+                )
+            ),
+        ] = "minimal",
     ) -> dict[str, Any]:
-        """Lower-level compatibility tool; prefer prepare_for_external_ai."""
+        """Direct/lower-level redaction entry point; prefer prepare_for_external_ai for normal outbound workflows.
+
+        In its normal modes this performs the same local sanitization as prepare_for_external_ai and
+        returns the approved result, so most agents should call prepare_for_external_ai instead. Use
+        redact_text when you specifically need this lower-level compatibility path, or the 'legacy'
+        mode for local review of raw redaction internals. The 'legacy' mode returns potentially
+        sensitive local-review details and is never selected by default.
+
+        Returns, for normal modes, the same approved result as prepare_for_external_ai (status,
+        sanitized_text, counts). For 'legacy' mode it returns a result with deprecation_code
+        'legacy_sensitive_response' containing local-review redaction data."""
         lifecycle.mark_protocol_ready()
         invalid = _validate_text(text)
         if invalid is not None:
@@ -628,12 +753,62 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
 
     @server.tool()
     def restore_text(
-        text: str,
-        restoration_session: str | None = None,
-        mapping: dict[str, str] | None = None,
-        trusted_local_review: bool = False,
+        text: Annotated[
+            str,
+            Field(
+                description=(
+                    "Text containing SecuRedact placeholders (or a prior protected representation) to "
+                    "restore. Processed locally; never transmitted."
+                )
+            ),
+        ],
+        restoration_session: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Opaque session token previously returned by SecuRedact (for example from "
+                    "prepare_for_external_ai with response_mode 'restore_capable'). It identifies the "
+                    "trusted local vault entry used to reverse protection and recover the original "
+                    "values. Required unless you supply 'mapping' together with trusted_local_review."
+                )
+            ),
+        ] = None,
+        mapping: Annotated[
+            dict[str, str] | None,
+            Field(
+                description=(
+                    "Legacy direct mapping from placeholder token to original value. Supplying this "
+                    "bypasses the session vault and immediately reveals the original sensitive values. "
+                    "It is only honored when 'trusted_local_review' is true and 'restoration_session' "
+                    "is omitted."
+                )
+            ),
+        ] = None,
+        trusted_local_review: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Explicit acknowledgment that you are in a trusted local review context and accept "
+                    "that restoration reveals original sensitive values. Required (true) to use the "
+                    "'mapping' form. It has no effect on the 'restoration_session' form."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
-        """Restore an opaque session; direct mappings require explicit legacy mode."""
+        """Reverse a prior SecuRedact protection step in a trusted, local-only context.
+
+        Use this ONLY after you previously received a restoration_session from SecuRedact (for example
+        from prepare_for_external_ai with response_mode 'restore_capable') and now need to reconstruct
+        the original text locally for trusted review. Restoration can reveal the original sensitive
+        values (PII, secrets, credentials); it is a trusted-local operation, not a step to prepare
+        data for external transmission. Never call it to sanitize or prepare text for an external AI;
+        for that use prepare_for_external_ai. Never call it on text you did not previously protect
+        with SecuRedact.
+
+        Security boundary: all processing is local and nothing leaves the machine. The 'mapping' form
+        requires trusted_local_review=true and exposes raw originals, so its output must never be
+        transmitted. Returns a JSON object with 'status' ('ok' or 'blocked'), 'restored_text'
+        (present only on success), and 'reason_codes' describing any failure."""
         if len(text) > _max_text_chars():
             return {"schema_version": "1", "status": "blocked", "reason_codes": ["input_too_large"]}
         if restoration_session is not None and mapping is None:
@@ -674,11 +849,48 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
 
     @server.tool()
     def create_safe_copy(
-        content: str,
-        filename: str,
-        policy: str = "strict_external_ai",
+        content: Annotated[
+            str,
+            Field(
+                description=(
+                    "Text to sanitize locally and write to disk. Processed on this machine; never "
+                    "transmitted."
+                )
+            ),
+        ],
+        filename: Annotated[
+            str,
+            Field(
+                description=(
+                    "Bare target filename (no directory components) ending in '.txt' or '.md'. The "
+                    "file is created inside the configured Safe Copies directory; an existing file is "
+                    "never overwritten."
+                )
+            ),
+        ],
+        policy: Annotated[
+            str,
+            Field(
+                description=(
+                    "Named redaction policy applied before writing. Defaults to 'strict_external_ai'. "
+                    "An unknown name returns a policy_not_found error."
+                )
+            ),
+        ] = "strict_external_ai",
     ) -> dict[str, Any]:
-        """Write locally sanitized (PII/secrets removed) content to the configured Safe Copies directory only."""
+        """Sanitize text locally and write the approved result to a new file in the Safe Copies directory.
+
+        Use this when you need a sanitized on-disk copy (for storage, handoff, or archival) rather than
+        an in-memory sanitized string. For the sanitized text only, use prepare_for_external_ai; for
+        inspection-only use analyze_text; for reversing a prior session use restore_text.
+
+        Side effects: a new file is written to the directory set by SECUREDACT_SAFE_COPY_DIR. The
+        supplied 'content' is not modified and no existing file is overwritten. The filename must be a
+        bare '.txt' or '.md' basename (no path separators or directory traversal). The operation
+        blocks and reports 'blocked' if the directory is unconfigured, the filename is invalid, or
+        policy blocks the content.
+
+        Returns a JSON object with 'status' ('ok' or 'blocked'), 'filename', and 'counts'."""
         invalid = _validate_text(content)
         if invalid is not None:
             return invalid
@@ -712,17 +924,47 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
 
     @server.tool()
     def securedact_read_file(
-        path: str,
-        policy: str = "strict_external_ai",
-        max_bytes: int | None = None,
+        path: Annotated[
+            str,
+            Field(
+                description=(
+                    "Local filesystem path to read. It is resolved and defended against path traversal, "
+                    "symlink/UNC escapes, and oversized or binary content (FW-011/012/013); sensitive "
+                    "paths are blocked before any file content is read."
+                )
+            ),
+        ],
+        policy: Annotated[
+            str,
+            Field(
+                description=(
+                    "Named redaction policy applied to the file contents. Defaults to "
+                    "'strict_external_ai'. An unknown name returns a policy_not_found error."
+                )
+            ),
+        ] = "strict_external_ai",
+        max_bytes: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Optional cap on the number of bytes read from the file. When omitted, the engine's "
+                    "configured size limit applies."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Safely read a local file and return only sanitized text.
+        """Safely read a local file and return only its sanitized (PII/secrets removed) text.
 
-        Defends against path traversal, symlink/UNC escapes, and oversized or
-        binary content (FW-011/012/013), then sanitizes the text through the
-        normal preparation pipeline. Sensitive paths are blocked before any file
-        content is read.
-        """
+        Use this when you must ingest a local file's contents for use with an external AI but want
+        path-traversal, size, and binary defenses plus sanitization applied first. If the content is
+        already in memory, use prepare_for_external_ai; for a sanitized file on disk, use
+        create_safe_copy.
+
+        Side effects: reads a file from local disk and never transmits it. Sensitive paths and escapes
+        are blocked before any file content is read. The returned 'sanitized_text' is safe to forward.
+
+        Returns a JSON object with 'status' ('ok' or 'blocked'), 'path', and 'sanitized_text'
+        (present only when approved)."""
         lifecycle.mark_protocol_ready()
         blocked = lifecycle.privacy_block()
         if blocked is not None:
@@ -756,6 +998,13 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             "path": result.path,
             "sanitized_text": result.sanitized_text,
         }
+
+    # FastMCP derives each tool's description from its docstring verbatim, including
+    # the indentation introduced by the function body. Normalize that whitespace so the
+    # description exposed to MCP clients is clean and readable.
+    for _registered in server._tool_manager._tools.values():
+        if _registered.description:
+            _registered.description = inspect.cleandoc(_registered.description)
 
     return server
 

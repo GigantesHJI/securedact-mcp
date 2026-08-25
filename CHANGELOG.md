@@ -10,6 +10,13 @@ public server release.
 
 ### Added
 
+- MCP tool-definition quality: every registered tool now exposes a detailed,
+  agent-facing description (purpose, when to use, when to use another tool,
+  security/side-effect behavior, and returned result) and every parameter carries
+  a non-empty JSON Schema `description`. Tool names, parameter names, required/
+  optional status, defaults, response structures, and security semantics are
+  unchanged. Adds regression tests in `tests/unit/test_mcp_tool_definition_quality.py`.
+
 - Compliance control catalog (COMP-001): declarative `SEC-XXX-###` control catalog
   in `securedact_core/compliance/catalog.py` mapping existing technical controls to
   GDPR, EU AI Act, NIS2, ISO/IEC 27001, SOC 2, DORA, PCI DSS, NEN 7510, and BIO2,
@@ -21,6 +28,30 @@ public server release.
 - Compliance documentation (COMP-003): `docs/compliance/` with a mandatory
   `limitations.md` stating SecuRedact does not establish organizational compliance,
   plus `README.md`, `control-catalog.md`, and `compliance-matrix.md`.
+
+- M365-110 OneDrive resource browser (core-side, transport-agnostic): new isolated
+  `securedact_core/connectors/microsoft/` package implementing OneDrive browsing
+  (drive -> folders -> files, `parentReference` breadcrumb, file/folder distinction,
+  bounded pagination, and selection -> existing scan pipeline). It consumes Microsoft
+  Graph v1.0 REST JSON through an injected `GraphTransport` (no Microsoft SDK import in
+  core), reuses `ConnectorResource`/`ConnectorScanner`, keeps the read-only `Files.Read`
+  scope, and enforces server-side token resolution + tenant isolation. Automated tests
+  use a mocked Graph transport. Real-tenant E2E verification is still required (see
+  `docs/enterprise-connectors-roadmap.md` §62).
+
+- GWS-110 Google Workspace / Drive read-only connector: new isolated
+  `securedact_core/connectors/google/` package (transport-agnostic browser; no Google
+  SDK import in core) plus a control-plane facade in
+  `securedact_mcp/connectors/google/` (OAuth, transport, encrypted token storage, and
+  the `securedact google auth|status|list|scan` CLI). It browses and scans My Drive,
+  Shared Drives, Google Docs/Sheets/Slides (exported to text via the read-only scope),
+  and ordinary text files through the existing `ConnectorScanner` /
+  `SecuredactEngine.prepare` pipeline. The connector is opt-in and disabled unless
+  `SECUREDACT_GOOGLE_ENABLED=1`; it requests only `drive.readonly` and fails closed on
+  any write scope. Tokens are stored encrypted at rest (Fernet) with a separate key
+  file and never logged. Google SDK dependencies are an optional extra imported
+  lazily, so existing installs are unaffected. Gmail, Calendar, Google Chat, and
+  domain-wide delegation remain out-of-scope later milestones.
 
 - Enterprise Connectors foundation (Batch 1): platform-neutral connector contracts
   in `securedact_core/connectors/` (ARCH-001/002/003, CONN-001):

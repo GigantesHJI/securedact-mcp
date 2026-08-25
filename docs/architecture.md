@@ -26,6 +26,30 @@ exist for trusted local review and compatibility. MCP registration cannot force
 a host to invoke Securedact or prevent the host from separately forwarding the
 original input.
 
+## Architecture diagram
+
+```mermaid
+flowchart TD
+    A[User / AI Agent] --> B[SecuRedact]
+    B --> C[Prompt / PII inspection]
+    B --> D[Secret & credential detection]
+    B --> E[File policy<br/>traversal + protected paths]
+    B --> F[Tool policy]
+    B --> G[Network / egress policy<br/>internal or external or unknown]
+    C --> H[Versioned policy engine]
+    D --> H
+    E --> H
+    F --> H
+    G --> H
+    H --> I{Approved?}
+    I -->|ok| J[Sanitized output<br/>placeholders]
+    I -->|review_required| K[Local human review]
+    I -->|blocked| L[Blocked - nothing leaves]
+    J --> M[AI Model / Tool / File / Network destination]
+    K --> M
+    N[Claude Code / Gemini CLI enforced hooks] -->|same local decision| B
+```
+
 ## Code ownership
 
 - `securedact_core` owns typed schemas, detection, deterministic merge, policy

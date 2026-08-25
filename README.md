@@ -1,10 +1,21 @@
-# Securedact MCP
+# SecuRedact MCP
 
 <!-- mcp-name: io.github.GigantesHJI/securedact-mcp -->
 
-Securedact MCP is an Apache-2.0 local MCP server and reusable Python privacy
-engine. It detects sensitive text, applies versioned policies, redacts locally,
-and validates residual output before marking sanitized content approved.
+[![PyPI](https://img.shields.io/pypi/v/securedact-mcp)](https://pypi.org/project/securedact-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/securedact-mcp)](https://pypi.org/project/securedact-mcp/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE.md)
+
+**SecuRedact** is a local-first privacy and security layer for AI agents and AI
+workflows. It detects and protects sensitive data — personal data / PII,
+GDPR-sensitive information, credentials, API keys, tokens, secrets, and
+sensitive files — before that data reaches models, tools, files, or external
+destinations.
+
+SecuRedact MCP is the Apache-2.0 open-source MCP server and reusable Python
+privacy engine. It detects sensitive text, applies versioned policies, redacts
+locally, and validates residual output before marking sanitized content
+approved.
 
 > MCP mode does not automatically intercept every prompt. The host must invoke
 > the tool and send only `sanitized_text` when `status == "ok"`; a misconfigured
@@ -13,6 +24,67 @@ and validates residual output before marking sanitized content approved.
 > invokes such a hook at its prompt lifecycle boundary, it can apply the same
 > deterministic decision before normal model processing. See [SecuRedact
 > Enforced](docs/enforced.md).
+
+## Why SecuRedact
+
+AI agents increasingly read files, call tools, and send prompts to external
+models. That exposes PII, credentials, and sensitive documents unless something
+checks the data first. SecuRedact is a privacy and security control for AI
+workflows:
+
+- **Local-first** — all detection, redaction, and policy evaluation run on your
+  machine. No network listener by default, no telemetry, no provider calls.
+- **PII / GDPR detection** — names, emails, IBANs, identifiers, and
+  special-category data are detected and pseudonymized or redacted.
+- **Secret & credential protection** — API keys, tokens, and passwords are
+  detected and blocked from leaving your environment.
+- **Filesystem protection** — reads are defended against traversal/symlink
+  escapes and blocked from protected paths such as `.env`.
+- **AI Agent Privacy Firewall** — enforced hooks for Claude Code and Gemini CLI
+  run the same local decision before a prompt, model call, or tool action
+  proceeds.
+- **Network / egress awareness** — outbound tool calls are classified
+  (internal/external/unknown) so policy can require approval or block egress.
+
+SecuRedact helps reduce exposure of sensitive data; it is not a guarantee of
+compliance or a claim that every leak is prevented. See
+[Limitations](#security-and-limitations).
+
+## Quick start
+
+Install from PyPI and run the guided setup (Windows):
+
+```powershell
+py -3.12 -m pip install "securedact-mcp[ml]"
+securedact-mcp setup
+```
+
+Linux / macOS:
+
+```bash
+python3.12 -m pip install "securedact-mcp[ml]"
+securedact-mcp setup
+```
+
+Protect a piece of text in seconds (deterministic-only demo, no model needed):
+
+```python
+import os
+os.environ["SECUREDACT_REQUIRE_FLAIR"] = "0"  # deterministic detectors only
+from securedact_core import RedactionRequest, SecuredactEngine
+
+engine = SecuredactEngine.from_environment()
+result = engine.prepare(
+    RedactionRequest(
+        text="Contact alex@example.test, IBAN NL91ABNA0417164300",
+        policy="strict_external_ai",
+    )
+)
+print(result.status)          # "ok"
+print(result.sanitized_text)  # "Contact [EMAIL_1], IBAN [IBAN_1]"
+```
+
+Reproducible synthetic security demos: [`docs/distribution/security-demo.md`](docs/distribution/security-demo.md).
 
 ## Safe default workflow
 

@@ -476,7 +476,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         language: str = "auto",
         response_mode: str = "minimal",
     ) -> dict[str, Any]:
-        """Recommended: prepare text locally and return only approved safe output."""
+        """Recommended: scan text locally for PII, secrets, and credentials, then return only approved, redacted output safe for external AI."""
         lifecycle.mark_protocol_ready()
         invalid = _validate_text(text)
         if invalid is not None:
@@ -506,7 +506,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         policy: str = "default",
         response_mode: str = "minimal",
     ) -> dict[str, Any]:
-        """Lower-level local review tool; raw details require enabled debug mode."""
+        """Lower-level local analysis tool: inspect text for PII, secrets, and sensitive content; raw details require enabled debug mode."""
         lifecycle.mark_protocol_ready()
         invalid = _validate_text(text)
         if invalid is not None:
@@ -678,7 +678,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         filename: str,
         policy: str = "strict_external_ai",
     ) -> dict[str, Any]:
-        """Write sanitized content to the configured Safe Copies directory only."""
+        """Write locally sanitized (PII/secrets removed) content to the configured Safe Copies directory only."""
         invalid = _validate_text(content)
         if invalid is not None:
             return invalid

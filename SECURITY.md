@@ -2,11 +2,11 @@
 
 ## Supported versions
 
-No Securedact MCP server version has been released from this repository. The
-current `0.1.0` package is an unreleased alpha pending repository review.
-
-Once releases begin, this section will list supported versions and security
-update policy.
+Securedact MCP is released from this repository (current version `0.4.2`). Only
+the latest released version receives security updates; earlier `0.x` releases
+are not separately patched. Security-relevant fixes land on `main` and ship in
+the next patch/minor release. Check [CHANGELOG.md](CHANGELOG.md) and the GitHub
+releases page for the supported version and security-update policy.
 
 ## Reporting a vulnerability
 

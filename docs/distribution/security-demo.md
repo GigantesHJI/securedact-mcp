@@ -53,7 +53,7 @@ firewall's protected-path rule before any content is read.)
 ```python
 text = (
     "Customer: Jane Example\n"
-    "Email: jane.example@customer.test\n"
+    "Email: jane.example@example.com\n"
     "IBAN: NL91ABNA0417164300\n"
     "Note: regular business meeting at 10am."
 )
@@ -123,7 +123,7 @@ defended regardless of content.
 ## Demo 5 — Prompt redaction before external AI
 
 ```python
-prompt = "Summarize this lead: jane.example@prospect.test, IBAN NL91ABNA0417164300"
+prompt = "Summarize this lead: jane.example@example.org, IBAN NL91ABNA0417164300"
 result = engine.prepare(RedactionRequest(text=prompt, policy="strict_external_ai"))
 print(result.status)         # ok
 print(result.sanitized_text) # Summarize this lead: [EMAIL_1], IBAN [IBAN_1]

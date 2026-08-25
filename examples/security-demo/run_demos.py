@@ -43,7 +43,7 @@ def demo1_secret_in_env(engine: SecuredactEngine) -> None:
 def demo2_customer_pii(engine: SecuredactEngine) -> None:
     text = (
         "Customer: Jane Example\n"
-        "Email: jane.example@customer.test\n"
+        "Email: jane.example@example.com\n"
         "IBAN: NL91ABNA0417164300\n"
         "Note: regular business meeting at 10am."
     )
@@ -79,7 +79,7 @@ def demo4_safe_file(engine: SecuredactEngine) -> None:
 
 
 def demo5_prompt_redaction(engine: SecuredactEngine) -> None:
-    prompt = "Summarize this lead: jane.example@prospect.test, IBAN NL91ABNA0417164300"
+    prompt = "Summarize this lead: jane.example@example.org, IBAN NL91ABNA0417164300"
     result = engine.prepare(RedactionRequest(text=prompt, policy="strict_external_ai"))
     print("Demo 5 - Prompt redaction before external AI")
     print("  status:", result.status)

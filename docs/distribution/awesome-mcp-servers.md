@@ -29,11 +29,11 @@ section's existing style and keep the same link + description.
    (`Security` recommended; `Privacy` / `Data Protection` if present).
 4. Keep alphabetical order within the section.
 5. Open a pull request. The PR template asks you to confirm the format
-   `[Project Name](link) - Description` and that the link works.
+    `[Project Name] (link) - Description` and that the link works.
 
 ## PR checklist
 
-- [ ] Entry follows the format `[SecuRedact](url) - Description`
+- [ ] Entry follows the format `[SecuRedact] (url) - Description`
 - [ ] Placed in the correct category (`Security` or equivalent)
 - [ ] Alphabetical order maintained
 - [ ] Link verified working

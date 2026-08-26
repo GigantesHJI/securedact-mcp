@@ -32,6 +32,7 @@ CONNECTOR_BINDINGS_FILENAME = "connector-bindings.json"
 DEFAULT_CONTROL_PLANE_URL = "https://www.securedact.com"
 CONTROL_PLANE_URL_ENV = "SECUREDACT_CONTROL_PLANE_URL"
 
+
 def normalize_control_plane_url(raw: str) -> str:
     """Normalize the control-plane base URL; enforce HTTPS except for localhost.
 
@@ -133,7 +134,9 @@ class AgentFiles:
     connector_bindings: Path
 
     @classmethod
-    def resolve(cls, paths: SecuredactPaths | None = None, *, root: Path | None = None) -> AgentFiles:
+    def resolve(
+        cls, paths: SecuredactPaths | None = None, *, root: Path | None = None
+    ) -> AgentFiles:
         if root is not None:
             base_root = Path(root)
         else:

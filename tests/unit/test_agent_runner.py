@@ -22,7 +22,9 @@ from tests.unit.agent_helpers import (
 )
 
 
-def _runner_transport(claim_count: dict[str, int], submitted: list[dict], *, always_no_jobs: bool = False):
+def _runner_transport(
+    claim_count: dict[str, int], submitted: list[dict], *, always_no_jobs: bool = False
+):
     """Transport that registers, heartbeats, claims once, and accepts a result."""
 
     def responder(url, headers, body):
@@ -40,10 +42,22 @@ def _runner_transport(claim_count: dict[str, int], submitted: list[dict], *, alw
                 raw_text="",
             )
         if url.endswith("/v1/agents/heartbeat"):
-            return HTTPResponse(status=200, body={"server_time": "now", "agent_id": "a-1", "recommended_heartbeat_seconds": 60, "config_refresh_required": False, "entitlement_refresh_required": False}, raw_text="")
+            return HTTPResponse(
+                status=200,
+                body={
+                    "server_time": "now",
+                    "agent_id": "a-1",
+                    "recommended_heartbeat_seconds": 60,
+                    "config_refresh_required": False,
+                    "entitlement_refresh_required": False,
+                },
+                raw_text="",
+            )
         if url.endswith("/v1/entitlements/activate"):
             # Force offline-grace path: no entitlement available.
-            return HTTPResponse(status=502, body={"error": {"code": "temporary", "message": "down"}}, raw_text="")
+            return HTTPResponse(
+                status=502, body={"error": {"code": "temporary", "message": "down"}}, raw_text=""
+            )
         if url.endswith("/v1/agents/jobs/claim"):
             if not always_no_jobs and claim_count["n"] == 0:
                 claim_count["n"] += 1
@@ -53,7 +67,17 @@ def _runner_transport(claim_count: dict[str, int], submitted: list[dict], *, alw
             submitted.append(body)
             return HTTPResponse(status=200, body={"status": "succeeded"}, raw_text="")
         if url.endswith("/heartbeat") and "/jobs/" in url:
-            return HTTPResponse(status=200, body={"job_id": "job-1", "status": "running", "lease_expires_at": "later", "started_at": "now", "server_time": "now"}, raw_text="")
+            return HTTPResponse(
+                status=200,
+                body={
+                    "job_id": "job-1",
+                    "status": "running",
+                    "lease_expires_at": "later",
+                    "started_at": "now",
+                    "server_time": "now",
+                },
+                raw_text="",
+            )
         return HTTPResponse(status=200, body={}, raw_text="")
 
     return FakeTransport(responder)
@@ -62,15 +86,24 @@ def _runner_transport(claim_count: dict[str, int], submitted: list[dict], *, alw
 @pytest.fixture
 def patched(monkeypatch):
     # Avoid building a real privacy engine / real Google provider in tests.
-    monkeypatch.setattr(agent_runner.SecuredactEngine, "from_environment", staticmethod(lambda: object()))
-    provider = FakeScanProvider([scan_result_with(status=ScanStatus.COMPLETED, counts={"email": 3})])
+    monkeypatch.setattr(
+        agent_runner.SecuredactEngine, "from_environment", staticmethod(lambda: object())
+    )
+    provider = FakeScanProvider(
+        [scan_result_with(status=ScanStatus.COMPLETED, counts={"email": 3})]
+    )
     monkeypatch.setattr(agent_runner, "build_provider", lambda platform: provider)
     return provider
 
 
 def test_register_agent_persists_config_and_credential(tmp_path):
     transport = _runner_transport({"n": 0}, [])
-    config = agent_runner.register_agent("srr_tok_secret", control_plane_url="https://cp.example.com", files=AgentFiles.resolve(root=tmp_path / "agent"), transport=transport)
+    config = agent_runner.register_agent(
+        "srr_tok_secret",
+        control_plane_url="https://cp.example.com",
+        files=AgentFiles.resolve(root=tmp_path / "agent"),
+        transport=transport,
+    )
     assert config.agent_id == "a-1"
     store = AgentCredentialStore(config.agent_id, root=tmp_path / "agent")
     assert store.get().raw == "sra_id_secret"
@@ -84,9 +117,16 @@ def test_run_loop_claims_executes_and_submits(tmp_path, patched):
     submitted: list[dict] = []
     transport = _runner_transport(claim_count, submitted)
     files = AgentFiles.resolve(root=tmp_path / "agent")
-    config = agent_runner.register_agent("srr_tok_secret", control_plane_url="https://cp.example.com", files=files, transport=transport)
+    config = agent_runner.register_agent(
+        "srr_tok_secret",
+        control_plane_url="https://cp.example.com",
+        files=files,
+        transport=transport,
+    )
 
-    agent_runner.run_agent_loop(config, transport=transport, idle_sleep=0, max_iterations=5, files=files)
+    agent_runner.run_agent_loop(
+        config, transport=transport, idle_sleep=0, max_iterations=5, files=files
+    )
 
     assert claim_count["n"] == 1
     assert len(submitted) == 1
@@ -107,8 +147,15 @@ def test_run_loop_no_jobs_idles_and_stops(tmp_path, patched):
     submitted: list[dict] = []
     transport = _runner_transport(claim_count, submitted, always_no_jobs=True)
     files = AgentFiles.resolve(root=tmp_path / "agent")
-    config = agent_runner.register_agent("srr_tok_secret", control_plane_url="https://cp.example.com", files=files, transport=transport)
-    iterations = agent_runner.run_agent_loop(config, transport=transport, idle_sleep=0, max_iterations=3, files=files)
+    config = agent_runner.register_agent(
+        "srr_tok_secret",
+        control_plane_url="https://cp.example.com",
+        files=files,
+        transport=transport,
+    )
+    iterations = agent_runner.run_agent_loop(
+        config, transport=transport, idle_sleep=0, max_iterations=3, files=files
+    )
     assert iterations == 3
     assert len(submitted) == 0
 
@@ -116,7 +163,12 @@ def test_run_loop_no_jobs_idles_and_stops(tmp_path, patched):
 def test_agent_status_reports_registration(tmp_path):
     transport = _runner_transport({"n": 0}, [])
     files = AgentFiles.resolve(root=tmp_path / "agent")
-    config = agent_runner.register_agent("srr_tok_secret", control_plane_url="https://cp.example.com", files=files, transport=transport)
+    config = agent_runner.register_agent(
+        "srr_tok_secret",
+        control_plane_url="https://cp.example.com",
+        files=files,
+        transport=transport,
+    )
     status = agent_runner.agent_status(config, files=files)
     assert status.registered is True
     assert status.credential_present is True

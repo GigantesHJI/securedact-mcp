@@ -77,9 +77,7 @@ class ControlPlaneClient:
                 raise AgentCredentialError("no agent credential available (register first)")
             headers["Authorization"] = cred.authorization_header
         try:
-            return self._transport.post(
-                f"{self._base}{path}", headers=headers, json_body=json_body
-            )
+            return self._transport.post(f"{self._base}{path}", headers=headers, json_body=json_body)
         except TransportError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -238,9 +236,7 @@ class ControlPlaneClient:
             "lease_generation": lease_generation,
             "result": result,
         }
-        resp = self._post(
-            f"/v1/agents/jobs/{job_id}/result", auth=True, json_body=body
-        )
+        resp = self._post(f"/v1/agents/jobs/{job_id}/result", auth=True, json_body=body)
         return self._ok(resp, 200, "result submission")
 
 

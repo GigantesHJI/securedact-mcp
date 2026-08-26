@@ -327,7 +327,9 @@ def severity_label_from_rank(rank: int) -> str:
     return "none"
 
 
-def build_safe_result_dict(result: ExecutionResult, *, warnings: list[str] | None = None) -> dict[str, Any]:
+def build_safe_result_dict(
+    result: ExecutionResult, *, warnings: list[str] | None = None
+) -> dict[str, Any]:
     """Serialize an :class:`ExecutionResult` into the allowed result envelope."""
 
     return {

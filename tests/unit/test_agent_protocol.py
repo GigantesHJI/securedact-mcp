@@ -126,7 +126,11 @@ def test_reduce_single_completed_result():
 
 def test_reduce_blocked_escalates_review_and_action():
     result = reduce_scan_results(
-        [scan_result_with(status=ScanStatus.BLOCKED, severity=ScanSeverity.HIGH, counts={"bsn": 1})],
+        [
+            scan_result_with(
+                status=ScanStatus.BLOCKED, severity=ScanSeverity.HIGH, counts={"bsn": 1}
+            )
+        ],
         policy_version_id="pv-1",
         policy_digest="d-1",
         resources_scanned=1,
@@ -177,7 +181,12 @@ def test_validate_safe_result_fail_closed_for_failed():
         validate_safe_result({"status": "failed", "review_required": False})
     with pytest.raises(ValueError):
         validate_safe_result(
-            {"status": "failed", "review_required": True, "policy_decision": "allow", "supported_action": "none"}
+            {
+                "status": "failed",
+                "review_required": True,
+                "policy_decision": "allow",
+                "supported_action": "none",
+            }
         )
     # Valid failed result passes.
     validate_safe_result(
@@ -219,20 +228,22 @@ def test_resolve_policy_unknown_label_fails_closed():
 # --- entitlement ----------------------------------------------------------
 
 
-def _entitlement_transport(priv, kid, *, issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE, exp=None):
+def _entitlement_transport(
+    priv, kid, *, issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE, exp=None
+):
     pub = priv.public_key()
     jwk = public_key_to_jwk(pub, kid=kid)
     jwt = encode_eddsa_jwt(priv, kid=kid, issuer=issuer, audience=audience, exp=exp)
 
     def responder(url, headers, body):
         if url.endswith("/.well-known/jwks.json"):
-            return __import__("securedact_mcp.agent.transport", fromlist=["HTTPResponse"]).HTTPResponse(
-                status=200, body={"keys": [jwk]}, raw_text=""
-            )
+            return __import__(
+                "securedact_mcp.agent.transport", fromlist=["HTTPResponse"]
+            ).HTTPResponse(status=200, body={"keys": [jwk]}, raw_text="")
         if url.endswith("/v1/entitlements/activate"):
-            return __import__("securedact_mcp.agent.transport", fromlist=["HTTPResponse"]).HTTPResponse(
-                status=200, body={"entitlement": jwt}, raw_text=""
-            )
+            return __import__(
+                "securedact_mcp.agent.transport", fromlist=["HTTPResponse"]
+            ).HTTPResponse(status=200, body={"entitlement": jwt}, raw_text="")
         return __import__("securedact_mcp.agent.transport", fromlist=["HTTPResponse"]).HTTPResponse(
             status=200, body={}, raw_text=""
         )
@@ -244,7 +255,9 @@ def test_entitlement_activate_verifies_signed_jwt():
     priv, _ = make_ed25519_keypair()
     transport = _entitlement_transport(priv, kid="k1")
     client = ControlPlaneClient(
-        "https://cp.example.com", credential_provider=lambda: AgentCredential("sra_x_y"), transport=transport
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=transport,
     )
     mgr = EntitlementManager(client)
     ent = mgr.activate()
@@ -256,16 +269,28 @@ def test_decode_eddsa_jwt_rejects_wrong_key_and_claims():
     priv, _ = make_ed25519_keypair()
     other, _ = make_ed25519_keypair()
     pub = priv.public_key()
-    good = encode_eddsa_jwt(priv, kid="k1", issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE)
+    good = encode_eddsa_jwt(
+        priv, kid="k1", issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE
+    )
     # Wrong key verification fails.
     with pytest.raises(EntitlementVerificationError):
-        decode_eddsa_jwt(good, other.public_key(), issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE)
+        decode_eddsa_jwt(
+            good, other.public_key(), issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE
+        )
     # Wrong issuer fails.
-    bad_iss = encode_eddsa_jwt(priv, kid="k1", issuer="https://evil.com", audience=ENTITLEMENT_AUDIENCE)
+    bad_iss = encode_eddsa_jwt(
+        priv, kid="k1", issuer="https://evil.com", audience=ENTITLEMENT_AUDIENCE
+    )
     with pytest.raises(EntitlementVerificationError):
         decode_eddsa_jwt(bad_iss, pub, issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE)
     # Expired token fails.
-    expired = encode_eddsa_jwt(priv, kid="k1", issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE, exp=time.time() - 100)
+    expired = encode_eddsa_jwt(
+        priv,
+        kid="k1",
+        issuer=ENTITLEMENT_ISSUER,
+        audience=ENTITLEMENT_AUDIENCE,
+        exp=time.time() - 100,
+    )
     with pytest.raises(EntitlementVerificationError):
         decode_eddsa_jwt(expired, pub, issuer=ENTITLEMENT_ISSUER, audience=ENTITLEMENT_AUDIENCE)
     # Non-EdDSA algorithm rejected.
@@ -299,9 +324,17 @@ def test_client_register_returns_credential():
         return HTTPResponse(status=200, body={}, raw_text="")
 
     client = ControlPlaneClient(
-        "https://cp.example.com", credential_provider=lambda: None, transport=FakeTransport(responder)
+        "https://cp.example.com",
+        credential_provider=lambda: None,
+        transport=FakeTransport(responder),
     )
-    resp = client.register("srr_tok", display_name="d", agent_version="1", platform="linux", capabilities=AgentCapabilities.default())
+    resp = client.register(
+        "srr_tok",
+        display_name="d",
+        agent_version="1",
+        platform="linux",
+        capabilities=AgentCapabilities.default(),
+    )
     assert resp.agent_id == "a-1"
     assert resp.credential == "sra_abc_def"
 
@@ -310,10 +343,14 @@ def test_client_revoked_error_is_typed():
     def responder(url, headers, body):
         from securedact_mcp.agent.transport import HTTPResponse
 
-        return HTTPResponse(status=403, body={"error": {"code": "agent_revoked", "message": "revoked"}}, raw_text="")
+        return HTTPResponse(
+            status=403, body={"error": {"code": "agent_revoked", "message": "revoked"}}, raw_text=""
+        )
 
     client = ControlPlaneClient(
-        "https://cp.example.com", credential_provider=lambda: AgentCredential("sra_x_y"), transport=FakeTransport(responder)
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=FakeTransport(responder),
     )
     with pytest.raises(AgentRevokedError):
         client.heartbeat(agent_version="1", capabilities=AgentCapabilities.default())
@@ -333,11 +370,24 @@ def test_client_result_submission_includes_lease_fields():
         return HTTPResponse(status=200, body={}, raw_text="")
 
     client = ControlPlaneClient(
-        "https://cp.example.com", credential_provider=lambda: AgentCredential("sra_x_y"), transport=FakeTransport(responder)
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=FakeTransport(responder),
     )
     claim = fake_claim()
-    result = reduce_scan_results([scan_result_with()], policy_version_id="pv", policy_digest="d", resources_scanned=1, duration_ms=1)
-    client.submit_result(claim["job_id"], lease_secret=claim["lease_secret"], lease_generation=claim["lease_generation"], result=build_safe_result_dict(result))
+    result = reduce_scan_results(
+        [scan_result_with()],
+        policy_version_id="pv",
+        policy_digest="d",
+        resources_scanned=1,
+        duration_ms=1,
+    )
+    client.submit_result(
+        claim["job_id"],
+        lease_secret=claim["lease_secret"],
+        lease_generation=claim["lease_generation"],
+        result=build_safe_result_dict(result),
+    )
     sent = captured["body"]
     assert sent["lease_secret"] == claim["lease_secret"]
     assert sent["lease_generation"] == claim["lease_generation"]
@@ -372,7 +422,9 @@ def test_submit_result_envelope_separates_lease_from_safe_result():
         return HTTPResponse(status=204, body=None, raw_text="")
 
     client = ControlPlaneClient(
-        "https://cp.example.com", credential_provider=lambda: AgentCredential("sra_x_y"), transport=FakeTransport(responder)
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=FakeTransport(responder),
     )
     claim = fake_claim()
     result = reduce_scan_results(

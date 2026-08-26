@@ -120,7 +120,9 @@ def rotate_credential(
 
     files = files or AgentFiles.resolve()
     store = AgentCredentialStore(config.agent_id, root=files.root)
-    client = ControlPlaneClient(config.control_plane_url, credential_provider=store.get, transport=transport)
+    client = ControlPlaneClient(
+        config.control_plane_url, credential_provider=store.get, transport=transport
+    )
     new_raw = client.rotate_credential()
     return store.rotate(new_raw)
 
@@ -132,7 +134,9 @@ def refresh_entitlement(
 
     files = files or AgentFiles.resolve()
     store = AgentCredentialStore(config.agent_id, root=files.root)
-    client = ControlPlaneClient(config.control_plane_url, credential_provider=store.get, transport=transport)
+    client = ControlPlaneClient(
+        config.control_plane_url, credential_provider=store.get, transport=transport
+    )
     manager = EntitlementManager(client)
     return manager.activate()
 
@@ -249,7 +253,9 @@ def _heartbeat(
         raise
 
 
-def _job_heartbeat(client: ControlPlaneClient, claim: JobClaim, *, clock: Callable[[], float]) -> None:
+def _job_heartbeat(
+    client: ControlPlaneClient, claim: JobClaim, *, clock: Callable[[], float]
+) -> None:
     try:
         client.job_heartbeat(
             claim.job_id,
@@ -329,15 +335,15 @@ def _run_one_job(
         policy = resolve_policy(claim.policy)
     except PolicyValidationError as exc:
         logger.warning("job %s policy rejected: %s", claim.job_id, scrub(str(exc)))
-        _submit_result(client, claim, _failed_result(policy_placeholder(), "policy_invalid"), clock=clock)
+        _submit_result(
+            client, claim, _failed_result(policy_placeholder(), "policy_invalid"), clock=clock
+        )
         state_store.update(current_job_id=None)
         return
 
     provider = build_provider(claim.platform)
     if provider is None:
-        _submit_result(
-            client, claim, _failed_result(policy, "unsupported_target"), clock=clock
-        )
+        _submit_result(client, claim, _failed_result(policy, "unsupported_target"), clock=clock)
         state_store.update(current_job_id=None)
         return
 
@@ -372,7 +378,9 @@ def _run_one_job(
 def policy_placeholder() -> ResolvedPolicy:
     from securedact_core.policies import STRICT_EXTERNAL_AI_POLICY
 
-    return ResolvedPolicy(policy=STRICT_EXTERNAL_AI_POLICY, policy_version_id=None, content_digest=None)
+    return ResolvedPolicy(
+        policy=STRICT_EXTERNAL_AI_POLICY, policy_version_id=None, content_digest=None
+    )
 
 
 def run_agent_loop(
@@ -389,13 +397,17 @@ def run_agent_loop(
 
     files = files or AgentFiles.resolve()
     store = AgentCredentialStore(config.agent_id, root=files.root)
-    client = ControlPlaneClient(config.control_plane_url, credential_provider=store.get, transport=transport)
+    client = ControlPlaneClient(
+        config.control_plane_url, credential_provider=store.get, transport=transport
+    )
     manager = EntitlementManager(client)
     state_store = AgentStateStore(files)
 
     try:
         ent = manager.activate()
-        state_store.update(entitlement_expires_at=ent.expires_at, entitlement_not_before=ent.not_before)
+        state_store.update(
+            entitlement_expires_at=ent.expires_at, entitlement_not_before=ent.not_before
+        )
     except EntitlementError as exc:
         logger.warning("entitlement activation deferred (offline grace): %s", scrub(str(exc)))
 

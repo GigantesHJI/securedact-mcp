@@ -96,7 +96,9 @@ class JobClaim:
             target_ref=self.target_ref,
         )
 
-    def is_expired(self, *, clock: Callable[[], float] | None = None, skew: int = _LEASE_EXPIRY_SKEW_SECONDS) -> bool:
+    def is_expired(
+        self, *, clock: Callable[[], float] | None = None, skew: int = _LEASE_EXPIRY_SKEW_SECONDS
+    ) -> bool:
         if not self.lease_expires_at:
             return True
         try:
@@ -125,8 +127,7 @@ class ScanProvider(Protocol):
         engine: SecuredactEngine,
         *,
         heartbeat: Callable[[], None] | None = None,
-    ) -> list[ScanResult]:
-        ...
+    ) -> list[ScanResult]: ...
 
 
 def execute_job(
@@ -153,9 +154,7 @@ def execute_job(
         heartbeat()
 
     try:
-        results = list(
-            provider.scan(claim.target, context, engine, heartbeat=heartbeat)
-        )
+        results = list(provider.scan(claim.target, context, engine, heartbeat=heartbeat))
     except LeaseError:
         raise
     except Exception as exc:  # noqa: BLE001

@@ -46,7 +46,9 @@ def _summary_to_result(summary: object) -> ScanResult:
     files_with_findings = int(getattr(summary, "files_with_findings", 0) or 0)
     files_failed = int(getattr(summary, "files_failed", 0) or 0)
     files_scanned = int(getattr(summary, "files_scanned", 0) or 0)
-    severity = ScanSeverity.MEDIUM if files_with_findings > 0 or files_failed > 0 else ScanSeverity.NONE
+    severity = (
+        ScanSeverity.MEDIUM if files_with_findings > 0 or files_failed > 0 else ScanSeverity.NONE
+    )
     return ScanResult(
         status=ScanStatus.COMPLETED,
         severity=severity,

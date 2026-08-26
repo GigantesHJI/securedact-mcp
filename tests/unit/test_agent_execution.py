@@ -15,7 +15,9 @@ def test_reduce_aggregates_multiple_files_most_restrictive():
         scan_result_with(status=ScanStatus.REVIEW_REQUIRED, counts={"person": 2}),
         scan_result_with(status=ScanStatus.COMPLETED, counts={"credit_card_number": 1}),
     ]
-    out = reduce_scan_results(results, policy_version_id="pv", policy_digest="d", resources_scanned=3, duration_ms=42)
+    out = reduce_scan_results(
+        results, policy_version_id="pv", policy_digest="d", resources_scanned=3, duration_ms=42
+    )
     # Most restrictive decision across files is review.
     assert out.policy_decision == "review"
     assert out.supported_action == "review"
@@ -31,7 +33,9 @@ def test_reduce_block_wins_over_review():
         scan_result_with(status=ScanStatus.REVIEW_REQUIRED, counts={"person": 1}),
         scan_result_with(status=ScanStatus.BLOCKED, severity=ScanSeverity.HIGH, counts={"bsn": 1}),
     ]
-    out = reduce_scan_results(results, policy_version_id="pv", policy_digest="d", resources_scanned=2, duration_ms=1)
+    out = reduce_scan_results(
+        results, policy_version_id="pv", policy_digest="d", resources_scanned=2, duration_ms=1
+    )
     assert out.policy_decision == "block"
     assert out.supported_action == "block"
     assert out.severity == "high"
@@ -39,7 +43,9 @@ def test_reduce_block_wins_over_review():
 
 def test_reduce_secret_label_escalates_severity():
     results = [scan_result_with(status=ScanStatus.COMPLETED, counts={"api_token": 1})]
-    out = reduce_scan_results(results, policy_version_id="pv", policy_digest="d", resources_scanned=1, duration_ms=1)
+    out = reduce_scan_results(
+        results, policy_version_id="pv", policy_digest="d", resources_scanned=1, duration_ms=1
+    )
     # api_key -> secret label -> severity high.
     assert out.severity == "high"
     assert "secret" in out.categories
@@ -52,7 +58,9 @@ def test_reduce_mixed_errors_become_warnings_not_failure():
         scan_result_with(status=ScanStatus.COMPLETED, counts={"email": 2}),
         scan_result_with(status=ScanStatus.ERROR, error_code=ScanErrorCode.UNSUPPORTED_FORMAT),
     ]
-    out = reduce_scan_results(results, policy_version_id="pv", policy_digest="d", resources_scanned=2, duration_ms=1)
+    out = reduce_scan_results(
+        results, policy_version_id="pv", policy_digest="d", resources_scanned=2, duration_ms=1
+    )
     assert out.status == "succeeded"
     assert out.resources_scanned == 2
     assert out.safe_error_code is None

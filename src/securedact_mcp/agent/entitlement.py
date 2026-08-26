@@ -123,7 +123,9 @@ class Entitlement:
 class JwksCache:
     """Caches and verifies control-plane signing keys by ``kid``."""
 
-    def __init__(self, client: ControlPlaneClient, *, cache_ttl: int = ENTITLEMENT_JWKS_CACHE_SECONDS) -> None:
+    def __init__(
+        self, client: ControlPlaneClient, *, cache_ttl: int = ENTITLEMENT_JWKS_CACHE_SECONDS
+    ) -> None:
         self._client = client
         self._cache_ttl = cache_ttl
         self._keys: dict[str, Ed25519PublicKey] = {}

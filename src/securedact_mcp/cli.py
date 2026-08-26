@@ -99,9 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostic_commands = diagnostics.add_subparsers(dest="diagnostic_command", required=True)
     diagnostic_commands.add_parser("runtime", help="inspect the production detector lifecycle")
 
-    from .connectors.google import cli_commands as google_cli_commands
+    try:
+        from .connectors.google import cli_commands as google_cli_commands
+    except ImportError:
+        google_cli_commands = None
 
-    google_cli_commands.build_google_parser(commands)
+    if google_cli_commands is not None:
+        google_cli_commands.build_google_parser(commands)
     agent_cli.build_agent_parser(commands)
     return parser
 

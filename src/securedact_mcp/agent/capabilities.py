@@ -83,8 +83,9 @@ class AgentCapabilities:
         default_factory=lambda: frozenset(SUPPORTED_PLATFORMS)
     )
     capabilities: frozenset[str] = field(
-        default_factory=lambda: frozenset(REQUIRED_CAPABILITIES)
-        | frozenset(PLATFORM_CAPABILITY.values())
+        default_factory=lambda: (
+            frozenset(REQUIRED_CAPABILITIES) | frozenset(PLATFORM_CAPABILITY.values())
+        )
     )
 
     def to_dict(self) -> dict[str, object]:

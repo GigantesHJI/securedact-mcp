@@ -180,7 +180,9 @@ class FakeScanProvider:
         self.error = error
         self.calls: list[Any] = []
 
-    def scan(self, target: Any, context: Any, engine: Any, *, heartbeat: Callable[[], None] | None = None) -> list[ScanResult]:
+    def scan(
+        self, target: Any, context: Any, engine: Any, *, heartbeat: Callable[[], None] | None = None
+    ) -> list[ScanResult]:
         self.calls.append(target)
         if self.error is not None:
             raise self.error

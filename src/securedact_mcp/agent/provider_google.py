@@ -10,7 +10,9 @@ provided here (no local Graph transport exists yet).
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
+from typing import Protocol, cast
 
 from securedact_core.api import SecuredactEngine
 from securedact_core.connectors.contracts import ScanContext
@@ -28,6 +30,32 @@ from .executor import (
     TARGET_SITE,
     ScanTarget,
 )
+
+
+class _GoogleConnectorClient(Protocol):
+    """Narrow structural boundary for the optional Google connector client."""
+
+    def scan_file(
+        self, file_id: str, context: ScanContext, *, integration_id: str | None = None
+    ) -> ScanResult: ...
+    def scan_folder(
+        self, folder_id: str, context: ScanContext, *, integration_id: str | None = None
+    ) -> object: ...
+    def scan_drive(self, context: ScanContext, *, integration_id: str | None = None) -> object: ...
+
+
+class _GoogleClientModule(Protocol):
+    """Narrow structural boundary for the optional Google connector client module."""
+
+    GoogleConfigError: type[Exception]
+
+    def build_client(self, config: object, engine: SecuredactEngine) -> _GoogleConnectorClient: ...
+
+
+class _GoogleConfigModule(Protocol):
+    """Narrow structural boundary for the optional Google connector config module."""
+
+    def load_google_config(self, *, require_enabled: bool = ...) -> object: ...
 
 
 def _summary_to_result(summary: object) -> ScanResult:
@@ -85,18 +113,23 @@ class GoogleScanProvider:
         heartbeat: Callable[[], None] | None = None,
     ) -> list[ScanResult]:
         try:
-            from ..connectors.google.client import GoogleConfigError, build_client
-        except Exception as exc:
+            client_module = cast(
+                _GoogleClientModule,
+                importlib.import_module("securedact_mcp.connectors.google.client"),
+            )
+            config_module = cast(
+                _GoogleConfigModule,
+                importlib.import_module("securedact_mcp.connectors.google.config"),
+            )
+        except ModuleNotFoundError as exc:
             raise JobExecutionError(f"google provider unavailable: {exc}") from exc
 
         try:
-            from ..connectors.google.config import load_google_config
-
-            config = load_google_config()
-        except GoogleConfigError as exc:
+            config = config_module.load_google_config()
+        except client_module.GoogleConfigError as exc:
             raise JobExecutionError(f"google connector not configured: {exc}") from exc
 
-        client = build_client(config, engine)
+        client = client_module.build_client(config, engine)
         if heartbeat is not None:
             heartbeat()
 

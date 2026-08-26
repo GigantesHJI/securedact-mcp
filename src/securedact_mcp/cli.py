@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Protocol, TextIO
+from typing import Protocol, TextIO, cast
 
 from .agent import cli as agent_cli
 from .model_installer import (
@@ -38,6 +39,21 @@ class _GoogleCliCommands(Protocol):
 
     def build_google_parser(self, subparsers: object) -> None: ...
     def run_google(self, arguments: object, *, input_fn: InputFunction, output: TextIO) -> int: ...
+
+
+def _load_google_cli_commands() -> _GoogleCliCommands | None:
+    """Dynamically load the optional Google connector CLI module.
+
+    Returns ``None`` when the optional connector package is not installed so the
+    base CLI and ``agent`` command work without it. The module is cast to the
+    narrow :class:`_GoogleCliCommands` Protocol at this single boundary, so mypy
+    never statically resolves the absent optional package on a clean checkout.
+    """
+    try:
+        module = importlib.import_module("securedact_mcp.connectors.google.cli_commands")
+    except ModuleNotFoundError:
+        return None
+    return cast(_GoogleCliCommands, module)
 
 
 def _default_installer_factory(
@@ -105,12 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostic_commands = diagnostics.add_subparsers(dest="diagnostic_command", required=True)
     diagnostic_commands.add_parser("runtime", help="inspect the production detector lifecycle")
 
-    google_cli_commands: _GoogleCliCommands | None
-    try:
-        from .connectors.google import cli_commands as google_cli_commands
-    except ImportError:
-        google_cli_commands = None
-
+    google_cli_commands = _load_google_cli_commands()
     if google_cli_commands is not None:
         google_cli_commands.build_google_parser(commands)
     agent_cli.build_agent_parser(commands)
@@ -481,8 +492,10 @@ def main(
     diagnose_runtime = arguments.command == "diagnostics"
 
     if arguments.command == "google":
-        from .connectors.google import cli_commands as google_cli_commands
-
+        google_cli_commands = _load_google_cli_commands()
+        if google_cli_commands is None:
+            print("The optional Google connector is not installed.", file=output)
+            return 2
         return google_cli_commands.run_google(arguments, input_fn=input_fn, output=output)
 
     if arguments.command == "agent":

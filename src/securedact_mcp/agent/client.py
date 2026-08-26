@@ -9,9 +9,9 @@ authenticated request carries ``Authorization: Bearer <sra_...>``.
 
 from __future__ import annotations
 
-import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .capabilities import AgentCapabilities
 from .credentials import AgentCredential
@@ -22,7 +22,7 @@ from .errors import (
     ControlPlaneError,
     TransportError,
 )
-from .transport import HTTPResponse, HTTPTransport, RetryPolicy
+from .transport import HTTPResponse, HTTPTransport
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +42,7 @@ class HeartbeatResponse:
     entitlement_refresh_required: bool
 
 
-USER_AGENT = f"securedact-mcp-agent"
+USER_AGENT = "securedact-mcp-agent"
 
 
 class ControlPlaneClient:
@@ -80,7 +80,7 @@ class ControlPlaneClient:
             return self._transport.post(f"{self._base}{path}", headers=headers, json_body=json_body)
         except TransportError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise TransportError(f"control plane request failed: {exc}") from exc
 
     def _ok(self, resp: HTTPResponse, expected: int, what: str) -> dict[str, Any]:
@@ -185,7 +185,7 @@ class ControlPlaneClient:
             )
         except TransportError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise TransportError(f"jwks request failed: {exc}") from exc
         if resp.status != 200 or not isinstance(resp.body, dict):
             raise ControlPlaneError(

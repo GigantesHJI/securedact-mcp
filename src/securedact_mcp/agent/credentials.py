@@ -22,6 +22,7 @@ from pathlib import Path
 from cryptography.fernet import InvalidToken
 
 from securedact_core.storage import EncryptedLocalVault
+
 from .errors import AgentCredentialError
 
 _CREDENTIAL_SERVICE_NAME = "securedact-agent"
@@ -153,7 +154,7 @@ class AgentCredentialStore:
             return
         try:
             keyring.delete_password(_CREDENTIAL_SERVICE_NAME, self._agent_id)
-        except Exception:
+        except Exception:  # noqa: S110  # best-effort keyring cleanup; a failed delete does not affect rotation
             pass
 
 

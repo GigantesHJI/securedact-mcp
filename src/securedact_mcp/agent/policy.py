@@ -11,10 +11,11 @@ unknown or unpinned policy. We map the snapshot's ``label``/``name`` to a core
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
-from securedact_core.policies import Policy, PolicyRegistry, STRICT_EXTERNAL_AI_POLICY
+from securedact_core.policies import STRICT_EXTERNAL_AI_POLICY, Policy, PolicyRegistry
 
 from .errors import PolicyUnsupportedError, PolicyValidationError
 

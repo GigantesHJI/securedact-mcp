@@ -11,9 +11,10 @@ so an expired claim is never acted on.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable, Protocol, runtime_checkable
+from datetime import UTC, datetime
+from typing import Any, Protocol, runtime_checkable
 
 from securedact_core.api import SecuredactEngine
 from securedact_core.connectors.contracts import ScanContext
@@ -107,7 +108,7 @@ class JobClaim:
             # mark claims expired on non-UTC machines).
             expiry = (
                 datetime.strptime(self.lease_expires_at, "%Y-%m-%dT%H:%M:%SZ")
-                .replace(tzinfo=timezone.utc)
+                .replace(tzinfo=UTC)
                 .timestamp()
             )
         except (ValueError, OverflowError):
@@ -157,7 +158,7 @@ def execute_job(
         results = list(provider.scan(claim.target, context, engine, heartbeat=heartbeat))
     except LeaseError:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise JobExecutionError(f"local job execution failed: {exc}") from exc
 
     finished = (clock or time.time)()

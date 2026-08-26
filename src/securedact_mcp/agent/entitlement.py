@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -74,7 +75,7 @@ def decode_eddsa_jwt(
         key.verify(_b64url_decode(parts[2]), signing_input)
     except InvalidSignature as exc:
         raise EntitlementVerificationError("entitlement signature is invalid") from exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise EntitlementVerificationError(f"entitlement signature failed: {exc}") from exc
 
     now = time.time()
@@ -167,7 +168,7 @@ class JwksCache:
                 continue
             try:
                 parsed[str(kid)] = Ed25519PublicKey.from_public_bytes(_b64url_decode(str(x)))
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: S112  # skip malformed/unsupported JWKS key entries
                 continue
         if not parsed:
             raise EntitlementVerificationError("jwks contained no usable Ed25519 keys")
@@ -209,7 +210,7 @@ class EntitlementManager:
             token = self._client.refresh_entitlement()
         except ControlPlaneError as exc:  # offline / auth failure -> keep cached
             raise EntitlementError(f"entitlement refresh failed: {exc.message}") from exc
-        except TransportError as exc:  # noqa: F821
+        except TransportError as exc:
             raise EntitlementError(f"entitlement refresh failed: {exc}") from exc
         ent = self._verify(token)
         self._entitlement = ent

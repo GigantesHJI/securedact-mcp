@@ -13,20 +13,20 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from securedact_core.api import SecuredactEngine
 
 from .capabilities import AgentCapabilities, agent_version, runtime_platform
 from .client import ControlPlaneClient
 from .config import (
-    DEFAULT_CONTROL_PLANE_URL,
     CONTROL_PLANE_URL_ENV,
+    DEFAULT_CONTROL_PLANE_URL,
     AgentConfig,
     AgentFiles,
     generate_display_name,
-    load_config,
     normalize_control_plane_url,
     save_config,
 )
@@ -35,13 +35,11 @@ from .credentials import AgentCredential, AgentCredentialStore
 from .entitlement import Entitlement, EntitlementManager
 from .errors import (
     AgentCredentialError,
-    AgentError,
     AgentRevokedError,
     ControlPlaneError,
     EntitlementError,
     JobExecutionError,
     LeaseError,
-    PolicyUnsupportedError,
     PolicyValidationError,
     TransportError,
 )
@@ -54,7 +52,7 @@ from .reducer import (
     validate_safe_result,
 )
 from .safe_log import scrub
-from .state import AgentState, AgentStateStore
+from .state import AgentStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +246,7 @@ def _heartbeat(
     try:
         client.heartbeat(agent_version=config.agent_version, capabilities=config.capabilities)
         state_store.update(last_heartbeat_at=clock(), last_error=None)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         state_store.update(last_error=scrub(str(exc)))
         raise
 
@@ -263,7 +261,7 @@ def _job_heartbeat(
             lease_generation=claim.lease_generation,
             renew_seconds=_HEARTBEAT_RENEW_SECONDS,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: S110  # best-effort job heartbeat renewal; failures are non-fatal and surfaced by the outer job loop
         pass
 
 
@@ -349,7 +347,7 @@ def _run_one_job(
 
     try:
         engine = SecuredactEngine.from_environment()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("privacy engine unavailable: %s", scrub(str(exc)))
         engine = None
 
@@ -360,9 +358,13 @@ def _run_one_job(
         state_store.update(current_job_id=None)
         return
 
-    heartbeat = lambda: _job_heartbeat(client, claim, clock=clock)
+    def _heartbeat_callback() -> None:
+        _job_heartbeat(client, claim, clock=clock)
+
     try:
-        exe_result = execute_job(claim, engine, provider, policy, heartbeat=heartbeat, clock=clock)
+        exe_result = execute_job(
+            claim, engine, provider, policy, heartbeat=_heartbeat_callback, clock=clock
+        )
     except LeaseError as exc:
         logger.info("job %s lease invalid, skipping: %s", claim.job_id, scrub(str(exc)))
         state_store.update(current_job_id=None, last_error=scrub(str(exc)))
@@ -443,7 +445,7 @@ def run_agent_loop(
             _run_one_job(claim, client, config, state_store, clock=clock)
         except AgentRevokedError:
             break
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             state_store.update(last_error=scrub(str(exc)))
             logger.exception("unexpected error handling job: %s", scrub(str(exc)))
 

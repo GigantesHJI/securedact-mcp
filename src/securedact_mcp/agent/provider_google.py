@@ -10,7 +10,7 @@ provided here (no local Graph transport exists yet).
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from securedact_core.api import SecuredactEngine
 from securedact_core.connectors.contracts import ScanContext
@@ -22,14 +22,11 @@ from securedact_core.connectors.scan import (
 
 from .errors import JobExecutionError
 from .executor import (
-    ScanProvider,
-    ScanTarget,
-    TARGET_DRIVE,
     TARGET_FOLDER,
-    TARGET_INTEGRATION,
     TARGET_RESOURCE,
     TARGET_RESOURCE_COLLECTION,
     TARGET_SITE,
+    ScanTarget,
 )
 
 
@@ -89,7 +86,7 @@ class GoogleScanProvider:
     ) -> list[ScanResult]:
         try:
             from ..connectors.google.client import GoogleConfigError, build_client
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise JobExecutionError(f"google provider unavailable: {exc}") from exc
 
         try:

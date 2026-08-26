@@ -3,14 +3,10 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from securedact_core.connectors.scan import ScanStatus
-
 from securedact_mcp.agent import agent_runner
-from securedact_mcp.agent.client import ControlPlaneClient
 from securedact_mcp.agent.config import AgentFiles, load_config
 from securedact_mcp.agent.credentials import AgentCredentialStore
 from securedact_mcp.agent.reducer import validate_safe_result
@@ -132,7 +128,7 @@ def test_run_loop_claims_executes_and_submits(tmp_path, patched):
     assert len(submitted) == 1
     body = submitted[0]
     # Transport envelope carries lease auth metadata at the top level.
-    assert body["lease_secret"] == "lease-secret-1"
+    assert body["lease_secret"] == "lease-secret-1"  # noqa: S105  # fake test-only lease secret from FakeTransport fixture
     assert body["lease_generation"] == 1
     # The safe scan result is nested and must not contain transport fields.
     safe = body["result"]

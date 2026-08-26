@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from securedact_core.app_paths import SecuredactPaths
+
 from .capabilities import (
     REQUIRED_CAPABILITIES,
     SUPPORTED_PLATFORMS,
@@ -83,7 +85,8 @@ class AgentConfig:
         agent_version: str | None = None,
         capabilities: AgentCapabilities | None = None,
     ) -> AgentConfig:
-        from .capabilities import agent_version as _agent_version, runtime_platform as _rt
+        from .capabilities import agent_version as _agent_version
+        from .capabilities import runtime_platform as _rt
 
         return cls(
             control_plane_url=normalize_control_plane_url(control_plane_url),

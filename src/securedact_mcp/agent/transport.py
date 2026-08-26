@@ -61,7 +61,7 @@ class HTTPTransport:
         payload = json.dumps(json_body or {}).encode("utf-8")
         last_exc: Exception | None = None
         for attempt in range(1, self._retry.max_attempts + 1):
-            request = urllib.request.Request(
+            request = urllib.request.Request(  # noqa: S310  # URL is always a normalized https control-plane URL (see config.normalize_control_plane_url)
                 url,
                 data=payload,
                 headers={**headers, "Content-Type": "application/json"},
@@ -78,7 +78,7 @@ class HTTPTransport:
                 last_exc = exc
                 if not self._retry.retry_on_connect_error:
                     break
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_exc = exc
                 if not self._retry.retry_on_connect_error:
                     break
@@ -90,7 +90,7 @@ class HTTPTransport:
 def _safe_read(exc: urllib.error.HTTPError) -> str:
     try:
         return exc.read().decode("utf-8", "replace")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 

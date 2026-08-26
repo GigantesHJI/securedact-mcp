@@ -8,7 +8,6 @@ import time
 import pytest
 
 from securedact_core.connectors.scan import ScanErrorCode, ScanSeverity, ScanStatus
-
 from securedact_mcp.agent.capabilities import AgentCapabilities, validate_capabilities
 from securedact_mcp.agent.client import ControlPlaneClient
 from securedact_mcp.agent.config import AgentConfig, AgentFiles, normalize_control_plane_url
@@ -20,18 +19,13 @@ from securedact_mcp.agent.entitlement import (
     decode_eddsa_jwt,
 )
 from securedact_mcp.agent.errors import (
-    AgentCredentialError,
     AgentRevokedError,
-    ControlPlaneError,
     EntitlementVerificationError,
     PolicyUnsupportedError,
 )
-from securedact_mcp.agent.credentials import AgentCredential
 from securedact_mcp.agent.executor import JobClaim, execute_job
 from securedact_mcp.agent.policy import resolve_policy
 from securedact_mcp.agent.reducer import (
-    MAX_RESULT_PAYLOAD_BYTES,
-    ExecutionResult,
     build_safe_result_dict,
     label_for_entity,
     reduce_scan_results,
@@ -47,7 +41,6 @@ from tests.unit.agent_helpers import (
     scan_result_with,
     strict_external_ai_snapshot,
 )
-
 
 # --- capabilities / config ------------------------------------------------
 
@@ -75,7 +68,7 @@ def test_agent_config_round_trip(tmp_path):
         runtime_platform="windows",
         agent_version="9.9.9",
     )
-    from securedact_mcp.agent.config import save_config, load_config
+    from securedact_mcp.agent.config import load_config, save_config
 
     save_config(config, files)
     loaded = load_config(files)

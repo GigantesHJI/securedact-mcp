@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
+from .agent import cli as agent_cli
 from .model_installer import (
     InstallationProgress,
     InstallerState,
@@ -27,8 +28,6 @@ from .model_store import (
     ModelPathError,
     ModelStore,
 )
-
-from .agent import cli as agent_cli
 
 InputFunction = Callable[[str], str]
 InstallerFactory = Callable[[ModelStore, Callable[[InstallationProgress], None]], ModelInstaller]

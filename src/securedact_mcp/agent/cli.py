@@ -12,7 +12,8 @@ import argparse
 import json
 import sys
 import time
-from typing import Callable, TextIO
+from collections.abc import Callable
+from typing import TextIO
 
 from . import agent_runner
 from .config import AgentFiles, load_config
@@ -21,7 +22,7 @@ from .errors import AgentError
 from .safe_log import scrub
 
 
-def build_agent_parser(subparsers: argparse._SubParsersAction) -> None:  # noqa: ANN401
+def build_agent_parser(subparsers: argparse._SubParsersAction) -> None:
     agent = subparsers.add_parser(
         "agent", help="managed local agent runtime for SecuRedact control plane"
     )

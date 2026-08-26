@@ -10,11 +10,18 @@ from __future__ import annotations
 import base64
 import json
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from securedact_core.connectors.scan import ScanError, ScanResult, ScanSeverity, ScanStatus
+from securedact_core.connectors.scan import (
+    ScanError,
+    ScanErrorCode,
+    ScanResult,
+    ScanSeverity,
+    ScanStatus,
+)
 from securedact_mcp.agent.transport import HTTPResponse
 
 
@@ -92,7 +99,7 @@ def fake_claim(
     integration_id: str = "int-1",
     target_type: str = "resource",
     target_ref: str = "file-abc",
-    lease_secret: str = "lease-secret-1",
+    lease_secret: str = "lease-secret-1",  # noqa: S107  # intentional fake test-only lease secret
     lease_generation: int = 1,
     policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

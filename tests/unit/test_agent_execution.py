@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from securedact_core.connectors.scan import ScanSeverity, ScanStatus
-
 from securedact_mcp.agent.reducer import reduce_scan_results
 from tests.unit.agent_helpers import scan_result_with
 

@@ -28,6 +28,8 @@ from .model_store import (
     ModelStore,
 )
 
+from .agent import cli as agent_cli
+
 InputFunction = Callable[[str], str]
 InstallerFactory = Callable[[ModelStore, Callable[[InstallationProgress], None]], ModelInstaller]
 
@@ -96,6 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     diagnostic_commands = diagnostics.add_subparsers(dest="diagnostic_command", required=True)
     diagnostic_commands.add_parser("runtime", help="inspect the production detector lifecycle")
+
+    from .connectors.google import cli_commands as google_cli_commands
+
+    google_cli_commands.build_google_parser(commands)
+    agent_cli.build_agent_parser(commands)
     return parser
 
 
@@ -461,6 +468,14 @@ def main(
         )
 
     diagnose_runtime = arguments.command == "diagnostics"
+
+    if arguments.command == "google":
+        from .connectors.google import cli_commands as google_cli_commands
+
+        return google_cli_commands.run_google(arguments, input_fn=input_fn, output=output)
+
+    if arguments.command == "agent":
+        return agent_cli.run_agent(arguments, input_fn=input_fn, output=output)
 
     try:
         store = ModelStore.resolve()

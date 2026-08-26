@@ -134,7 +134,7 @@ class AgentCredentialStore:
 
     def _read_keyring(self) -> str | None:
         try:
-            import keyring  # type: ignore[import-untyped]
+            import keyring
         except Exception:
             return None
         try:
@@ -143,13 +143,13 @@ class AgentCredentialStore:
             return None
 
     def _write_keyring(self, raw: str) -> None:
-        import keyring  # type: ignore[import-untyped]
+        import keyring
 
         keyring.set_password(_CREDENTIAL_SERVICE_NAME, self._agent_id, raw)
 
     def _delete_keyring(self) -> None:
         try:
-            import keyring  # type: ignore[import-untyped]
+            import keyring
         except Exception:
             return
         try:

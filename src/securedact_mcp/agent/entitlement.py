@@ -274,9 +274,12 @@ def _decode_header(token: str) -> dict[str, Any]:
     if len(parts) != 3:
         raise EntitlementVerificationError("malformed entitlement token")
     try:
-        return json.loads(_b64url_decode(parts[0]))
+        header = json.loads(_b64url_decode(parts[0]))
     except (ValueError, UnicodeDecodeError) as exc:
         raise EntitlementVerificationError("entitlement header is invalid") from exc
+    if not isinstance(header, dict):
+        raise EntitlementVerificationError("entitlement header is not a JSON object")
+    return header
 
 
 def _as_float(value: Any) -> float | None:

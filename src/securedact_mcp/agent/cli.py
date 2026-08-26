@@ -22,7 +22,7 @@ from .errors import AgentError
 from .safe_log import scrub
 
 
-def build_agent_parser(subparsers: argparse._SubParsersAction) -> None:
+def build_agent_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     agent = subparsers.add_parser(
         "agent", help="managed local agent runtime for SecuRedact control plane"
     )
@@ -66,7 +66,7 @@ def run_agent(
     output: TextIO = sys.stderr,
     clock: object = None,
 ) -> int:
-    clock = clock or time.time  # type: ignore[assignment]
+    clock = clock or time.time
     command = arguments.agent_command
 
     if command == "register":

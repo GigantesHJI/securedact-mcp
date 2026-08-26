@@ -175,7 +175,10 @@ def _write_json_secure(path: Path, data: dict[str, Any]) -> None:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a JSON object in {path}")
+    return data
 
 
 def save_config(config: AgentConfig, files: AgentFiles | None = None) -> AgentFiles:

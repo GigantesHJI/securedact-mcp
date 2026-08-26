@@ -19,6 +19,7 @@ from securedact_mcp.agent.entitlement import (
     decode_eddsa_jwt,
 )
 from securedact_mcp.agent.errors import (
+    AgentRegistrationError,
     AgentRevokedError,
     EntitlementVerificationError,
     PolicyUnsupportedError,
@@ -482,3 +483,19 @@ def test_execute_job_provider_error_is_fail_closed():
 
     with pytest.raises(JobExecutionError):
         execute_job(claim, object(), provider, resolve_policy(claim.policy))  # type: ignore[arg-type]
+
+
+def test_agent_registration_error_accepts_code_and_status() -> None:
+    # Regression: AgentRegistrationError must carry the structured control-plane
+    # code/status that ControlPlaneClient passes on a non-201 registration.
+    err = AgentRegistrationError("rejected", code="agent_token_invalid", status=422)
+    assert err.message == "rejected"
+    assert err.code == "agent_token_invalid"
+    assert err.status == 422
+    assert isinstance(err, Exception)
+
+    # Defaults are preserved for backward-compatible single-argument calls.
+    plain = AgentRegistrationError("no detail")
+    assert plain.message == "no detail"
+    assert plain.code is None
+    assert plain.status is None

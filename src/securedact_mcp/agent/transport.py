@@ -41,7 +41,7 @@ class TransportError(Exception):
 
 
 def _backoff(attempt: int, base: float) -> float:
-    return min(base * (2 ** (attempt - 1)), 8.0)
+    return float(min(base * (2 ** (attempt - 1)), 8.0))
 
 
 class HTTPTransport:

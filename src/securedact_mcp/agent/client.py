@@ -162,7 +162,7 @@ class ControlPlaneClient:
         resp = self._post("/v1/agents/credentials/rotate", auth=True, json_body={})
         body = self._ok(resp, 200, "credential rotation")
         cred = body.get("credential")
-        if not cred or not isinstance(cred, str):
+        if not isinstance(cred, str) or not cred:
             raise AgentCredentialError("rotation did not return a credential")
         return cred
 
@@ -242,7 +242,7 @@ class ControlPlaneClient:
 
 def _require_jwt(body: dict[str, Any], what: str) -> str:
     token = body.get("entitlement")
-    if not token or not isinstance(token, str):
+    if not isinstance(token, str) or not token:
         raise ControlPlaneError(f"entitlement {what} did not return a token")
     return token
 

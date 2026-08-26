@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from securedact_core.api import SecuredactEngine
+from securedact_core.policies import Policy
 
 from .capabilities import AgentCapabilities, agent_version, runtime_platform
 from .client import ControlPlaneClient
@@ -313,7 +314,7 @@ def _submit_result(
     )
 
 
-def __resolve_dummy_policy():  # pragma: no cover - defensive only
+def __resolve_dummy_policy() -> Policy:  # pragma: no cover - defensive only
     from securedact_core.policies import STRICT_EXTERNAL_AI_POLICY
 
     return STRICT_EXTERNAL_AI_POLICY

@@ -5,7 +5,7 @@ import json
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import Protocol, TextIO
 
 from .agent import cli as agent_cli
 from .model_installer import (
@@ -31,6 +31,13 @@ from .model_store import (
 
 InputFunction = Callable[[str], str]
 InstallerFactory = Callable[[ModelStore, Callable[[InstallationProgress], None]], ModelInstaller]
+
+
+class _GoogleCliCommands(Protocol):
+    """Structural type for the optional Google connector CLI module."""
+
+    def build_google_parser(self, subparsers: object) -> None: ...
+    def run_google(self, arguments: object, *, input_fn: InputFunction, output: TextIO) -> int: ...
 
 
 def _default_installer_factory(
@@ -98,6 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostic_commands = diagnostics.add_subparsers(dest="diagnostic_command", required=True)
     diagnostic_commands.add_parser("runtime", help="inspect the production detector lifecycle")
 
+    google_cli_commands: _GoogleCliCommands | None
     try:
         from .connectors.google import cli_commands as google_cli_commands
     except ImportError:

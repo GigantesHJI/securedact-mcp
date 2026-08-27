@@ -10,6 +10,76 @@ public server release.
 
 ### Added
 
+- Managed-agent first real production Google Workspace end-to-end local scan
+  flow. A claimed `google_workspace` job is executed entirely on the local
+  agent: it resolves the local Google connector binding (integration id ->
+  local profile), fetches Google Drive content through the customer's locally
+  stored OAuth token, scans it with `securedact_core`, and submits only bounded
+  safe summary metadata (categories, counts, severity, review flag) to the
+  control plane. Verified with a fake Google transport + fake control plane and
+  regression tests for PII-exfiltration and OAuth-token-exfiltration
+  (`tests/unit/test_managed_agent_google_e2e.py`).
+- Folder/drive aggregate scans now surface per-category `category_counts` in the
+  safe result; `resources_scanned` reflects the real number of Drive items
+  inspected. The injected-transport seam in `GoogleConnectorClient` enables
+  record/replay smoke runs without the Google SDK.
+- Hardened safe-result guard: a defense-in-depth forbidden-substring scan rejects
+  any leaked PII value, OAuth token, or content key before submission. A missing
+  optional Google connector now maps to the safe `connector_unavailable` code
+  instead of leaking `ModuleNotFoundError`.
+
+### Added
+
+- HIPAA Safe Harbor independent adversarial validation: a 202-case dataset
+  (`benchmarks/hipaa/hipaa_adversarial.json`), a measurement runner
+  (`scripts/experimental/build_hipaa_adversarial.py`,
+  `scripts/experimental/run_hipaa_adversarial.py`), and focused regression tests
+  (`tests/unit/test_hipaa_adversarial_regressions.py`, 47 passed + 4 xfailed gap
+  pins). Final metrics: precision 1.000, recall 0.909, F1 0.952, 0 false positives.
+  Results documented in `docs/hipaa-safe-harbor-gap-analysis.md` §14.
+- HIPAA Safe Harbor profile module (`securedact_core/hipaa.py`) and public API
+  (`SecuredactEngine.hipaa_safe_harbor`) mapping the 18 Safe Harbor identifiers
+  (A–R, plus unsupported Q) to internal entity types with an explicit
+  supported/partial/unsupported state model and a residual-scan audit pass. The
+  `HIPAA_SAFE_HARBOR_POLICY` is registered as a built-in policy. The module is a
+  mechanical de-identification aid only and carries no compliance-certification
+  language (see `docs/hipaa-safe-harbor-profile.md`).
+- Optional HIPAA contextual Flair ensemble (`securedact_core/detectors/
+  hipaa_flair_detector.py`): a PERSON-only gate for Safe Harbor category A
+  (Names), lazy-loaded, locally resolved, and explicitly rejecting all
+  non-PERSON Flair labels (no geography/structured identifiers). Enabled via
+  `hipaa_safe_harbor(..., contextual_ner=True)`; deterministic behavior and
+  existing contextual rules are unchanged when it is off. Missing-model behavior
+  degrades gracefully to deterministic and is surfaced in the result metadata.
+
+### Changed
+
+- `regex_detector.py`: `DATE_VALUE` now accepts ISO `yyyy-mm-dd`/`yyyy/mm/dd` dates;
+  `date_of_birth_label` recognizes the `DOB` abbreviation; `ssn_label` recognizes the
+  `SS#` label; `device_label` recognizes `serial number`/`serial no`; `ACC` prefix
+  maps to `ACCOUNT_NUMBER` (was `BANK_ACCOUNT_REFERENCE`) to stop a double
+  classification.
+- `hipaa.py`: category **H (Medical record number) downgraded FULL → PARTIAL** because
+  adversarial recall was 0.43 (only standard MRN labels/prefixes detected; synonyms and
+  separator-less forms missed). Category M keeps FULL with an explicit serial-number
+  limitation note.
+
+- `regex_detector.py` (HIPAA false-negative closure, precision preserved): added a
+  `loose_separator` option to `LabelRule` so structured identifier labels (ssn, fax,
+  medical_record_number, vehicle, account_reference, policy_number) also fire on a plain
+  whitespace or a connective word (`fax is …`, `patient MRN is …`); the option is **not**
+  enabled for free-text labels (name/diagnosis/etc.) to avoid over-capturing prose.
+  `IDENTIFIER_VALUE` now accepts one space-separated, digit-bearing token so internal-space
+  values (`MBR 448821039`, `CA 9920314`) are caught. The prefix rule accepts a digit-led
+  value with no separator (`MBR55210983`, `ACC773102884`, `DEV55120983`) while still
+  requiring the value to start with a digit to avoid `SUBMIT`/`ACCEPT`/`GENETIC` false
+  positives. MRN label synonyms (`medical record`, `record number`, `chart ID`,
+  `patient record number`) and aliases `patient no` / `bank account ref` / `payment ref`
+  were added. Net effect on the 202-case adversarial set: recall 0.794 → 0.909, F1
+  0.885 → 0.952, **0 false positives retained**; 4 of 8 xfailed gap pins are now passing
+  regression tests (ssn-no-separator, fax-no-colon, vin-no-colon, dev-prefix-no-separator),
+  leaving 4 documented gaps (A names, B geography, P DNA text, R relationship).
+
 - MCP tool-definition quality: every registered tool now exposes a detailed,
   agent-facing description (purpose, when to use, when to use another tool,
   security/side-effect behavior, and returned result) and every parameter carries
@@ -43,7 +113,7 @@ public server release.
   `securedact_core/connectors/google/` package (transport-agnostic browser; no Google
   SDK import in core) plus a control-plane facade in
   `securedact_mcp/connectors/google/` (OAuth, transport, encrypted token storage, and
-  the `securedact google auth|status|list|scan` CLI). It browses and scans My Drive,
+  the `securedact-mcp google auth|status|list|scan` CLI). It browses and scans My Drive,
   Shared Drives, Google Docs/Sheets/Slides (exported to text via the read-only scope),
   and ordinary text files through the existing `ConnectorScanner` /
   `SecuredactEngine.prepare` pipeline. The connector is opt-in and disabled unless

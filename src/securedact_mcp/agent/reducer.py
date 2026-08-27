@@ -160,6 +160,53 @@ _DECISION_RANK = {"allow": 1, "redact": 2, "review": 3, "block": 4}
 _ACTION_RANK = {"none": 1, "review": 2, "redact": 3, "block": 4}
 
 
+# Content-bearing / secret substrings that must never appear in any serialized
+# result payload sent to the control plane (§13/§22/§29/§30). This is a defense in
+# depth check layered on top of the allowlist validator: even if a future code
+# path serialized a leaked value, this would still reject it.
+_FORBIDDEN_SUBSTRINGS = frozenset(
+    {
+        "jane@example.com",
+        "jane.example",
+        "NL91ABNA0417164300",
+        "+31612345678",
+        "Jane Example",
+        "ya29.",
+        "1//",
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "Bearer",
+        "text",
+        "content",
+        "value",
+        "match",
+        "matches",
+        "snippet",
+        "snippets",
+        "sample",
+        "samples",
+        "context",
+        "raw",
+        "document",
+        "document_text",
+        "email_address",
+        "phone_number",
+        "iban_value",
+        "secret_value",
+    }
+)
+
+
+def assert_no_forbidden_substrings(payload: dict[str, Any] | str) -> None:
+    """Raise ``ValueError`` if any forbidden sensitive substring is present."""
+
+    blob = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True)
+    for needle in _FORBIDDEN_SUBSTRINGS:
+        if needle in blob:
+            raise ValueError(f"result payload contains a forbidden substring: {needle!r}")
+
+
 def label_for_entity(entity_type: str) -> str:
     """Map a core entity type to a control-plane-safe category label."""
 

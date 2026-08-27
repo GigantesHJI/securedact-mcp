@@ -82,6 +82,11 @@ def test_importing_provider_google_does_not_import_connector_eagerly(
     import sys
 
     sys.modules.pop("securedact_mcp.agent.provider_google", None)
+    # Clear any connector module left in sys.modules by an earlier test so this
+    # assertion measures only what provider_google itself imports.
+    for _name in list(sys.modules):
+        if _name == GOOGLE_PREFIX or _name.startswith(f"{GOOGLE_PREFIX}."):
+            sys.modules.pop(_name, None)
     importlib.import_module("securedact_mcp.agent.provider_google")
 
     # Importing the provider must not touch the optional package.

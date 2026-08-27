@@ -292,6 +292,11 @@ def _submit_result(
     clock: Callable[[], float] = time.time,
 ) -> None:
     result_dict = build_safe_result_dict(result, warnings=warnings)
+    # Defense-in-depth: even before the allowlist validator runs, reject any
+    # leaked sensitive substring (PII values, OAuth tokens, content keys).
+    from .reducer import assert_no_forbidden_substrings
+
+    assert_no_forbidden_substrings(result_dict)
     try:
         validate_safe_result(result_dict)
     except ValueError:
@@ -372,7 +377,16 @@ def _run_one_job(
         return
     except JobExecutionError as exc:
         logger.warning("job %s execution error: %s", claim.job_id, scrub(str(exc)))
-        exe_result = _failed_result(policy, "agent_execution_error")
+        # A missing/optional connector surfaces as a distinct safe code so the
+        # control plane can tell "agent has no Google support" from a transient
+        # local execution fault (no ModuleNotFoundError leaks upstream).
+        message = str(exc).lower()
+        code = (
+            "connector_unavailable"
+            if "unavailable" in message or "google connector" in message
+            else "agent_execution_error"
+        )
+        exe_result = _failed_result(policy, code)
 
     _submit_result(client, claim, exe_result, clock=clock)
     state_store.update(current_job_id=None, last_successful_result_at=clock(), last_error=None)

@@ -163,7 +163,18 @@ def execute_job(
 
     finished = (clock or time.time)()
     duration_ms = max(0, int((finished - started) * 1000))
-    resources_scanned = len(results)
+    # A single-file scan yields one result per resource; a folder/drive scan
+    # yields one aggregate result whose safe ``scan_metadata`` carries the real
+    # ``files_scanned`` count. Prefer that aggregate count so the control plane
+    # sees how many Drive items were actually inspected, falling back to the
+    # number of result objects otherwise.
+    resources_scanned = 0
+    for result in results:
+        meta = getattr(result, "scan_metadata", None) or {}
+        files_scanned = meta.get("files_scanned")
+        resources_scanned += (
+            int(files_scanned) if isinstance(files_scanned, int) and files_scanned > 0 else 1
+        )
 
     return reduce_scan_results(
         results,

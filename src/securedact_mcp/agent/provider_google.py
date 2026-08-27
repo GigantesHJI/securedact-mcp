@@ -39,9 +39,20 @@ class _GoogleConnectorClient(Protocol):
         self, file_id: str, context: ScanContext, *, integration_id: str | None = None
     ) -> ScanResult: ...
     def scan_folder(
-        self, folder_id: str, context: ScanContext, *, integration_id: str | None = None
+        self,
+        folder_id: str,
+        context: ScanContext,
+        *,
+        integration_id: str | None = None,
+        heartbeat: Callable[[], None] | None = None,
     ) -> object: ...
-    def scan_drive(self, context: ScanContext, *, integration_id: str | None = None) -> object: ...
+    def scan_drive(
+        self,
+        context: ScanContext,
+        *,
+        integration_id: str | None = None,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> object: ...
 
 
 class _GoogleClientModule(Protocol):
@@ -61,18 +72,23 @@ class _GoogleConfigModule(Protocol):
 def _summary_to_result(summary: object) -> ScanResult:
     """Reduce a bulk :class:`DriveScanSummary` to one aggregate, safe ScanResult.
 
-    Bulk folder/drive scans report only aggregate file counts (no per-file
-    category breakdown from the browser), so the result carries resource counts
-    for review routing rather than category detail. This is privacy-safe and
-    correct for control-plane routing; per-file category detail is fully reported
-    for single-file (RESOURCE) scans.
+    Bulk folder/drive scans report aggregate file counts and per-category finding
+    counts (never the values) so the control plane can route review and show which
+    kinds of PII were detected. Per-file category detail is fully reported for
+    single-file (RESOURCE) scans.
     """
 
     files_with_findings = int(getattr(summary, "files_with_findings", 0) or 0)
     files_failed = int(getattr(summary, "files_failed", 0) or 0)
     files_scanned = int(getattr(summary, "files_scanned", 0) or 0)
+    files_clean = int(getattr(summary, "files_clean", 0) or 0)
+    files_unsupported = int(getattr(summary, "files_unsupported", 0) or 0)
+    findings_total = int(getattr(summary, "findings_total", 0) or 0)
+    category_counts = dict(getattr(summary, "category_counts", {}) or {})
     severity = (
-        ScanSeverity.MEDIUM if files_with_findings > 0 or files_failed > 0 else ScanSeverity.NONE
+        ScanSeverity.MEDIUM
+        if files_with_findings > 0 or files_failed > 0 or category_counts
+        else ScanSeverity.NONE
     )
     return ScanResult(
         status=ScanStatus.COMPLETED,
@@ -82,8 +98,8 @@ def _summary_to_result(summary: object) -> ScanResult:
         org_id="google",
         tenant_id="",
         integration_id=None,
-        categories=[],
-        counts={},
+        categories=sorted(category_counts.keys()),
+        counts=dict(sorted(category_counts.items())),
         findings=[],
         policy_decision=None,
         supported_action="none",
@@ -95,7 +111,9 @@ def _summary_to_result(summary: object) -> ScanResult:
             "files_scanned": files_scanned,
             "files_with_findings": files_with_findings,
             "files_failed": files_failed,
-            "files_unsupported": int(getattr(summary, "files_unsupported", 0) or 0),
+            "files_unsupported": files_unsupported,
+            "files_clean": files_clean,
+            "findings_total": findings_total,
         },
         correlation_id=None,
     )
@@ -141,9 +159,14 @@ class GoogleScanProvider:
             return [result]
         if target_type in (TARGET_FOLDER, TARGET_SITE) and target.target_ref:
             summary = client.scan_folder(
-                target.target_ref, context, integration_id=target.integration_id
+                target.target_ref,
+                context,
+                integration_id=target.integration_id,
+                heartbeat=heartbeat,
             )
             return [_summary_to_result(summary)]
         # DRIVE / INTEGRATION -> scan the whole My Drive / bound integration.
-        summary = client.scan_drive(context, integration_id=target.integration_id)
+        summary = client.scan_drive(
+            context, integration_id=target.integration_id, heartbeat=heartbeat
+        )
         return [_summary_to_result(summary)]

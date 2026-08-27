@@ -82,7 +82,7 @@ class GoogleApiTransport:
         from google.auth.transport.requests import AuthorizedSession
 
         self._credentials = credentials
-        self._session = AuthorizedSession(credentials)  # type: ignore[no-untyped-call]
+        self._session = AuthorizedSession(credentials)
         self._cached_user_id = user_id
 
     @property

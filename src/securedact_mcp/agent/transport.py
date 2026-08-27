@@ -86,6 +86,38 @@ class HTTPTransport:
                 time.sleep(_backoff(attempt, self._retry.backoff_base))
         raise TransportError(f"request to {url} failed after retries: {last_exc}")
 
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+    ) -> HTTPResponse:
+        last_exc: Exception | None = None
+        for attempt in range(1, self._retry.max_attempts + 1):
+            request = urllib.request.Request(  # noqa: S310  # URL is always a normalized https control-plane URL (see config.normalize_control_plane_url)
+                url,
+                headers=headers,
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self._timeout) as resp:  # noqa: S310
+                    raw = resp.read().decode("utf-8", "replace")
+                    return HTTPResponse(status=resp.status, body=_maybe_json(raw), raw_text=raw)
+            except urllib.error.HTTPError as exc:  # non-2xx -> returned to caller
+                raw = _safe_read(exc)
+                return HTTPResponse(status=exc.code, body=_maybe_json(raw), raw_text=raw)
+            except urllib.error.URLError as exc:  # transient network failure
+                last_exc = exc
+                if not self._retry.retry_on_connect_error:
+                    break
+            except Exception as exc:
+                last_exc = exc
+                if not self._retry.retry_on_connect_error:
+                    break
+            if attempt < self._retry.max_attempts:
+                time.sleep(_backoff(attempt, self._retry.backoff_base))
+        raise TransportError(f"request to {url} failed after retries: {last_exc}")
+
 
 def _safe_read(exc: urllib.error.HTTPError) -> str:
     try:

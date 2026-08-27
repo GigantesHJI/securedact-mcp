@@ -177,11 +177,12 @@ class ControlPlaneClient:
         return _require_jwt(body, "refresh")
 
     def get_jwks(self) -> dict[str, Any]:
+        # The JWKS endpoint is a public, unauthenticated GET resource. It must
+        # never carry the agent credential, only a User-Agent.
         try:
-            resp = self._transport.post(
+            resp = self._transport.get(
                 f"{self._base}/.well-known/jwks.json",
                 headers={"User-Agent": self._user_agent},
-                json_body={},
             )
         except TransportError:
             raise

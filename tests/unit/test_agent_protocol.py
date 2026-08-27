@@ -21,6 +21,7 @@ from securedact_mcp.agent.entitlement import (
 from securedact_mcp.agent.errors import (
     AgentRegistrationError,
     AgentRevokedError,
+    ControlPlaneError,
     EntitlementVerificationError,
     PolicyUnsupportedError,
 )
@@ -499,3 +500,112 @@ def test_agent_registration_error_accepts_code_and_status() -> None:
     assert plain.message == "no detail"
     assert plain.code is None
     assert plain.status is None
+
+
+# --- JWKS retrieval (GET, unauthenticated) -----------------------------------
+
+
+def test_get_jwks_uses_get_not_post():
+    transport = FakeTransport()
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=transport,
+    )
+    client.get_jwks()
+    # JWKS must go out as GET, never as an authenticated POST.
+    assert transport.get_requests, "expected a GET request"
+    assert not transport.requests, "jwks must not be a POST"
+
+
+def test_get_jwks_correct_url():
+    transport = FakeTransport()
+    client = ControlPlaneClient(
+        "https://cp.example.com/",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=transport,
+    )
+    client.get_jwks()
+    url, _headers = transport.get_requests[-1]
+    assert url == "https://cp.example.com/.well-known/jwks.json"
+
+
+def test_get_jwks_sends_no_authorization_header():
+    transport = FakeTransport()
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=transport,
+    )
+    client.get_jwks()
+    _url, headers = transport.get_requests[-1]
+    assert "Authorization" not in headers
+    assert headers.get("User-Agent") == "securedact-mcp-agent"
+
+
+def test_get_jwks_valid_keys_response_succeeds():
+    def responder(url, headers, body):
+        from securedact_mcp.agent.transport import HTTPResponse
+
+        if url.endswith("/.well-known/jwks.json"):
+            return HTTPResponse(status=200, body={"keys": [{"kid": "k1"}]}, raw_text="")
+        return HTTPResponse(status=200, body={}, raw_text="")
+
+    transport = FakeTransport(responder)
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=transport,
+    )
+    keys = client.get_jwks()
+    assert keys == {"keys": [{"kid": "k1"}]}
+
+
+def test_get_jwks_non_200_fails_safely():
+    def responder(url, headers, body):
+        from securedact_mcp.agent.transport import HTTPResponse
+
+        if url.endswith("/.well-known/jwks.json"):
+            return HTTPResponse(
+                status=503, body={"error": {"code": "unavailable", "message": "x"}}, raw_text=""
+            )
+        return HTTPResponse(status=200, body={}, raw_text="")
+
+    transport = FakeTransport(responder)
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=transport,
+    )
+    with pytest.raises(ControlPlaneError):
+        client.get_jwks()
+
+
+def test_authenticated_operations_remain_post():
+    captured: dict[str, object] = {}
+
+    def responder(url, headers, body):
+        from securedact_mcp.agent.transport import HTTPResponse
+
+        if url.endswith("/v1/agents/heartbeat"):
+            captured["heartbeat"] = (url, headers, body)
+            return HTTPResponse(status=200, body={}, raw_text="")
+        if url.endswith("/v1/entitlements/activate"):
+            captured["activate"] = (url, headers, body)
+            return HTTPResponse(status=200, body={"entitlement": "jwt"}, raw_text="")
+        return HTTPResponse(status=200, body={}, raw_text="")
+
+    transport = FakeTransport(responder)
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_x_y"),
+        transport=transport,
+    )
+    client.heartbeat(agent_version="1", capabilities=AgentCapabilities.default())
+    client.activate_entitlement()
+    # No GET requests may have been issued for authenticated operations.
+    assert not transport.get_requests
+    # Authenticated POSTs must carry the credential.
+    for key in ("heartbeat", "activate"):
+        _url, headers, _body = captured[key]  # type: ignore[index]
+        assert headers.get("Authorization") == "Bearer sra_x_y"

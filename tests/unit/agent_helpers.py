@@ -130,6 +130,7 @@ class FakeTransport:
     ) -> None:
         self.responder = responder
         self.requests: list[tuple[str, dict[str, str], dict[str, Any]]] = []
+        self.get_requests: list[tuple[str, dict[str, str]]] = []
 
     def post(
         self,
@@ -142,6 +143,18 @@ class FakeTransport:
         self.requests.append((url, dict(headers), body))
         if self.responder is not None:
             return self.responder(url, headers, body)
+        return HTTPResponse(status=200, body={}, raw_text="")
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+    ) -> HTTPResponse:
+        self.get_requests.append((url, dict(headers)))
+        if self.responder is not None:
+            # The GET responder contract ignores the (absent) body.
+            return self.responder(url, headers, {})
         return HTTPResponse(status=200, body={}, raw_text="")
 
     def last_request(self) -> tuple[str, dict[str, str], dict[str, Any]]:

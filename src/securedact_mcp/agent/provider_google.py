@@ -22,6 +22,8 @@ from securedact_core.connectors.scan import (
     ScanStatus,
 )
 
+from .config import AgentFiles
+from .connectors import ConnectorBindingStore
 from .errors import JobExecutionError
 from .executor import (
     TARGET_FOLDER,
@@ -66,7 +68,7 @@ class _GoogleClientModule(Protocol):
 class _GoogleConfigModule(Protocol):
     """Narrow structural boundary for the optional Google connector config module."""
 
-    def load_google_config(self, *, require_enabled: bool = ...) -> object: ...
+    def load_google_config(self, *, require_enabled: bool = ..., profile: str = ...) -> object: ...
 
 
 def _summary_to_result(summary: object) -> ScanResult:
@@ -120,7 +122,50 @@ def _summary_to_result(summary: object) -> ScanResult:
 
 
 class GoogleScanProvider:
-    """Read-only Google Drive scan provider for the managed agent."""
+    """Read-only Google Drive scan provider for the managed agent.
+
+    The provider performs only local, read-only scanning. It never receives
+    OAuth material from the control plane: given the claimed ``integration_id``
+    it resolves the local :class:`ConnectorBinding`, validates the platform, and
+    loads the Google configuration/OAuth token for THAT binding's
+    ``local_profile``. Missing bindings, platform mismatches, and unloadable
+    profiles all fail closed (a safe ``JobExecutionError`` that the runner turns
+    into a privacy-safe failed result).
+    """
+
+    def __init__(
+        self,
+        *,
+        files: AgentFiles | None = None,
+        binding_store: ConnectorBindingStore | None = None,
+    ) -> None:
+        self._files = files
+        self._binding_store = binding_store or ConnectorBindingStore(files)
+
+    def _resolve_local_profile(self, target: ScanTarget) -> str:
+        """Map a claimed ``integration_id`` to its exact local profile (fail closed)."""
+
+        integration_id = target.integration_id
+        if not integration_id:
+            raise JobExecutionError(
+                "google_workspace scan requires an integration_id; the control "
+                "plane must never supply OAuth material"
+            )
+        binding = self._binding_store.get(integration_id)
+        if binding is None:
+            raise JobExecutionError(
+                f"no local connector binding for integration_id {integration_id!r} "
+                "(the control plane must never supply OAuth material)"
+            )
+        if binding.platform != "google_workspace":
+            raise JobExecutionError(
+                f"connector binding platform {binding.platform!r} for "
+                f"integration_id {integration_id!r} does not match the claimed "
+                "google_workspace job"
+            )
+        # Never fall back to an unrelated/default profile when a binding is
+        # required; only the binding's own local_profile is used.
+        return binding.local_profile or "default"
 
     def scan(
         self,
@@ -142,10 +187,17 @@ class GoogleScanProvider:
         except ModuleNotFoundError as exc:
             raise JobExecutionError(f"google provider unavailable: {exc}") from exc
 
+        # Resolve the managed-agent integration binding to the exact local
+        # profile, then load THAT profile's configuration/OAuth material. This
+        # keeps the control plane out of credential handling entirely.
+        local_profile = self._resolve_local_profile(target)
+
         try:
-            config = config_module.load_google_config()
+            config = config_module.load_google_config(profile=local_profile)
         except client_module.GoogleConfigError as exc:
-            raise JobExecutionError(f"google connector not configured: {exc}") from exc
+            raise JobExecutionError(
+                f"google connector not configured for profile {local_profile!r}: {exc}"
+            ) from exc
 
         client = client_module.build_client(config, engine)
         if heartbeat is not None:

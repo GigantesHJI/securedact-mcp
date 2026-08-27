@@ -88,7 +88,7 @@ def patched(monkeypatch):
     provider = FakeScanProvider(
         [scan_result_with(status=ScanStatus.COMPLETED, counts={"email": 3})]
     )
-    monkeypatch.setattr(agent_runner, "build_provider", lambda platform: provider)
+    monkeypatch.setattr(agent_runner, "build_provider", lambda platform, **kwargs: provider)
     return provider
 
 

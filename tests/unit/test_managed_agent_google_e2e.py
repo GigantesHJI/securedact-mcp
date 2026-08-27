@@ -37,6 +37,7 @@ from securedact_core.policies import STRICT_EXTERNAL_AI_POLICY
 from securedact_core.production import build_production_engine
 from securedact_mcp.agent.agent_runner import _failed_result, _submit_result
 from securedact_mcp.agent.client import ControlPlaneClient
+from securedact_mcp.agent.connectors import ConnectorBinding
 from securedact_mcp.agent.executor import JobClaim, ScanTarget, execute_job
 from securedact_mcp.agent.policy import ResolvedPolicy
 from securedact_mcp.agent.reducer import (
@@ -49,6 +50,41 @@ from tests.unit.agent_helpers import FakeTransport, fake_claim
 
 DOCS = "application/vnd.google-apps.document"
 FOLDER = "application/vnd.google-apps.folder"
+
+
+class _FakeBindingStore:
+    """In-memory ConnectorBindingStore returning a fixed binding for int-1."""
+
+    def __init__(self, bindings: dict[str, ConnectorBinding]) -> None:
+        self._bindings = bindings
+
+    def get(self, integration_id: str) -> ConnectorBinding | None:
+        return self._bindings.get(integration_id)
+
+    def list(self) -> list[ConnectorBinding]:
+        return list(self._bindings.values())
+
+
+@pytest.fixture(autouse=True)
+def google_default_binding(monkeypatch):
+    """Every managed-agent Google scan now requires a local binding lookup.
+
+    Provide the integration_id used by the shared ``fake_claim`` helper so the
+    existing end-to-end scans resolve to the ``default`` local profile.
+    """
+
+    store = _FakeBindingStore(
+        {
+            "int-1": ConnectorBinding(
+                integration_id="int-1",
+                platform="google_workspace",
+                local_profile="default",
+            )
+        }
+    )
+    monkeypatch.setattr(provider_google, "ConnectorBindingStore", lambda *a, **k: store)
+    return store
+
 
 # The synthetic source document full of obvious fake PII. None of these strings
 # may ever reach the control plane.

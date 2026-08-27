@@ -35,6 +35,32 @@ TARGET_RESOURCE_COLLECTION = "resource_collection"
 _LEASE_EXPIRY_SKEW_SECONDS = 30
 
 
+def _parse_lease_timestamp(value: str) -> float | None:
+    """Parse an ISO-8601 UTC lease-expiry string into a POSIX timestamp.
+
+    Accepts the strict control-plane format as well as ``Z`` designators,
+    sub-second precision and explicit timezone offsets (the latter two are
+    common in real control-plane emits). Returns ``None`` when unparseable so
+    the caller can fail closed.
+    """
+
+    text = (value or "").strip()
+    if not text:
+        return None
+    # Normalize a trailing 'Z' (UTC) which ``fromisoformat`` accepts on 3.11+.
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        try:
+            dt = datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.timestamp()
+
+
 @dataclass(frozen=True, slots=True)
 class ScanTarget:
     """An opaque scan target derived from a claim (no raw content)."""
@@ -102,16 +128,14 @@ class JobClaim:
     ) -> bool:
         if not self.lease_expires_at:
             return True
-        try:
-            # The control plane emits UTC timestamps; parse them as UTC so lease
-            # expiry is not shifted by the local timezone (which would falsely
-            # mark claims expired on non-UTC machines).
-            expiry = (
-                datetime.strptime(self.lease_expires_at, "%Y-%m-%dT%H:%M:%SZ")
-                .replace(tzinfo=UTC)
-                .timestamp()
-            )
-        except (ValueError, OverflowError):
+        # The control plane emits ISO-8601 UTC timestamps (e.g. with a ``Z``
+        # designator, sub-second precision, or an explicit offset). Parsing must
+        # be robust so a valid lease is never mis-classified as already expired
+        # (which would silently strand a claimed job without a result). An
+        # unparseable value fails closed (treated as expired) to avoid acting on
+        # a possibly-stale lease.
+        expiry = _parse_lease_timestamp(self.lease_expires_at)
+        if expiry is None:
             return True
         now = (clock or time.time)()
         return now > (expiry - skew)

@@ -60,11 +60,11 @@ logger = logging.getLogger(__name__)
 _HEARTBEAT_RENEW_SECONDS = 300
 
 
-def build_provider(platform: str) -> ScanProvider | None:
+def build_provider(platform: str, *, files: AgentFiles | None = None) -> ScanProvider | None:
     """Return a local scan provider for a platform, or ``None`` if unsupported."""
 
     if platform == "google_workspace":
-        return GoogleScanProvider()
+        return GoogleScanProvider(files=files)
     return None
 
 
@@ -246,10 +246,15 @@ def _heartbeat(
 ) -> None:
     try:
         client.heartbeat(agent_version=config.agent_version, capabilities=config.capabilities)
-        state_store.update(last_heartbeat_at=clock(), last_error=None)
     except Exception as exc:
-        state_store.update(last_error=scrub(str(exc)))
+        # A heartbeat failure is a genuine control-plane comms error; record it.
+        state_store.update(last_heartbeat_at=clock(), last_error=scrub(str(exc)))
         raise
+    # A successful routine heartbeat must NOT erase a meaningful prior error
+    # (e.g. a job execution fault or control-plane rejection). It only refreshes
+    # its own timestamp so transient faults stay visible until the next handled
+    # job clears them.
+    state_store.update(last_heartbeat_at=clock())
 
 
 def _job_heartbeat(
@@ -325,6 +330,30 @@ def __resolve_dummy_policy() -> Policy:  # pragma: no cover - defensive only
     return STRICT_EXTERNAL_AI_POLICY
 
 
+def _finalize_job(
+    state_store: AgentStateStore,
+    client: ControlPlaneClient,
+    claim: JobClaim,
+    exe_result: ExecutionResult,
+    *,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    """Submit a (possibly failed) result and record terminal state.
+
+    Even if result submission fails (e.g. the control plane is unreachable), the
+    failure is recorded as ``last_error`` and never erased by a later routine
+    heartbeat, so the job is never silently stranded as a success.
+    """
+
+    try:
+        _submit_result(client, claim, exe_result, clock=clock)
+    except Exception as exc:
+        logger.warning("job %s result submission failed: %s", claim.job_id, scrub(str(exc)))
+        state_store.update(current_job_id=None, last_error=scrub(str(exc)))
+        return
+    state_store.update(current_job_id=None, last_successful_result_at=clock(), last_error=None)
+
+
 def _run_one_job(
     claim_dict: dict[str, Any],
     client: ControlPlaneClient,
@@ -332,23 +361,36 @@ def _run_one_job(
     state_store: AgentStateStore,
     *,
     clock: Callable[[], float] = time.time,
+    files: AgentFiles | None = None,
 ) -> None:
-    claim = JobClaim.from_claim(claim_dict)
+    try:
+        claim = JobClaim.from_claim(claim_dict)
+    except LeaseError as exc:
+        # A malformed claim (e.g. missing one-time lease secret) cannot be acted
+        # on or reported back; surface it persistently rather than vanishing.
+        logger.error("job claim rejected: %s", scrub(str(exc)))
+        state_store.update(current_job_id=None, last_error=scrub(str(exc)))
+        return
+
     state_store.update(current_job_id=claim.job_id)
     try:
         policy = resolve_policy(claim.policy)
     except PolicyValidationError as exc:
         logger.warning("job %s policy rejected: %s", claim.job_id, scrub(str(exc)))
-        _submit_result(
-            client, claim, _failed_result(policy_placeholder(), "policy_invalid"), clock=clock
+        _finalize_job(
+            state_store,
+            client,
+            claim,
+            _failed_result(policy_placeholder(), "policy_invalid"),
+            clock=clock,
         )
-        state_store.update(current_job_id=None)
         return
 
-    provider = build_provider(claim.platform)
+    provider = build_provider(claim.platform, files=files)
     if provider is None:
-        _submit_result(client, claim, _failed_result(policy, "unsupported_target"), clock=clock)
-        state_store.update(current_job_id=None)
+        _finalize_job(
+            state_store, client, claim, _failed_result(policy, "unsupported_target"), clock=clock
+        )
         return
 
     try:
@@ -358,10 +400,13 @@ def _run_one_job(
         engine = None
 
     if engine is None:
-        _submit_result(
-            client, claim, _failed_result(policy, "engine_unavailable_local"), clock=clock
+        _finalize_job(
+            state_store,
+            client,
+            claim,
+            _failed_result(policy, "engine_unavailable_local"),
+            clock=clock,
         )
-        state_store.update(current_job_id=None)
         return
 
     def _heartbeat_callback() -> None:
@@ -372,9 +417,12 @@ def _run_one_job(
             claim, engine, provider, policy, heartbeat=_heartbeat_callback, clock=clock
         )
     except LeaseError as exc:
-        logger.info("job %s lease invalid, skipping: %s", claim.job_id, scrub(str(exc)))
-        state_store.update(current_job_id=None, last_error=scrub(str(exc)))
-        return
+        # The lease expired (or was already invalid) before/during execution.
+        # The job is already claimed, so we still submit a safe failed result so
+        # the control plane can move it to its terminal/retry state instead of
+        # stranding it in "claimed" until the lease lapses.
+        logger.warning("job %s lease invalid: %s", claim.job_id, scrub(str(exc)))
+        exe_result = _failed_result(policy, "lease_invalid")
     except JobExecutionError as exc:
         logger.warning("job %s execution error: %s", claim.job_id, scrub(str(exc)))
         # A missing/optional connector surfaces as a distinct safe code so the
@@ -387,9 +435,13 @@ def _run_one_job(
             else "agent_execution_error"
         )
         exe_result = _failed_result(policy, code)
+    except Exception as exc:
+        # Any other unexpected local failure must still reach the control plane
+        # as a safe failed result rather than silently stranding the job.
+        logger.exception("job %s unexpected execution failure: %s", claim.job_id, scrub(str(exc)))
+        exe_result = _failed_result(policy, "agent_execution_error")
 
-    _submit_result(client, claim, exe_result, clock=clock)
-    state_store.update(current_job_id=None, last_successful_result_at=clock(), last_error=None)
+    _finalize_job(state_store, client, claim, exe_result, clock=clock)
 
 
 def policy_placeholder() -> ResolvedPolicy:
@@ -457,7 +509,7 @@ def run_agent_loop(
             continue
 
         try:
-            _run_one_job(claim, client, config, state_store, clock=clock)
+            _run_one_job(claim, client, config, state_store, clock=clock, files=files)
         except AgentRevokedError:
             break
         except Exception as exc:

@@ -107,7 +107,7 @@ def _build_credentials(token: dict[str, Any]) -> Any:
     from google.oauth2.credentials import Credentials
 
     try:
-        creds = Credentials.from_authorized_user_info(token)
+        creds = Credentials.from_authorized_user_info(token)  # type: ignore[no-untyped-call]
     except Exception as exc:
         raise GoogleAuthError("Google stored credentials are invalid") from exc
     if creds.expired and creds.refresh_token:

@@ -13,7 +13,8 @@ error messages.
 from __future__ import annotations
 
 import logging
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any, Protocol, cast
 
 from securedact_core.connectors.google import GoogleAuthError
 
@@ -21,6 +22,16 @@ from .config import GoogleConfigError, GoogleConnectorConfig
 from .storage import GoogleCredentialStore
 
 logger = logging.getLogger(__name__)
+
+
+class _GoogleCredentials(Protocol):
+    """Narrow surface of ``google.oauth2.credentials.Credentials`` consumed here."""
+
+    expired: bool
+    valid: bool
+    refresh_token: str | None
+
+    def refresh(self, request: Any) -> None: ...
 
 
 def build_flow(config: GoogleConnectorConfig) -> Any:
@@ -107,7 +118,13 @@ def _build_credentials(token: dict[str, Any]) -> Any:
     from google.oauth2.credentials import Credentials
 
     try:
-        creds = Credentials.from_authorized_user_info(token)  # type: ignore[no-untyped-call]
+        # Narrow typed boundary over the optional, untyped third-party classmethod
+        # so strict mypy is satisfied whether or not google-auth is installed.
+        build_credentials = cast(
+            "Callable[[dict[str, Any]], _GoogleCredentials]",
+            Credentials.from_authorized_user_info,
+        )
+        creds = build_credentials(token)
     except Exception as exc:
         raise GoogleAuthError("Google stored credentials are invalid") from exc
     if creds.expired and creds.refresh_token:

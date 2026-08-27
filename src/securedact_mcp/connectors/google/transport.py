@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any, Protocol, cast
 
 from securedact_core.connectors.google import (
     CANONICAL_DRIVE_BASE,
@@ -29,6 +30,22 @@ _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _RETRYABLE_REASONS = frozenset(
     {"rateLimitExceeded", "userRateLimitExceeded", "backendError", "internalError"}
 )
+
+
+class _GoogleResponse(Protocol):
+    """Narrow surface of the HTTP response consumed by this transport."""
+
+    @property
+    def status_code(self) -> int: ...
+    @property
+    def content(self) -> bytes: ...
+    def json(self) -> Any: ...
+
+
+class _GoogleSession(Protocol):
+    """Narrow surface of ``google.auth.transport.requests.AuthorizedSession`` consumed here."""
+
+    def get(self, url: str, *, timeout: float) -> _GoogleResponse: ...
 
 
 def _category_for(status: int | None, reason: str | None) -> str:
@@ -82,7 +99,10 @@ class GoogleApiTransport:
         from google.auth.transport.requests import AuthorizedSession
 
         self._credentials = credentials
-        self._session = AuthorizedSession(credentials)  # type: ignore[no-untyped-call]
+        # Narrow typed boundary over the optional, untyped third-party ctor so
+        # strict mypy is satisfied whether or not google-auth is installed.
+        session_ctor = cast("Callable[[Any], _GoogleSession]", AuthorizedSession)
+        self._session: _GoogleSession = session_ctor(credentials)
         self._cached_user_id = user_id
 
     @property

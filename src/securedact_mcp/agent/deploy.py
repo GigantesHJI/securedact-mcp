@@ -46,11 +46,13 @@ behind injectable boundaries so the policy is fully testable on any platform.
 
 from __future__ import annotations
 
+import ctypes
 import importlib.metadata
 import json
 import logging
 import os
 import re
+import shutil  # noqa: F401 - kept so tests can monkeypatch deploy.shutil.which
 import subprocess
 import sys
 import zipfile
@@ -167,60 +169,107 @@ def is_elevated() -> bool:
     if sys.platform != "win32":
         return False
     try:  # pragma: no cover - platform specific
-        import ctypes
-
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:  # pragma: no cover - defensive
         return False
 
 
-def self_elevate(
-    argv: Sequence[str], *, runas_fn: Callable[[Sequence[str]], int] | None = None
-) -> int:
-    """Re-launch the current interpreter elevated via the Windows UAC ``runas`` verb.
+# Internal marker (never a secret) that tells a re-launched child it is the
+# already-elevated continuation of a managed-agent setup, so it resumes the
+# onboarding exactly once instead of re-prompting for elevation. It is inherited
+# by the runas child via the parent environment and is also carried on argv.
+AGENT_ELEVATED_ENV = "SECUREDACT_AGENT_ELEVATED"
 
-    Returns the exit code of the elevated process when ``runas_fn`` is injected
-    (tests); in production it uses ``ShellExecuteEx`` with ``runas`` and returns 0
-    to indicate the hand-off succeeded (the current process should then exit).
+
+def build_elevation_argv() -> list[str]:
+    """Return the exact argv params for the elevated managed-agent re-launch.
+
+    The file executed is always ``sys.executable`` (the RC venv interpreter that
+    is currently running ``securedact_mcp.cli``) and the params always use the
+    ``-m securedact_mcp.cli`` module form. This guarantees the elevated
+    continuation runs the SAME RC code, independent of PATH and of any globally
+    installed ``securedact-mcp`` (e.g. ``C:\\Program Files\\Python312\\Scripts\\
+    securedact-mcp.exe``). The ``--agent`` flag selects only the managed-agent
+    module; ``--agent-elevated`` is the internal resume marker (carries no
+    secret). No registration token or credential is ever placed here.
     """
 
+    return ["-m", "securedact_mcp.cli", "setup", "--agent", "--agent-elevated"]
+
+
+def resolve_elevation_target() -> tuple[str, list[str]]:
+    """Return ``(interpreter, params)`` for the elevated re-launch.
+
+    The interpreter is the currently-running RC venv python and the params use the
+    ``-m securedact_mcp.cli`` module form, so the elevated process can never
+    resolve a different (global) install. Exposed separately so tests can prove
+    the exact RC interpreter/code is used during elevation.
+    """
+
+    return (sys.executable, build_elevation_argv())
+
+
+def self_elevate(
+    argv: Sequence[str] | None = None, *, runas_fn: Callable[[Sequence[str]], int] | None = None
+) -> int:
+    """Re-launch the current RC interpreter elevated via the Windows UAC ``runas`` verb.
+
+    Returns the exit code of the elevated process when ``runas_fn`` is injected
+    (tests); in production it uses ``ShellExecuteEx`` with ``runas``. A non-zero
+    return means elevation was declined/failed, which the caller must treat as a
+    safe stop (it must NOT raise ``_ElevationHandoff`` in that case). A return of
+    0 indicates the elevated child ran (the current process should then exit).
+    """
+
+    if argv is None:
+        argv = build_elevation_argv()
+    else:
+        argv = list(argv)
+    # ``run_managed_agent_module`` passes the full ``[interpreter, *params]`` argv.
+    # Normalise to params-only here: the platform call always uses the currently
+    # running RC interpreter (``sys.executable``) as the launch target, independent
+    # of PATH / any globally installed ``securedact-mcp``.
+    if argv and Path(argv[0]) == Path(sys.executable):
+        argv = argv[1:]
     if runas_fn is not None:
-        return runas_fn(argv)
+        return runas_fn(list(argv))
     if sys.platform != "win32":  # pragma: no cover - platform specific
         return 2
     return _shell_execute_runas(list(argv))  # pragma: no cover - platform specific
 
 
-def _shell_execute_runas(argv: list[str]) -> int:  # pragma: no cover - platform specific
-    """Use ShellExecuteEx with the ``runas`` verb to request elevation."""
+def _shell_execute_runas(
+    argv: list[str], cwd: str | None = None
+) -> int:  # pragma: no cover - platform specific
+    """Use ShellExecuteEx with the ``runas`` verb to request elevation.
 
-    import ctypes
-    from ctypes import wintypes
+    The elevated child is launched with the current working directory preserved
+    (``cwd`` defaults to ``os.getcwd()``), so the RC checkout / launch context is
+    retained across the UAC boundary. ``ctypes`` is referenced via the module
+    attribute so it can be mocked in tests on non-Windows platforms.
+    """
 
     exe = sys.executable
     params = subprocess.list2cmdline(argv)
-    cwd = os.getcwd()
-
-    sei = ctypes.Structure  # placeholder; real impl below
-    del sei
+    work_dir = cwd or os.getcwd()
 
     class SHELLEXECUTEINFO(ctypes.Structure):
         _fields_ = [
-            ("cbSize", wintypes.DWORD),
-            ("fMask", wintypes.ULONG),
-            ("hwnd", wintypes.HWND),
-            ("lpVerb", wintypes.LPCWSTR),
-            ("lpFile", wintypes.LPCWSTR),
-            ("lpParameters", wintypes.LPCWSTR),
-            ("lpDirectory", wintypes.LPCWSTR),
+            ("cbSize", ctypes.wintypes.DWORD),
+            ("fMask", ctypes.wintypes.ULONG),
+            ("hwnd", ctypes.wintypes.HWND),
+            ("lpVerb", ctypes.wintypes.LPCWSTR),
+            ("lpFile", ctypes.wintypes.LPCWSTR),
+            ("lpParameters", ctypes.wintypes.LPCWSTR),
+            ("lpDirectory", ctypes.wintypes.LPCWSTR),
             ("nShow", ctypes.c_int),
-            ("hInstApp", wintypes.HINSTANCE),
+            ("hInstApp", ctypes.wintypes.HINSTANCE),
             ("lpIDList", ctypes.c_void_p),
-            ("lpClass", wintypes.LPCWSTR),
-            ("hKeyClass", wintypes.HKEY),
-            ("dwHotKey", wintypes.DWORD),
-            ("hIconOrMonitor", wintypes.HANDLE),
-            ("hProcess", wintypes.HANDLE),
+            ("lpClass", ctypes.wintypes.LPCWSTR),
+            ("hKeyClass", ctypes.wintypes.HKEY),
+            ("dwHotKey", ctypes.wintypes.DWORD),
+            ("hIconOrMonitor", ctypes.wintypes.HANDLE),
+            ("hProcess", ctypes.wintypes.HANDLE),
         ]
 
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
@@ -231,14 +280,14 @@ def _shell_execute_runas(argv: list[str]) -> int:  # pragma: no cover - platform
     info.lpVerb = "runas"
     info.lpFile = exe
     info.lpParameters = params
-    info.lpDirectory = cwd
+    info.lpDirectory = work_dir
     info.nShow = 1
 
     if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
         return 2
     if info.hProcess:
         ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 0xFFFFFFFF)
-        exit_code = wintypes.DWORD()
+        exit_code = ctypes.wintypes.DWORD()
         ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code))
         ctypes.windll.kernel32.CloseHandle(info.hProcess)
         return int(exit_code.value)
@@ -1474,18 +1523,32 @@ def _load_registered_config(data_dir: Path | str | None) -> Any | None:
         return None
 
 
-def _agent_already_registered() -> bool:
-    """Return True when a valid agent registration already exists on this host.
+def _agent_already_registered(
+    data_dir: Path | str | None = None, *, machine_root: bool = False
+) -> bool:
+    """Return True when a valid machine-agent registration already exists.
 
     Used to avoid consuming a fresh one-time registration token when the machine
-    is merely being re-provisioned / upgraded. Loads the same config the agent
-    loop uses, so it honours ``SECUREDACT_APP_DATA_DIR``.
+    is merely being re-provisioned / upgraded. The managed agent's authoritative
+    registration lives under the explicit machine data root
+    (``C:\\ProgramData\\Securedact``), *not* the interactive user's
+    ``%LOCALAPPDATA%\\Securedact`` profile. When ``machine_root`` is True (or
+    ``data_dir`` is set), only that machine root is consulted, so a pre-existing
+    user-profile ``agent.json`` can never masquerade as a machine registration.
     """
 
-    try:
-        from .config import load_config
+    from .config import AgentFiles, load_config
 
-        load_config()
+    if data_dir is not None:
+        root = Path(data_dir)
+    elif machine_root:
+        root = service.resolve_service_data_dir(None)
+    else:
+        # Honour the control-plane data-dir override only; never silently fall
+        # back to the user profile when a machine registration is what we need.
+        root = service.resolve_service_data_dir(None)
+    try:
+        load_config(AgentFiles.resolve(root=root / "agent"))
         return True
     except Exception:
         return False
@@ -1505,8 +1568,9 @@ def run_managed_agent_module(
     acl_provider: Callable[[Path], list[tuple[str, str, set[str]]]] | None = None,
     elevated_check: Callable[[], bool] | None = None,
     elevate: Callable[[Sequence[str]], int] | None = None,
-    rerun_argv: Sequence[str] = ("-m", "securedact_mcp.cli", "setup", "--agent"),
+    rerun_argv: Sequence[str] | None = None,
     agent: str | None = None,
+    agent_elevated: bool = False,
     non_interactive: bool = False,
     dev_local: bool | None = None,
     google: str | None = None,
@@ -1525,6 +1589,18 @@ def run_managed_agent_module(
 
     _elevated = elevated_check or is_elevated
     _secret_input = secret_input_fn or getpass.getpass
+
+    # Authoritative machine data root for the managed agent. All managed-agent
+    # state (registration, credential vault, OAuth, bindings, logs, the scheduled
+    # task) lives here — never in the interactive user's %LOCALAPPDATA% profile.
+    machine_data_dir = service.resolve_service_data_dir(data_dir)
+
+    # Resume detection: this process is the already-elevated continuation of a
+    # managed-agent setup when (a) the caller passed the explicit marker, (b) we
+    # are already running elevated, or (c) the marker was inherited from the parent
+    # that requested elevation. In any of these cases we must NOT re-prompt for
+    # elevation, so the continuation runs exactly once.
+    _resume = agent_elevated or _elevated() or os.environ.get(AGENT_ELEVATED_ENV) == "1"
 
     print(file=output)
     print("[Managed Agent]", file=output)
@@ -1560,14 +1636,18 @@ def run_managed_agent_module(
         print("Managed Agent: skipped.", file=output)
         return 0
 
-    # Elevation preflight — fail closed, never partially install.
-    if not _elevated():
+    # Elevation preflight — fail closed, never partially install. The elevated
+    # continuation is re-launched with an explicit resume marker so it never
+    # re-enters this prompt (and thus never re-triggers the whole elevation
+    # sequence). A declined/failed elevation is handled safely, not treated as a
+    # successful hand-off.
+    if not _resume:
         print(file=output)
         print(
             "Administrator rights are required to install the managed-agent "
-            "service. The service runs as a least-privilege virtual service "
-            "account and must load Python code from a machine-owned path "
-            f"({default_runtime_path()}) that ordinary users cannot modify.",
+            "scheduled task. The task runs under the SYSTEM account and must load "
+            f"Python code from a machine-owned path ({default_runtime_path()}) that "
+            "ordinary users cannot modify.",
             file=output,
         )
         if non_interactive:
@@ -1587,8 +1667,28 @@ def run_managed_agent_module(
         except (EOFError, StopIteration):
             confirm = "n"
         if confirm in {"y", "yes"}:
+            # The re-launched child resumes the onboarding exactly once. The
+            # resume signal is carried authoritatively on argv as the
+            # ``--agent-elevated`` marker (see ``build_elevation_argv``), which the
+            # CLI wires to ``agent_elevated``; we deliberately do NOT mutate the
+            # parent's global ``os.environ`` here so the marker cannot leak across
+            # processes/tests. ``AGENT_ELEVATED_ENV`` remains available as an
+            # explicit external override only.
             handler = elevate or self_elevate
-            code = handler(list(rerun_argv))
+            # The elevated continuation is launched with the same RC interpreter
+            # that initiated setup (``sys.executable``) followed by the module-form
+            # argv, so it can never resolve a different/global install via PATH.
+            target = [sys.executable, *build_elevation_argv()]
+            code = handler(list(rerun_argv) if rerun_argv is not None else target)
+            if code != 0:
+                # UAC denied or the elevated launch failed: stop safely without
+                # raising _ElevationHandoff (which would pretend success).
+                print(
+                    "Elevation was declined or failed. To finish later, run from an "
+                    "elevated Administrator PowerShell: securedact-mcp setup --agent",
+                    file=output,
+                )
+                return 0
             # The child process takes over; exit this (unelevated) instance.
             raise _ElevationHandoff(code)
         print(
@@ -1598,11 +1698,10 @@ def run_managed_agent_module(
         )
         return 0
 
-    # Reuse an existing valid registration when present (never consume a new
-    # token unless one is genuinely required). The Task Scheduler backend keeps
-    # the same agent identity / credentials / OAuth bindings intact, so an
-    # already-registered machine can be re-provisioned / upgraded without a token.
-    if _agent_already_registered():
+    # Reuse an existing valid *machine* registration when present (never consume a
+    # new token unless one is genuinely required). A stale user-profile
+    # registration must NOT satisfy this check.
+    if _agent_already_registered(data_dir=machine_data_dir):
         token = None
         print(file=output)
         print(
@@ -1634,12 +1733,14 @@ def run_managed_agent_module(
     )
 
     # Provision secure runtime + install + start. Google deps are installed into
-    # the machine runtime here when selected (never every optional extra).
+    # the machine runtime here when selected (never every optional extra). The
+    # authoritative machine data root is threaded through so registration is written
+    # directly there (never to the interactive user's profile).
     _dev_local = dev_local if dev_local is not None else dev_local_wheel_requested()
     try:
         result = install_service_from_runtime(
             token=token,
-            data_dir=data_dir,
+            data_dir=machine_data_dir,
             runtime_path=runtime_path,
             control_plane_url=control_plane_url,
             display_name=display_name,
@@ -1657,7 +1758,7 @@ def run_managed_agent_module(
     print("Registered agent:", result.get("agent_id"), file=output)
 
     # --- Google Workspace onboarding (only when configured) -------------------
-    resolved_data = service.resolve_service_data_dir(data_dir)
+    resolved_data = machine_data_dir
     if google_enabled:
         print(file=output)
         print("[Google Workspace]", file=output)

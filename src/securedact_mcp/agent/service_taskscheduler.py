@@ -68,6 +68,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+from .config import AgentFiles
 from .errors import AgentError
 from .safe_log import scrub
 
@@ -541,10 +542,17 @@ def install_windows_service(
     if token:
         register = register_fn or agent_runner.register_agent
         try:
+            # Register directly under the machine data root. The Task Scheduler
+            # backend runs the agent as SYSTEM from this same root, so the
+            # registration (config + credential vault) MUST be written here and
+            # never to the interactive user's %LOCALAPPDATA% profile. We pass the
+            # machine-root ``AgentFiles`` explicitly rather than relying on the
+            # default (user-profile) resolution.
             config = register(
                 token,
                 control_plane_url=control_plane_url,
                 display_name=display_name,
+                files=AgentFiles.resolve(root=resolved / "agent"),
             )
         except AgentError as exc:
             raise AgentError(f"registration failed during task install: {exc}") from exc

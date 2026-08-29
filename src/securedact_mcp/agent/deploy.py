@@ -57,6 +57,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
+from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -255,21 +256,21 @@ def _shell_execute_runas(
 
     class SHELLEXECUTEINFO(ctypes.Structure):
         _fields_ = [
-            ("cbSize", ctypes.wintypes.DWORD),
-            ("fMask", ctypes.wintypes.ULONG),
-            ("hwnd", ctypes.wintypes.HWND),
-            ("lpVerb", ctypes.wintypes.LPCWSTR),
-            ("lpFile", ctypes.wintypes.LPCWSTR),
-            ("lpParameters", ctypes.wintypes.LPCWSTR),
-            ("lpDirectory", ctypes.wintypes.LPCWSTR),
+            ("cbSize", wintypes.DWORD),
+            ("fMask", wintypes.ULONG),
+            ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
             ("nShow", ctypes.c_int),
-            ("hInstApp", ctypes.wintypes.HINSTANCE),
+            ("hInstApp", wintypes.HINSTANCE),
             ("lpIDList", ctypes.c_void_p),
-            ("lpClass", ctypes.wintypes.LPCWSTR),
-            ("hKeyClass", ctypes.wintypes.HKEY),
-            ("dwHotKey", ctypes.wintypes.DWORD),
-            ("hIconOrMonitor", ctypes.wintypes.HANDLE),
-            ("hProcess", ctypes.wintypes.HANDLE),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hKeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIconOrMonitor", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
         ]
 
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
@@ -305,7 +306,7 @@ def _shell_execute_runas(
         return 2
     if info.hProcess:
         ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 0xFFFFFFFF)
-        exit_code = ctypes.wintypes.DWORD()
+        exit_code = wintypes.DWORD()
         ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code))
         ctypes.windll.kernel32.CloseHandle(info.hProcess)
         _LOGGER.debug(

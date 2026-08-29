@@ -122,6 +122,55 @@ def test_shell_execute_uses_rc_executable_and_preserves_cwd(
     assert _Fake._cap.lpDirectory == sentinel
 
 
+def test_shell_execute_runas_builds_structure_with_real_wintypes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression: the SHELLEXECUTEINFO structure must build without AttributeError.
+
+    The clean-laptop UAC retest failed with ``AttributeError: module 'ctypes' has
+    no attribute 'wintypes'`` because the code referenced ``ctypes.wintypes.*``
+    while only ``import ctypes`` was present. ``_shell_execute_runas`` now imports
+    ``from ctypes import wintypes`` and uses ``wintypes.*`` consistently. This test
+    drives the structure construction on any platform (injecting only the Windows
+    ``windll`` surface) so a revert to ``ctypes.wintypes`` fails loudly with the
+    original AttributeError.
+    """
+
+    captured: dict[str, object] = {}
+
+    class _Shell32:
+        @staticmethod
+        def ShellExecuteExW(info: object) -> int:
+            captured["info"] = info
+            return 1
+
+    class _Kernel32:
+        @staticmethod
+        def WaitForSingleObject(*_a: object, **_k: object) -> int:
+            return 0
+
+        @staticmethod
+        def GetExitCodeProcess(*_a: object, **_k: object) -> None:
+            return None
+
+        @staticmethod
+        def CloseHandle(*_a: object, **_k: object) -> None:
+            return None
+
+    class _Windll:
+        shell32 = _Shell32()
+        kernel32 = _Kernel32()
+
+    # Only the Windows-only ``windll`` surface is injected; the real ``ctypes``
+    # (and the real imported ``wintypes``) drives the structure construction.
+    monkeypatch.setattr(deploy.ctypes, "windll", _Windll())
+    monkeypatch.setattr(deploy.os, "getcwd", lambda: str(tmp_path))
+
+    rc = deploy._shell_execute_runas(["-m", "securedact_mcp.cli", "setup", "--agent"])
+    assert rc == 0
+    assert "info" in captured
+
+
 def test_agent_elevated_reaches_resumed_flow_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

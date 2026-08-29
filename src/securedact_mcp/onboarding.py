@@ -338,6 +338,7 @@ def run_setup(
     version: str = __version__,
     agent: str | None = None,
     agent_only: bool = False,
+    agent_elevated: bool = False,
     google: str | None = None,
     google_integration_id: str | None = None,
     managed_agent_runner: Callable[..., int] | None = None,
@@ -390,6 +391,7 @@ def run_setup(
                 non_interactive=non_interactive,
                 google=google,
                 google_integration_id=google_integration_id,
+                agent_elevated=agent_elevated,
             )
         except agent_deploy._ElevationHandoff:
             # An elevated child process has taken over; this instance exits.
@@ -504,6 +506,7 @@ def run_setup(
             non_interactive=non_interactive,
             google=google,
             google_integration_id=google_integration_id,
+            agent_elevated=agent_elevated,
         )
     except agent_deploy._ElevationHandoff:
         # An elevated child process has taken over the install; this instance exits.

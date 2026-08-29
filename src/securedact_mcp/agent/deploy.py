@@ -283,13 +283,38 @@ def _shell_execute_runas(
     info.lpDirectory = work_dir
     info.nShow = 1
 
+    _LOGGER.debug(
+        "elevation handoff: exe=%s args=%d cwd=%s verb=runas",
+        os.path.basename(exe),
+        len(argv),
+        work_dir,
+    )
+
     if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+        # Sanitized diagnostics only: executable basename, argument *count*
+        # (shape), cwd, and the Windows error code. Never argv values, env, or
+        # any secret material.
+        last_error = ctypes.windll.kernel32.GetLastError()
+        _LOGGER.error(
+            "elevation handoff failed: exe=%s args=%d cwd=%s code=%s",
+            os.path.basename(exe),
+            len(argv),
+            work_dir,
+            last_error,
+        )
         return 2
     if info.hProcess:
         ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 0xFFFFFFFF)
         exit_code = ctypes.wintypes.DWORD()
         ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code))
         ctypes.windll.kernel32.CloseHandle(info.hProcess)
+        _LOGGER.debug(
+            "elevation handoff child exited: exe=%s args=%d cwd=%s exit=%s",
+            os.path.basename(exe),
+            len(argv),
+            work_dir,
+            int(exit_code.value),
+        )
         return int(exit_code.value)
     return 0
 
@@ -711,7 +736,7 @@ def _harden_runtime_dir(
 
     principals = [
         r"*S-1-5-18:(OI)(CI)F",
-        "Administrators:(OI)(CI)F",
+        r"*S-1-5-32-544:(OI)(CI)F",
     ]
     # The virtual-service-account ACE must NOT be applied before the service is
     # registered with SCM; otherwise the name-to-SID lookup fails (icacls 1332).
@@ -837,7 +862,7 @@ def _harden_runtime_parent(
         return
     principals = [
         r"*S-1-5-18:(OI)(CI)F",
-        "Administrators:(OI)(CI)F",
+        r"*S-1-5-32-544:(OI)(CI)F",
         f"{installing_user}:(OI)(CI)RX",
     ]
     # Container-only (no /T): the runtime subtree keeps its own hardened ACL, and

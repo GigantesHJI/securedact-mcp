@@ -227,7 +227,8 @@ def test_parent_directory_traversal_is_sufficient(tmp_path: Path) -> None:
     # The vSA is NOT yet resolvable; it must not appear in the parent Phase-1 ACL.
     assert VSA not in joined
     assert r"*S-1-5-18:(OI)(CI)F" in joined
-    assert "Administrators:(OI)(CI)F" in joined
+    assert r"*S-1-5-32-544:(OI)(CI)F" in joined
+    assert "Administrators:" not in joined
 
 
 # ---------------------------------------------------------------------------
@@ -330,8 +331,8 @@ def test_final_acl_remains_system_admins_f_vsa_user_rx(tmp_path: Path, monkeypat
     # Runtime: SYSTEM/Admins F (propagation + leaf), user RX, vSA RX (never F).
     assert r"*S-1-5-18:(OI)(CI)F" in all_runtime
     assert r"*S-1-5-18:F" in all_runtime
-    assert "Administrators:(OI)(CI)F" in all_runtime
-    assert "Administrators:F" in all_runtime
+    assert r"*S-1-5-32-544:(OI)(CI)F" in all_runtime
+    assert r"*S-1-5-32-544:F" in all_runtime
     assert f"{VSA}:(OI)(CI)RX" in all_runtime
     assert f"{VSA}:RX" in all_runtime
     assert f"{VSA}:(OI)(CI)F" not in all_runtime

@@ -220,7 +220,8 @@ def test_provision_creates_runtime_and_hardens_acl(tmp_path: Path, monkeypatch) 
     assert r"NT SERVICE\SecuredactAgent" not in icacls_args
     # SYSTEM + Admins hold full; the installing user is read+execute only.
     assert r"*S-1-5-18:(OI)(CI)F" in icacls_args
-    assert "Administrators:(OI)(CI)F" in icacls_args
+    assert r"*S-1-5-32-544:(OI)(CI)F" in icacls_args
+    assert "Administrators:" not in icacls_args
     assert "(OI)(CI)RX" in icacls_args
     # The installing user is read+execute only, never full control.
     assert "alice" not in icacls_args or "alice:(OI)(CI)RX" in icacls_args

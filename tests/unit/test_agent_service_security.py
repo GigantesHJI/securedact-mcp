@@ -457,7 +457,10 @@ def test_service_account_principals_grant_user_read_only():
     assert "alice:(OI)(CI)F" not in joined
     # SYSTEM + Admins + service account get full.
     assert "*S-1-5-18:(OI)(CI)F" in joined
-    assert "Administrators:(OI)(CI)F" in joined
+    # Built-in Administrators MUST be referenced by canonical SID (locale-independent),
+    # never by the English localized account name (which triggers icacls 1332 / 1352).
+    assert r"*S-1-5-32-544:(OI)(CI)F" in joined
+    assert "Administrators:" not in joined
     assert r"NT SERVICE\SecuredactAgent:(OI)(CI)F" in joined
 
 

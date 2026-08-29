@@ -295,7 +295,8 @@ def test_provision_runtime_initial_acl_without_vsa(tmp_path: Path) -> None:
     joined = " ".join(str(a) for a in icacls[0][0])
     assert VSA not in joined
     assert r"*S-1-5-18:(OI)(CI)F" in joined
-    assert "Administrators:(OI)(CI)F" in joined
+    assert r"*S-1-5-32-544:(OI)(CI)F" in joined
+    assert "Administrators:" not in joined
 
 
 def test_provision_runtime_final_acl_includes_vsa_when_requested(tmp_path: Path) -> None:

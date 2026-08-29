@@ -97,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="run only the Managed Agent module (idempotent rerun, e.g. after setup)",
     )
     setup.add_argument(
+        "--agent-elevated",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    setup.add_argument(
         "--no-agent",
         action="store_true",
         help="skip the Managed Agent background-service module during setup",
@@ -516,6 +521,7 @@ def main(
             output=output,
             agent=agent_mode,
             agent_only=agent_only,
+            agent_elevated=bool(getattr(arguments, "agent_elevated", False)),
             google=getattr(arguments, "google", None),
             google_integration_id=getattr(arguments, "google_integration_id", None),
         )
@@ -603,3 +609,7 @@ def main(
             store=store,
         )
     raise AssertionError("unhandled command")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

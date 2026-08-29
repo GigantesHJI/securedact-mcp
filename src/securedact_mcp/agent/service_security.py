@@ -521,7 +521,7 @@ def build_service_account_principals(
 
     principals = [
         r"*S-1-5-18:(OI)(CI)F",
-        "Administrators:(OI)(CI)F",
+        r"*S-1-5-32-544:(OI)(CI)F",
     ]
     if service_account and service_account not in _SYSTEM_EQUIVALENTS:
         principals.append(f"{service_account}:(OI)(CI)F")

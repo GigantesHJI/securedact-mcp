@@ -26,7 +26,9 @@ from .config import AgentFiles
 from .connectors import ConnectorBindingStore
 from .errors import JobExecutionError
 from .executor import (
+    TARGET_DRIVE,
     TARGET_FOLDER,
+    TARGET_INTEGRATION,
     TARGET_RESOURCE,
     TARGET_RESOURCE_COLLECTION,
     TARGET_SITE,
@@ -217,8 +219,15 @@ class GoogleScanProvider:
                 heartbeat=heartbeat,
             )
             return [_summary_to_result(summary)]
-        # DRIVE / INTEGRATION -> scan the whole My Drive / bound integration.
-        summary = client.scan_drive(
-            context, integration_id=target.integration_id, heartbeat=heartbeat
+        if target_type in (TARGET_DRIVE, TARGET_INTEGRATION):
+            # DRIVE / INTEGRATION -> scan the whole My Drive / bound integration.
+            summary = client.scan_drive(
+                context, integration_id=target.integration_id, heartbeat=heartbeat
+            )
+            return [_summary_to_result(summary)]
+        # Any other target type is unknown: the agent must never guess or broaden
+        # the operation. Fail closed as a safe execution error.
+        raise JobExecutionError(
+            f"unsupported google_workspace target_type {target_type!r}; "
+            "the control plane must only issue known target types"
         )
-        return [_summary_to_result(summary)]

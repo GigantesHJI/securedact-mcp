@@ -157,6 +157,253 @@ not silently lose their lease. If the job heartbeat reports cancellation, the
 agent stops further managed processing (it does **not** submit success after
 cancellation, and never deletes local Google data or credentials).
 
+## Windows background service (AGENT-018)
+
+For a hands-off customer experience the agent can run as a **native Windows
+Service** instead of a foreground PowerShell window. The service:
+
+- starts **automatically on Windows boot** (no console window, no login needed),
+- **polls continuously** and **heartbeats** on the same loop as `agent run`,
+- **auto-restarts** on crash (3 attempts, 1s apart),
+- stops **gracefully** on `service stop` (completes the current heartbeat/backoff
+  then exits),
+- holds a **single-instance lock** so a manual `agent run` cannot start a second,
+  conflicting loop.
+
+The dashboard "Online" state is derived from heartbeat timestamps exactly as for
+foreground mode — the persistent service heartbeat makes the UI show Online
+without any web-app change.
+
+### Service identity and security model
+
+The service runs under a least-privilege virtual service account (`NT SERVICE\SecuredactAgent`) by default (LocalSystem is only an explicit fallback). All agent state — `agent.json`, the encrypted
+agent-credential vault, the encrypted Google OAuth token vault, and the job state
+— lives under a single machine-wide directory, by default
+`C:\ProgramData\Securedact` (override with `SECUREDACT_APP_DATA_DIR`). On install
+that directory is **ACL-hardened (fail-closed)** so only `SYSTEM`, `Administrators`,
+and the service account can read/write it, while the **installing user gets READ
+ONLY** (enough for local diagnostics, but not enough to replace the credential
+vault, Fernet key, OAuth vault, or bindings). Standard users cannot read or write
+it. The least-privilege identity was chosen deliberately:
+
+- **No secret is ever placed on the service command line or in service metadata.**
+  The data directory reaches the service process via its dedicated service
+  `Environment` registry key and the machine-wide `SECUREDACT_APP_DATA_DIR`
+  variable. The registration token, agent credential, OAuth token, lease secret,
+  and entitlement JWT stay in OS-protected local storage.
+- Credentials stored under a single user's profile/keyring would be **unavailable to
+  the service account**, so the machine-wide `ProgramData` root (shared by both
+  interactive `agent`/`google` commands and the service) is used instead.
+
+### Install via the unified setup wizard (recommended)
+
+The recommended path is the unified wizard, which keeps every module optional and
+selectable and provisions a *secure machine-owned runtime* for the service:
+
+```powershell
+securedact-mcp install      # optional: contextual models
+securedact-mcp setup        # Models -> Upstream Terms -> Plugins -> Managed Agent
+```
+
+During `setup`, the Managed Agent step:
+
+1. explains what the background agent does,
+2. asks whether to install it,
+3. tells you where to obtain the one-time registration token
+   (Dashboard -> Local Agents -> Add agent),
+4. prompts for the token (typed, never echoed, never persisted),
+5. provisions a dedicated, admin/SYSTEM-owned Python runtime under
+   `C:\ProgramData\Securedact\runtime`,
+6. registers the machine,
+7. installs + starts the Windows service,
+8. verifies the heartbeat, and
+9. reports **Online**.
+
+The advanced `agent register` / `agent service install` / `agent service start` /
+`agent run` commands remain available for debugging.
+
+Run an **elevated (Administrator)** PowerShell for the Managed Agent step:
+
+```powershell
+# One-time: install the package (per the installation doc), then register AND
+# install the background service in a single step.
+securedact-mcp agent register --token <REGISTRATION_TOKEN> --install-service
+
+# (Optional) equivalent explicit two-step form:
+securedact-mcp agent register --token <REGISTRATION_TOKEN>
+securedact-mcp agent service install
+
+# Ensure the local Google connector is authorized (also writes to ProgramData):
+securedact-mcp google auth
+```
+
+`agent register --install-service` (and `agent service install`):
+
+1. creates `C:\ProgramData\Securedact` and hardens its ACL,
+2. persists `SECUREDACT_APP_DATA_DIR` machine-wide so interactive `agent`/`google`
+   commands and the service share the exact same location,
+3. registers the agent (if a token is supplied),
+4. installs the `SecuredactAgent` service (virtual service account
+   `NT SERVICE\SecuredactAgent`, auto-start, restart-on-failure),
+5. starts it.
+
+After this, **no PowerShell window is needed** — the dashboard shows Online and
+scans execute.
+
+### Install integrity gate (privilege-escalation defense)
+
+Before installing, the service refuses to proceed unless the **code it will execute
+as a privileged identity is trustworthy**: the Python interpreter, the
+`securedact_mcp` package, its `site-packages`, and the pywin32 directory must not be
+writable by any non-admin / non-SYSTEM principal. If they are — which is exactly what
+**`pipx install`** and **`uv tool install`** produce, because they place the
+interpreter and `site-packages` under the installing user's profile — the install is
+aborted (fail-closed) rather than granting that user code execution as the service
+identity.
+
+Safe pilot deployment:
+
+```powershell
+# Admin-elevated shell; install into an admin-owned, non-user-writable venv:
+python -m venv C:\ProgramData\Securedact\venv
+C:\ProgramData\Securedact\venv\Scripts\pip install securedact-mcp
+C:\ProgramData\Securedact\venv\Scripts\securedact-mcp agent register --token <TOKEN> --install-service
+```
+
+The service environment also sets `PYTHONNOUSERSITE=1` so a normal user cannot plant a
+user-site package, `sitecustomize.py`, `.pth` file, or DLL that the service would
+import. ProgramData ACL hardening is **fail-closed**: if `icacls` cannot apply the
+restricted ACL, the install aborts instead of leaving a world-writable store.
+
+### Secure machine runtime (pilot)
+
+The service must never load Python/package code from a user-writable path. `pipx
+install` and `uv tool install` place the interpreter and `site-packages` under the
+installing user's profile, which that user can write — running them as a service is a
+local privilege-escalation, and the install gate refuses it (fail-closed).
+
+The pilot secure model is **Approach A — a dedicated machine-owned Python
+environment**:
+
+* **Runtime path:** `C:\ProgramData\Securedact\runtime` (a full venv created by an
+  Administrator). The service `ImagePath` therefore points at
+  `C:\ProgramData\Securedact\runtime\Scripts\pythonservice.exe`, *not* a user profile.
+* **Who can write it:** only `SYSTEM` and `Administrators` (via `icacls`
+  `/inheritance:r`). The service account `NT SERVICE\SecuredactAgent` and the
+  installing user get **read + execute only**.
+* **What it contains:** the exact pinned `securedact-mcp` package plus its
+  dependencies (including `pywin32`), installed from the configured package index
+  pinned to the installed version (or a controlled local wheel) — no arbitrary
+  download.
+* **Validation:** `validate_install_security()` re-checks the runtime's interpreter,
+  package, `site-packages`, and `pywin32` paths after provisioning and fails closed if
+  any remain user-writable.
+* **State separation:** the data dir (`C:\ProgramData\Securedact`) is hardened
+  separately; runtime re-provisioning never touches `agent.json`, the credential
+  vault, the OAuth vault, or bindings, so upgrades preserve registration and Google
+  auth.
+
+### Service management commands
+
+```powershell
+securedact-mcp agent service status    # installed? running/stopped?
+securedact-mcp agent service start     # start the background service
+securedact-mcp agent service stop      # graceful stop
+securedact-mcp agent service logs      # show the scrubbed service log path + tail
+securedact-mcp agent service uninstall # stop + remove the service
+```
+
+`agent run` remains available as the **foreground/debug** mode. By default it
+acquires the single-instance lock and refuses to start while the service is
+running; pass `--no-lock` only when deliberately debugging a second loop.
+
+### Startup / restart behavior
+
+- **Boot:** `SERVICE_AUTO_START` brings the agent up before any user logs in.
+- **Crash:** `ChangeServiceConfig2` failure actions restart the process
+  (3 attempts, 1s apart); the loop reconnects after transient network loss and
+  uses the existing offline entitlement grace.
+- **No lost jobs:** a job whose lease expires while the service is down is
+  re-claimed by the control plane (the agent never submits a false success and
+  never deletes local data).
+- **No duplicates:** the OS advisory lock file prevents two loops.
+
+### Logging / diagnostics
+
+Service diagnostics are written (rotating, scrubbed) to
+`C:\ProgramData\Securedact\logs\agent-service.log`. Every line is passed through
+the secret scrubber, so it can contain only: service start/stop, heartbeat
+connectivity state, job id (claimed/completed/failed), `safe_error_code`,
+agent version, and non-secret errors. It **never** contains document text, PII,
+OAuth tokens, the agent credential, the registration token, lease secrets, or the
+entitlement JWT. Inspect with `securedact-mcp agent service logs`.
+
+### Upgrade procedure
+
+```powershell
+# Secure, admin-initiated runtime upgrade (preserves all agent state):
+securedact-mcp agent service upgrade
+# or re-run the dedicated wizard step:
+securedact-mcp setup --agent
+# Registration, credentials, OAuth vault, and bindings under ProgramData are preserved.
+```
+
+The `agent service upgrade` flow (also reached via `setup --agent`) is the secure
+replacement for the old `uv tool upgrade` + service reinstall cycle. It is
+**admin-initiated**: it stops the service, re-provisions the machine-owned runtime
+(admin/SYSTEM-owned, never user-writable) with the same pinned package version,
+re-validates the code-path ACLs, and restarts the service. Because the agent
+state (agent.json, credential vault, OAuth vault, bindings) lives in the separate
+`ProgramData\Securedact` data dir, it is never touched — so no re-registration and
+no Google re-auth are required unless a credential itself is invalid. No arbitrary
+URL/download or unsigned auto-update is used; the source is the same configured
+package index pinned to the installed version (or a controlled local wheel).
+
+### Credential implications
+
+Because the service runs as a virtual service account against `ProgramData\Securedact`,
+the agent credential vault and the Google OAuth token vault are machine-scoped, not
+user-scoped. Any local administrator (or the service account) can read them (by
+design); standard, non-admin users cannot. The installing user retains READ ONLY
+and cannot replace them. Do **not** point `SECUREDACT_APP_DATA_DIR` at a location
+under a single user's profile if you also run the service — the service account
+would not be able to read the credentials.
+
+### Uninstall
+
+```powershell
+securedact-mcp agent service uninstall     # stops + removes the service
+# Optionally remove the machine runtime and/or data dir (admin):
+# Remove-Item -Recurse -Force 'C:\ProgramData\Securedact\runtime'
+# Remove-Item -Recurse -Force 'C:\ProgramData\Securedact'   # also deletes credentials/bindings
+```
+
+Uninstalling the service only removes the SCM registration and stops the process; it
+does **not** delete `agent.json`, the credential vault, the OAuth vault, or the
+connector bindings. Remove the `ProgramData\Securedact` tree only when you intend to
+fully decommission the agent on that machine (this also destroys stored credentials
+and Google bindings, which then require re-registration and Google re-auth).
+
+### Troubleshooting
+
+- **Dashboard shows Offline after boot** — the service may have failed to start.
+  Run `securedact-mcp agent service status` and `securedact-mcp agent service logs`.
+- **`agent not registered; cannot start service`** — registration did not complete
+  under `ProgramData`. Re-run `securedact-mcp agent register --token ... --install-service`
+  from an elevated shell.
+- **`another Securedact agent loop is already running`** — a manual `agent run` (or a
+  second service instance) holds the lock. Stop it, or run `agent run --no-lock` only
+  for debugging.
+- **Google job fails safe (`connector_unavailable`/`auth_required`)** — the Google
+  token was written to a different data dir. Ensure `SECUREDACT_APP_DATA_DIR` matches
+  and re-run `securedact-mcp google auth` from an elevated shell.
+
+### macOS / Linux
+
+The background service is **Windows-only**. On other platforms use
+`securedact-mcp agent run` in the foreground, or wrap it with your platform's
+native service manager (launchd / systemd). Equivalent lifecycle is future work.
+
 ## Result schema (control plane)
 
 The reduced job result is allowlisted. Fields:
@@ -188,6 +435,14 @@ Only these safe error codes may appear: `connector_unavailable`,
 `engine_unavailable_local`, `temporary_network_error`,
 `agent_execution_error`, `unsupported_target`, `cancelled`, `lease_invalid`,
 `result_invalid`, `internal_error`.
+
+**Schema ownership.** `securedact_mcp.agent.reducer` is the single source of
+truth for this envelope — it defines the allowlisted fields, the closed category
+vocabulary, the safe error codes, and the bounded counts, and it enforces the
+contract at `reduce_scan_results` / `validate_safe_result`. This section is
+descriptive only; the agent (not the control plane) validates every payload, and
+the protocol is intentionally unchanged (no new fields or category labels may be
+introduced here).
 
 ## Offline behavior
 

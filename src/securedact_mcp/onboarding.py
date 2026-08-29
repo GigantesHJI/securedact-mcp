@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import importlib.util
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Protocol, TextIO
 
 from . import __version__
+from .agent import deploy as agent_deploy
 from .model_store import ModelConfigurationError, ModelPathError, ModelStore
 
 SUPPORTED_PYTHON = (3, 12)
@@ -334,7 +336,21 @@ def run_setup(
     resource_roots: Mapping[str, Path] | None = None,
     python_version: tuple[int, int, int] | None = None,
     version: str = __version__,
+    agent: str | None = None,
+    agent_only: bool = False,
+    google: str | None = None,
+    google_integration_id: str | None = None,
+    managed_agent_runner: Callable[..., int] | None = None,
 ) -> int:
+    """Run the unified SecuRedact setup wizard.
+
+    Modules are optional/selectable: ``core`` (preflight), ``models``,
+    ``upstream terms`` (implicit in model download consent), ``plugins`` (host
+    integrations), and ``managed agent`` (Windows background service). The managed
+    agent module is skipped automatically on non-Windows and when the user declines
+    or passes ``agent="no"``. ``agent_only=True`` runs just the agent module
+    (idempotent rerun, e.g. ``securedact-mcp setup --agent``).
+    """
     detected_python = python_version or (
         sys.version_info.major,
         sys.version_info.minor,
@@ -362,6 +378,29 @@ def run_setup(
             file=output,
         )
         return 2
+
+    if agent_only:
+        # Rerun only the Managed Agent module (idempotent, e.g. `setup --agent`).
+        agent_rc = 0
+        try:
+            agent_rc = (managed_agent_runner or agent_deploy.run_managed_agent_module)(
+                input_fn=input_fn,
+                output=output,
+                agent=agent if agent is not None else "yes",
+                non_interactive=non_interactive,
+                google=google,
+                google_integration_id=google_integration_id,
+            )
+        except agent_deploy._ElevationHandoff:
+            # An elevated child process has taken over; this instance exits.
+            return 0
+        print(file=output)
+        print("Readiness:", file=output)
+        print(
+            f"  Managed Agent: {'configured' if agent_rc == 0 else 'failed'}",
+            file=output,
+        )
+        return 0 if agent_rc == 0 else 2
 
     try:
         model_store = store or ModelStore.resolve()
@@ -456,6 +495,20 @@ def run_setup(
             print(f"{name.capitalize()} configuration could not be verified.", file=output)
             host_result = 2
 
+    agent_rc = 0
+    try:
+        agent_rc = (managed_agent_runner or agent_deploy.run_managed_agent_module)(
+            input_fn=input_fn,
+            output=output,
+            agent=agent,
+            non_interactive=non_interactive,
+            google=google,
+            google_integration_id=google_integration_id,
+        )
+    except agent_deploy._ElevationHandoff:
+        # An elevated child process has taken over the install; this instance exits.
+        return 0
+
     print(file=output)
     print("Readiness:", file=output)
     print(f"  Package: {version}", file=output)
@@ -464,12 +517,17 @@ def run_setup(
     print(f"  Models: {final_model_state.value}", file=output)
     for name in HOSTS:
         print(f"  {name.capitalize()}: {inspections[name].state.value}", file=output)
+    print(
+        f"  Managed Agent: {'configured' if agent_rc == 0 else 'failed'}",
+        file=output,
+    )
     if all(
         (
             ml_available,
             final_model_state is ModelState.READY,
             model_result == 0,
             host_result == 0,
+            agent_rc == 0,
         )
     ):
         print("SecuRedact is ready.", file=output)
@@ -478,4 +536,5 @@ def run_setup(
             "SecuRedact setup is incomplete; rerun setup after resolving the items above.",
             file=output,
         )
+    return 2 if (model_result != 0 or host_result != 0 or not ml_available or agent_rc != 0) else 0
     return 2 if model_result != 0 or host_result != 0 or not ml_available else 0

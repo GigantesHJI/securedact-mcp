@@ -91,6 +91,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report readiness without assuming model terms or provider trust",
     )
+    setup.add_argument(
+        "--agent",
+        action="store_true",
+        help="run only the Managed Agent module (idempotent rerun, e.g. after setup)",
+    )
+    setup.add_argument(
+        "--no-agent",
+        action="store_true",
+        help="skip the Managed Agent background-service module during setup",
+    )
+    setup.add_argument(
+        "--google",
+        choices=("yes", "no"),
+        default=None,
+        help="enable/disable Google Workspace onboarding during setup "
+        "(default: auto-detect via SECUREDACT_GOOGLE_ENABLED)",
+    )
+    setup.add_argument(
+        "--google-integration-id",
+        default=None,
+        help="Google Workspace integration ID from the SecuRedact dashboard to "
+        "bind locally (skips the interactive prompt)",
+    )
 
     models = commands.add_parser("models", help="inspect and maintain local contextual models")
     model_commands = models.add_subparsers(dest="model_command", required=True)
@@ -478,6 +501,10 @@ def main(
     if arguments.command == "setup":
         from .onboarding import run_setup
 
+        agent_mode = "no" if getattr(arguments, "no_agent", False) else None
+        agent_only = bool(getattr(arguments, "agent", False))
+        if agent_only and agent_mode is None:
+            agent_mode = "yes"
         return run_setup(
             host=arguments.host,
             language=arguments.language,
@@ -487,6 +514,10 @@ def main(
             verify_models=_models_verify,
             input_fn=input_fn,
             output=output,
+            agent=agent_mode,
+            agent_only=agent_only,
+            google=getattr(arguments, "google", None),
+            google_integration_id=getattr(arguments, "google_integration_id", None),
         )
 
     diagnose_runtime = arguments.command == "diagnostics"

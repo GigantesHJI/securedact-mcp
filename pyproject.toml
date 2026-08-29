@@ -15,6 +15,7 @@ dependencies = [
   "mcp>=1.2,<2",
   "pydantic>=2.10,<3",
   "PyYAML>=6.0.2,<7",
+  "pywin32>=306,<312; sys_platform == \"win32\"",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -78,7 +79,10 @@ securedact-eval = "securedact_eval.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["securedact_mcp*", "securedact_core*", "securedact_eval*", "securedact_enforced*"]
-exclude = ["securedact_eval.experimental", "securedact_eval.experimental.*"]
+exclude = [
+    "securedact_eval.experimental",
+    "securedact_eval.experimental.*",
+]
 
 [tool.setuptools.package-data]
 "securedact_core.detectors" = ["lexicons/*.json"]
@@ -152,5 +156,13 @@ module = [
   "google.*",
   "google_auth_oauthlib",
   "google_auth_oauthlib.*",
+  "win32serviceutil",
+  "win32service",
+  "win32api",
+  "win32con",
+  "pywintypes",
+  "servicemanager",
+  "win32security",
 ]
 ignore_missing_imports = true
+

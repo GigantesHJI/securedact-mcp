@@ -12,11 +12,12 @@ import argparse
 import json
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import TextIO
 
-from . import agent_runner
-from .config import AgentFiles, load_config
+from . import agent_runner, service
+from .config import AgentConfig, AgentFiles, load_config
 from .credentials import AgentCredentialStore
 from .errors import AgentError
 from .safe_log import scrub
@@ -32,12 +33,52 @@ def build_agent_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     register.add_argument("--token", required=True, help="registration token (srr_...)")
     register.add_argument("--control-plane-url", default=None)
     register.add_argument("--display-name", default=None)
+    register.add_argument(
+        "--install-service",
+        action="store_true",
+        help="register and also install+start the background Windows service",
+    )
 
     commands.add_parser("status", help="show managed-agent status")
 
-    run = commands.add_parser("run", help="run the managed-agent pull loop")
+    run = commands.add_parser("run", help="run the managed-agent pull loop (foreground/debug)")
     run.add_argument("--max-iterations", type=int, default=None)
     run.add_argument("--idle-sleep", type=float, default=30.0)
+    run.add_argument(
+        "--no-lock",
+        action="store_true",
+        help="do not acquire the single-instance lock (allows running alongside the service)",
+    )
+
+    service_cmd = commands.add_parser(
+        "service", help="install/manage the background Windows agent service"
+    )
+    service_cmds = service_cmd.add_subparsers(dest="service_command", required=True)
+    svc_install = service_cmds.add_parser("install", help="install the background service")
+    svc_install.add_argument("--data-dir", default=None, help="machine-wide agent data directory")
+    svc_install.add_argument("--no-start", action="store_true", help="install but do not start")
+    svc_install.add_argument(
+        "--token",
+        default=None,
+        help="also register the agent with this token (equivalent to register --install-service)",
+    )
+    svc_install.add_argument("--control-plane-url", default=None)
+    svc_install.add_argument("--display-name", default=None)
+    service_cmds.add_parser("start", help="start the background service")
+    service_cmds.add_parser("stop", help="stop the background service")
+    service_cmds.add_parser("status", help="show background service status")
+    service_cmds.add_parser("uninstall", help="remove the background service")
+    upgrade = service_cmds.add_parser(
+        "upgrade", help="securely upgrade the machine-owned agent runtime (preserves state)"
+    )
+    upgrade.add_argument("--data-dir", default=None, help="machine-wide agent data directory")
+    upgrade.add_argument("--runtime-path", default=None, help="machine-owned runtime path")
+    upgrade.add_argument(
+        "--google",
+        action="store_true",
+        help="also (re)install the Google connector dependencies into the runtime",
+    )
+    service_cmds.add_parser("logs", help="show the background service log location")
 
     commands.add_parser("rotate-credential", help="rotate the agent credential")
     commands.add_parser("heartbeat", help="send a single heartbeat")
@@ -88,7 +129,12 @@ def run_agent(
             },
             sys.stdout,
         )
+        if getattr(arguments, "install_service", False):
+            return _install_service_from_args(arguments, output)
         return 0
+
+    if command == "service":
+        return _dispatch_service(arguments, output)
 
     try:
         config = load_config()
@@ -171,17 +217,175 @@ def run_agent(
             return 0
 
     if command == "run":
+        # Ensure the background process logs to the machine data-dir log file so
+        # the scheduled-task run is diagnosable even though it has no console.
         try:
-            agent_runner.run_agent_loop(
-                config,
-                max_iterations=arguments.max_iterations,
-                idle_sleep=arguments.idle_sleep,
-                clock=clock,  # type: ignore[arg-type]
-            )
-        except AgentError as exc:
-            print(f"agent run stopped: {scrub(str(exc))}", file=output)
-            return 2
-        return 0
+            from . import service as _svc
+
+            _svc.configure_service_logging(_svc.resolve_service_data_dir(None))
+        except Exception:  # noqa: S110  # best-effort logging setup
+            pass
+        return _run_loop(config, arguments, clock, output)
 
     print(f"unknown agent command: {command}", file=output)
     return 2
+
+
+def _run_loop(
+    config: AgentConfig, arguments: argparse.Namespace, clock: object, output: TextIO
+) -> int:
+    files = AgentFiles.resolve()
+    lock_path = files.root / "agent.lock"
+    if not getattr(arguments, "no_lock", False):
+        from .service_lock import agent_instance_lock
+
+        with agent_instance_lock(lock_path) as acquired:
+            if not acquired:
+                print(
+                    "refusing to start: another Securedact agent loop is already "
+                    "running (single-instance lock held). Pass --no-lock to override "
+                    "(not recommended while the service is active).",
+                    file=output,
+                )
+                return 3
+            return _run_loop_inner(config, arguments, clock)
+    return _run_loop_inner(config, arguments, clock)
+
+
+def _run_loop_inner(config: AgentConfig, arguments: argparse.Namespace, clock: object) -> int:
+    try:
+        agent_runner.run_agent_loop(
+            config,
+            max_iterations=arguments.max_iterations,
+            idle_sleep=arguments.idle_sleep,
+            clock=clock,  # type: ignore[arg-type]
+        )
+    except AgentError as exc:
+        print(f"agent run stopped: {scrub(str(exc))}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _install_service_from_args(arguments: argparse.Namespace, output: TextIO) -> int:
+    try:
+        result = service.install_service(
+            data_dir=getattr(arguments, "data_dir", None),
+            start=not getattr(arguments, "no_start", False),
+            control_plane_url=getattr(arguments, "control_plane_url", None),
+            display_name=arguments.display_name,
+            token=arguments.token,
+        )
+    except AgentError as exc:
+        print(f"service install failed: {scrub(str(exc))}", file=output)
+        return 2
+    _emit(
+        {
+            "service_installed": result.get("installed"),
+            "service_name": result.get("service_name"),
+            "data_dir": result.get("data_dir"),
+            "account": result.get("account"),
+            "running": result.get("running"),
+            "dev_baseline": result.get("dev_baseline"),
+        },
+        sys.stdout,
+    )
+    return 0
+
+
+def _dispatch_service(arguments: argparse.Namespace, output: TextIO) -> int:
+    sub = arguments.service_command
+    try:
+        if sub == "install":
+            result = service.install_service(
+                data_dir=getattr(arguments, "data_dir", None),
+                start=not getattr(arguments, "no_start", False),
+                control_plane_url=getattr(arguments, "control_plane_url", None),
+                display_name=arguments.display_name,
+                token=getattr(arguments, "token", None),
+            )
+            result = {**result, "dev_baseline": result.get("dev_baseline")}
+        elif sub == "start":
+            result = service.start_service()
+        elif sub == "stop":
+            result = service.stop_service()
+        elif sub == "status":
+            result = service.query_service_status()
+        elif sub == "uninstall":
+            result = service.uninstall_service()
+        elif sub == "upgrade":
+            from . import deploy
+
+            try:
+                result = deploy.upgrade_runtime(
+                    data_dir=getattr(arguments, "data_dir", None),
+                    runtime_path=getattr(arguments, "runtime_path", None),
+                    google_enabled=bool(getattr(arguments, "google", False)),
+                )
+            except AgentError as exc:
+                print(f"service upgrade failed safely: {scrub(str(exc))}", file=output)
+                return 2
+            _emit(result, sys.stdout)
+            return 0
+        elif sub == "logs":
+            path = service.service_log_path(getattr(arguments, "data_dir", None))
+            tail = _tail_log(path)
+            print(f"service log: {path}", file=output)
+            if tail:
+                print(tail, file=output)
+            return 0
+        else:
+            print(f"unknown service command: {sub}", file=output)
+            return 2
+    except AgentError as exc:
+        print(f"service {sub} failed: {scrub(str(exc))}", file=output)
+        return 2
+    _emit(result, sys.stdout)
+    return 0
+
+
+def _tail_log(path: Path, *, lines: int = 50) -> str:
+    try:
+        content = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    return "\n".join(content[-lines:])
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    input_fn: Callable[[str], str] = input,
+    output: TextIO = sys.stderr,
+    clock: object = None,
+) -> int:
+    """Entry point for ``python -m securedact_mcp.agent.cli``.
+
+    Supports both the full ``agent <subcommand>`` surface and a direct ``run``
+    alias so the Windows scheduled task can launch the proven agent loop with::
+
+        python -m securedact_mcp.agent.cli run
+
+    which is the exact canonical equivalent of the working foreground command
+    ``securedact-mcp agent run``.
+    """
+
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="securedact_mcp.agent.cli")
+    sub = parser.add_subparsers(dest="command", required=True)
+    build_agent_parser(sub)
+    # Direct loop entry used by the scheduled task (no ``agent`` prefix).
+    run_alias = sub.add_parser("run", help="run the managed-agent pull loop")
+    run_alias.add_argument("--max-iterations", type=int, default=None)
+    run_alias.add_argument("--idle-sleep", type=float, default=30.0)
+    run_alias.add_argument("--no-lock", action="store_true")
+
+    arguments = parser.parse_args(argv)
+    if arguments.command == "run":
+        # Delegate to the shared agent ``run`` handler (sets agent_command).
+        arguments.agent_command = "run"
+    return run_agent(arguments, input_fn=input_fn, output=output, clock=clock)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

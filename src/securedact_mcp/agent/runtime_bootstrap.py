@@ -25,6 +25,39 @@ from typing import Any
 from . import service
 from .safe_log import scrub
 
+# ---------------------------------------------------------------------------
+# Build capabilities (staleness gate)
+# ---------------------------------------------------------------------------
+#
+# The machine runtime is a *separately installed distribution*. A stale runtime can
+# therefore import ``securedact_mcp.agent.runtime_bootstrap`` successfully while
+# still lacking a subcommand the provisioning wizard is about to depend on (the
+# real defect: a runtime whose bootstrap had no ``google-auth`` command at all, so
+# routing authorization into it would have failed with
+# ``invalid choice: 'google-auth'``). The provisioning probe asserts the exact
+# capability it needs through :func:`supports`, which a stale build does not even
+# expose — so the probe fails closed instead of "succeeding" against a runtime that
+# cannot perform the operation.
+BOOTSTRAP_CAPABILITIES = frozenset(
+    {
+        "google-auth",  # the ``google-auth`` subcommand exists
+        "google-auth-loopback",  # ... with the in-runtime loopback flow
+        "google-auth-verify",  # ... and the no-browser/no-token verification mode
+        "google-auth-byo",  # ... and it accepts the non-secret --google-byo flag
+    }
+)
+
+
+def supports(*capabilities: str) -> bool:
+    """Return True when this bootstrap build exposes every named capability.
+
+    Used by the machine-runtime provisioning/readiness probes. Calling it in a
+    stale runtime raises ``AttributeError``/``ImportError`` in the child process,
+    which the probes treat as "capability missing" (fail closed).
+    """
+
+    return all(capability in BOOTSTRAP_CAPABILITIES for capability in capabilities)
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="securedact-mcp-agent-runtime-bootstrap")
@@ -71,6 +104,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     google_auth.add_argument("--state", default="")
     google_auth.add_argument("--non-interactive", action="store_true")
+    # Non-secret marker that the operator explicitly opted into their own Google
+    # Cloud OAuth app (advanced/enterprise). The BYO client id/secret itself is
+    # resolved from the encrypted machine-local client store / environment, never
+    # from argv — this flag only records the selection. It MUST be accepted here
+    # because the setup wizard appends it to the loopback argv; a bootstrap that
+    # rejected it turned every BYO authorization into an argparse failure.
+    google_auth.add_argument(
+        "--google-byo",
+        action="store_true",
+        help="operator uses their own Google Cloud OAuth app (non-secret marker only)",
+    )
+    # Verification (dry-run) mode: prove THIS interpreter can perform the whole
+    # machine-local loopback authorization — import the Google extra, resolve the
+    # machine-local config, bind the 127.0.0.1 listener, and build the PKCE consent
+    # URL — without opening a browser, without a real token, and without network.
+    google_auth.add_argument(
+        "--verify",
+        action="store_true",
+        help="verify this interpreter can authorize (no browser, no token, no network)",
+    )
     return parser
 
 
@@ -123,15 +176,24 @@ def main(argv: list[str] | None = None) -> int:
 def _cmd_google_auth(arguments: Any) -> int:
     """Run a machine-local Google OAuth step inside the machine-owned runtime.
 
-    ``--begin`` emits the consent URL + CSRF state (JSON). The exchange reads the
-    code from stdin (``--code-stdin``) or an interactive prompt, persists the token
-    encrypted under the machine data root, and emits ``{"authorized": bool}``. Any
-    failure is reported as a safe JSON error; no secret/token is ever returned.
+    ``--verify`` proves this interpreter can authorize (imports + config + loopback
+    bind + consent URL) and exits without a browser/token. ``--loopback`` runs the
+    real flow. ``--begin`` emits the consent URL + CSRF state (JSON). The exchange
+    reads the code from stdin (``--code-stdin``) or an interactive prompt, persists
+    the token encrypted under the machine data root, and emits
+    ``{"authorized": bool}``. Any failure is reported as a safe JSON error; no
+    secret/token is ever returned.
     """
 
     from . import google_setup
 
     try:
+        if getattr(arguments, "verify", False):
+            # No browser, no token, no network: a pure capability proof of the
+            # interpreter that actually performs the authorization.
+            payload = google_setup.verify_google_authorization_runtime(arguments.data_dir)
+            print(json.dumps(payload))
+            return 0 if payload.get("verified") else 2
         if arguments.loopback:
             ok = google_setup.run_google_loopback_authorization(arguments.data_dir)
             print(json.dumps({"authorized": bool(ok)}))
@@ -151,7 +213,10 @@ def _cmd_google_auth(arguments: Any) -> int:
         print(json.dumps({"authorized": bool(ok)}))
         return 0 if ok else 2
     except Exception as exc:  # fail closed; surface only a safe message
-        print(json.dumps({"authorized": False, "error": scrub(str(exc))}))
+        payload = {"authorized": False, "error": scrub(str(exc)), "interpreter": sys.executable}
+        if getattr(arguments, "verify", False):
+            payload["verified"] = False
+        print(json.dumps(payload))
         return 2
 
 

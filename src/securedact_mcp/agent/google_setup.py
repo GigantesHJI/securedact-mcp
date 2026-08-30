@@ -485,7 +485,15 @@ def authorize_google_machine(
     try:
         url, state = auth_mod.get_authorization_url(config)
     except Exception as exc:
-        print(f"Could not start Google authorization: {scrub(str(exc))}", file=output)
+        # Name the *exact* interpreter that failed. A ``No module named
+        # 'google_auth_oauthlib'`` here means this in-process path ran in an
+        # interpreter without the Google extra (the setup CLI's own Python) instead
+        # of the machine-owned runtime, which is precisely the RC defect this
+        # diagnostic makes unmistakable.
+        print(
+            f"Could not start Google authorization in {sys.executable}: {scrub(str(exc))}",
+            file=output,
+        )
         return False
     print("Open a browser to authorize SecuRedact with Google Drive (read-only):", file=output)
     print(url, file=output)
@@ -595,6 +603,106 @@ def run_google_loopback_authorization(data_dir: Path | str) -> bool:
 
     config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
     return bool(default_auth.run_local_oauth(config))
+
+
+# Concrete modules the machine-local Google OAuth flow imports. Kept here (next to
+# the flow) so the runtime self-verification asserts exactly what the real
+# authorization needs — including ``google_auth_oauthlib``, the import whose absence
+# produced the RC ``No module named 'google_auth_oauthlib'`` failure.
+GOOGLE_AUTH_RUNTIME_MODULES = (
+    "google.auth",
+    "google.oauth2.credentials",
+    "google_auth_oauthlib.flow",
+    "requests",
+)
+
+
+def verify_google_authorization_runtime(data_dir: Path | str) -> dict[str, Any]:
+    """Prove *this* interpreter can perform the machine-local Google OAuth flow.
+
+    Executes every step of the real loopback authorization except the two that
+    need a human/Google: it does not open a browser, does not wait for a redirect,
+    and never obtains or stores a token. Concretely it
+
+    1. imports the exact Google modules the flow uses (``google_auth_oauthlib`` &
+       friends) **in this interpreter**;
+    2. resolves the machine-local Google configuration from ``data_dir``;
+    3. binds the temporary ``127.0.0.1`` loopback listener on a random port; and
+    4. builds the PKCE consent URL for that redirect URI (pure local construction).
+
+    Returns a JSON-safe dict whose ``verified`` flag is the fail-closed signal, plus
+    ``interpreter`` (``sys.executable``) so the operator can see exactly which
+    Python was proven. The consent URL, OAuth state, client secret, and token are
+    never included in the payload.
+    """
+
+    import dataclasses
+    import importlib
+
+    payload: dict[str, Any] = {
+        "verified": False,
+        "interpreter": sys.executable,
+        "data_dir": str(data_dir),
+        "imports": {},
+        "imports_ok": False,
+        "client_configured": False,
+        "loopback_bound": False,
+        "loopback_host": None,
+        "loopback_port": None,
+        "consent_url_built": False,
+        "token_required": False,
+        "browser_opened": False,
+    }
+
+    # 1. Imports — the exact failure mode being regression-tested.
+    for module in GOOGLE_AUTH_RUNTIME_MODULES:
+        try:
+            importlib.import_module(module)
+            payload["imports"][module] = True
+        except Exception as exc:
+            payload["imports"][module] = False
+            payload["error"] = scrub(f"{module}: {exc}")
+    payload["imports_ok"] = all(payload["imports"].values())
+    if not payload["imports_ok"]:
+        return payload
+
+    from ..connectors.google import auth as default_auth
+    from ..connectors.google import config as default_config
+
+    # 2. Machine-local configuration (managed app by default, BYO from the store).
+    try:
+        config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
+    except Exception as exc:
+        payload["error"] = scrub(str(exc))
+        return payload
+    payload["client_configured"] = bool(config.client_id)
+
+    # 3./4. Loopback listener + PKCE consent URL, then release everything.
+    server = default_auth.LoopbackOAuthServer(expected_state="", timeout=0.01)
+    try:
+        payload["loopback_bound"] = True
+        payload["loopback_host"] = default_auth.LOOPBACK_HOST
+        payload["loopback_port"] = int(server.port)
+        loopback_config = dataclasses.replace(config, redirect_uri=server.redirect_uri)
+        try:
+            url, state = default_auth.get_authorization_url(loopback_config, pkce=True)
+        except Exception as exc:
+            payload["error"] = scrub(str(exc))
+            return payload
+        # Never emit the consent URL / CSRF state, and do not retain the pending
+        # flow (this is a verification, not an authorization).
+        payload["consent_url_built"] = bool(url) and bool(state)
+        default_auth._FLOW_STATE.pop(state, None)
+    finally:
+        server.shutdown()
+
+    payload["verified"] = bool(
+        payload["imports_ok"]
+        and payload["client_configured"]
+        and payload["loopback_bound"]
+        and payload["consent_url_built"]
+    )
+    return payload
 
 
 def _setx_exe() -> str:

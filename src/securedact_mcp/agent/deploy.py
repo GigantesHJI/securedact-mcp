@@ -100,6 +100,30 @@ GOOGLE_RUNTIME_IMPORTS = (
     "requests",
 )
 
+# The exact one-liner an operator can run by hand to verify the machine runtime
+# (kept in sync with GOOGLE_RUNTIME_IMPORTS so the documented command and the
+# automated probe can never drift apart).
+GOOGLE_RUNTIME_OK_MARKER = "GOOGLE RUNTIME OK"
+GOOGLE_RUNTIME_IMPORT_CHECK = (
+    "import google_auth_oauthlib, google.auth, google.oauth2.credentials, requests; "
+    f"print({GOOGLE_RUNTIME_OK_MARKER!r})"
+)
+
+# Capability probe for the *installed* runtime distribution. A stale machine runtime
+# can import ``securedact_mcp.agent.runtime_bootstrap`` while having no
+# ``google-auth`` subcommand at all (observed: an older 0.4.2 whose bootstrap only
+# offered install/stop/start/status/uninstall). Routing authorization into such a
+# runtime would fail with ``invalid choice: 'google-auth'``, so provisioning and
+# readiness assert the capability explicitly. A build without ``supports`` raises in
+# the child process -> non-zero exit -> capability missing (fail closed).
+GOOGLE_AUTH_CAPABILITIES = ("google-auth", "google-auth-loopback", "google-auth-verify")
+GOOGLE_AUTH_CAPABILITY_CHECK = (
+    "from securedact_mcp.agent.runtime_bootstrap import supports; "
+    "raise SystemExit(0 if supports("
+    + ", ".join(repr(cap) for cap in GOOGLE_AUTH_CAPABILITIES)
+    + ") else 1)"
+)
+
 
 def default_runtime_path() -> Path:
     """Return the secure machine-owned runtime root (ProgramData/Securedact/runtime)."""
@@ -115,6 +139,36 @@ def resolve_runtime_python(runtime_path: Path) -> Path:
     if sys.platform == "win32":
         return runtime_path / "Scripts" / "python.exe"
     return runtime_path / "bin" / "python"
+
+
+def _runtime_root_for_python(runtime_python: Path) -> Path:
+    """Return the runtime root owning ``runtime_python`` (inverse of resolve_runtime_python)."""
+
+    # ``<root>/Scripts/python.exe`` (win32) or ``<root>/bin/python`` (posix).
+    return Path(runtime_python).parent.parent
+
+
+def resolve_machine_runtime_python(runtime_path: Path | str | None) -> Path | None:
+    """Return the *existing* machine-runtime interpreter for ``runtime_path``.
+
+    Single source of truth for "which interpreter does the managed agent's Google
+    work run in". ``None`` means there is no machine runtime interpreter at
+    ``runtime_path`` (dev / non-Windows / not provisioned yet).
+
+    This exists because the Google readiness probe and the Google authorization
+    step MUST agree on the interpreter. When they disagreed, setup printed the
+    contradictory pair "Google dependencies: available" (probed
+    ``C:\\ProgramData\\Securedact\\runtime\\Scripts\\python.exe``) together with
+    ``No module named 'google_auth_oauthlib'`` (raised in the setup CLI's own
+    interpreter). Both paths now resolve through this one function, so they can
+    never diverge again. It deliberately does NOT invent a default: the caller
+    passes the runtime it actually provisioned.
+    """
+
+    if runtime_path is None:
+        return None
+    candidate = resolve_runtime_python(Path(runtime_path))
+    return candidate if candidate.exists() else None
 
 
 # ---------------------------------------------------------------------------
@@ -1089,22 +1143,48 @@ def _runtime_has_google_imports(runtime_path: Path, runner: CommandRunner) -> bo
     return result.returncode == 0
 
 
+def _runtime_supports_google_auth(runtime_path: Path, runner: CommandRunner) -> bool:
+    """True only when the runtime's bootstrap really carries the Google OAuth command.
+
+    Guards the stale-distribution defect: the machine runtime is a separately
+    installed package, so it can import ``runtime_bootstrap`` (the existing probe)
+    while lacking the ``google-auth`` subcommand the wizard is about to invoke. This
+    probe asserts the capability inside the runtime interpreter itself, so a stale
+    runtime is re-provisioned instead of failing later during authorization.
+    """
+
+    python = resolve_runtime_python(Path(runtime_path))
+    try:
+        result = runner([str(python), "-c", GOOGLE_AUTH_CAPABILITY_CHECK], RunInput())
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
 def _google_runtime_deps_ready(
-    runtime_path: Path | str | None,
+    runtime_python: Path | None,
     command_runner: CommandRunner | None,
 ) -> bool:
-    """Readiness gate: the machine runtime can import the Google provider deps.
+    """Readiness gate: the machine runtime can actually perform Google work.
 
-    Provisioning already fails closed when the Google extra cannot be installed;
-    this is the *readiness* re-check performed just before the wizard is allowed to
-    report the Managed Agent as ready. When no runtime interpreter exists there is
+    ``runtime_python`` is the interpreter resolved by
+    :func:`resolve_machine_runtime_python` — i.e. *exactly* the interpreter that
+    :func:`_authorize_google_machine` will use. Probing anything else is what made
+    setup report "Google dependencies: available" while authorization died with
+    ``No module named 'google_auth_oauthlib'`` in a different interpreter.
+
+    Both the provider imports *and* the runtime's ``google-auth`` bootstrap
+    capability must hold. When there is no runtime interpreter at all there is
     nothing to probe (the provisioning gate owns that case), so it does not block.
     """
 
-    runtime = Path(runtime_path or default_runtime_path())
-    if not resolve_runtime_python(runtime).exists():
+    if runtime_python is None:
         return True
-    return _runtime_has_google_imports(runtime, command_runner or _default_runner)
+    runtime = _runtime_root_for_python(Path(runtime_python))
+    runner = command_runner or _default_runner
+    return _runtime_has_google_imports(runtime, runner) and _runtime_supports_google_auth(
+        runtime, runner
+    )
 
 
 def _google_extra_install_target() -> str:
@@ -1201,10 +1281,16 @@ def provision_machine_runtime(
             )
         )
         if not issues and _runtime_has_agent_bootstrap(runtime, runner):
-            # When Google is selected the runtime must also carry the Google extra;
-            # a bootstrap-present but Google-less runtime is re-provisioned so the
-            # scheduled agent never hits the missing-dependency agent_execution_error.
-            google_ok = (not google_enabled) or _runtime_has_google_imports(runtime, runner)
+            # When Google is selected the runtime must also carry the Google extra
+            # AND a bootstrap that really exposes the ``google-auth`` command; a
+            # bootstrap-present but Google-less (or stale-bootstrap) runtime is
+            # re-provisioned so the scheduled agent never hits the missing-dependency
+            # agent_execution_error and setup never routes authorization into a
+            # runtime that would answer "invalid choice: 'google-auth'".
+            google_ok = (not google_enabled) or (
+                _runtime_has_google_imports(runtime, runner)
+                and _runtime_supports_google_auth(runtime, runner)
+            )
             if google_ok and not dev_local:
                 return ProvisionResult(
                     runtime, runtime_python, already_provisioned=True, hardened=True
@@ -1289,6 +1375,16 @@ def provision_machine_runtime(
             raise AgentError(
                 "Google connector dependencies failed to import from the machine "
                 "runtime after install; refusing to finish provisioning"
+            )
+        if not _runtime_supports_google_auth(runtime, runner):
+            raise AgentError(
+                "the machine runtime's securedact_mcp.agent.runtime_bootstrap does "
+                "not expose the machine-local Google authorization command "
+                f"({', '.join(GOOGLE_AUTH_CAPABILITIES)}); the installed runtime "
+                "distribution is stale relative to the running managed-agent code. "
+                "Re-run setup from a released securedact-mcp wheel that contains it, "
+                f"or enable dev/local validation mode ({_DEV_WHEEL_ENV}=1) to build "
+                "and install a controlled local wheel from this checkout."
             )
     # Persist the dev-wheel digest so a future same-version rerun can prove the
     # runtime is byte-for-byte identical to the current checkout (idempotent skip).
@@ -1471,7 +1567,118 @@ def install_service_from_runtime(
         )
     except AgentError as exc:
         raise AgentError(f"managed-agent task install failed: {scrub(str(exc))}") from exc
-    return result
+    # Report the runtime that was actually provisioned so the caller never has to
+    # guess it. The Google onboarding MUST authorize inside this exact interpreter;
+    # when the wizard passed no runtime path it previously fell through to an
+    # in-process import in the setup CLI's own Python (the RC defect).
+    return {
+        **result,
+        "runtime_path": str(provisioned.runtime_path),
+        "runtime_python": str(runtime_python),
+    }
+
+
+def verify_google_runtime(
+    *,
+    runtime_path: Path | str | None = None,
+    data_dir: Path | str | None = None,
+    command_runner: CommandRunner | None = None,
+) -> dict[str, object]:
+    """Prove the machine runtime interpreter can perform Google OAuth (no browser).
+
+    This is the direct, operator-runnable equivalent of the two manual commands::
+
+        C:\\ProgramData\\Securedact\\runtime\\Scripts\\python.exe -c
+            "import google_auth_oauthlib, google.auth, requests; print('GOOGLE RUNTIME OK')"
+
+        C:\\ProgramData\\Securedact\\runtime\\Scripts\\python.exe -m
+            securedact_mcp.agent.runtime_bootstrap google-auth
+            --data-dir C:\\ProgramData\\Securedact --loopback --verify
+
+    Step 1 proves the Google extra is importable *in that interpreter*. Step 2 runs
+    the real loopback authorization code path in the machine runtime up to (but not
+    including) the browser and the token exchange: it imports the Google modules,
+    resolves the machine-local config, binds the 127.0.0.1 listener, and builds the
+    PKCE consent URL. No real token, no browser, no network, no customer prompt.
+
+    Returns a JSON-safe report containing the exact interpreter and the exact argv
+    of both commands, so a failing laptop retest shows *which* Python was used.
+    Fails closed: ``ok`` is True only when both steps succeed.
+    """
+
+    runtime = Path(runtime_path or default_runtime_path())
+    runtime_python = resolve_runtime_python(runtime)
+    resolved_data = service.resolve_service_data_dir(data_dir)
+    runner = command_runner or _default_runner
+
+    import_argv = [str(runtime_python), "-c", GOOGLE_RUNTIME_IMPORT_CHECK]
+    capability_argv = [str(runtime_python), "-c", GOOGLE_AUTH_CAPABILITY_CHECK]
+    verify_argv = build_google_auth_argv(runtime_python, resolved_data, verify=True)
+
+    report: dict[str, object] = {
+        "ok": False,
+        "runtime_path": str(runtime),
+        "runtime_python": str(runtime_python),
+        "runtime_python_exists": runtime_python.exists(),
+        "data_dir": str(resolved_data),
+        "import_command": import_argv,
+        "capability_command": capability_argv,
+        "verify_command": verify_argv,
+        "imports_ok": False,
+        "bootstrap_google_auth_ok": False,
+        "loopback_verify_ok": False,
+    }
+    if not runtime_python.exists():
+        report["error"] = (
+            f"machine runtime interpreter not found at {runtime_python}; run "
+            "'securedact-mcp setup --agent --google yes' from an elevated "
+            "Administrator PowerShell to provision it"
+        )
+        return report
+
+    def _run(argv: list[str]) -> RunResult:
+        try:
+            return runner(argv, RunInput(env=_env_for(resolved_data)))
+        except Exception as exc:  # a runtime that cannot be launched is a hard stop
+            return RunResult(returncode=1, stderr=scrub(str(exc)))
+
+    imports = _run(import_argv)
+    report["imports_ok"] = imports.returncode == 0 and GOOGLE_RUNTIME_OK_MARKER in imports.stdout
+    report["import_output"] = scrub((imports.stdout or imports.stderr).strip())
+
+    capability = _run(capability_argv)
+    report["bootstrap_google_auth_ok"] = capability.returncode == 0
+    if capability.returncode != 0:
+        report["capability_output"] = scrub((capability.stderr or capability.stdout).strip())
+
+    verified = _run(verify_argv)
+    payload: dict[str, object] = {}
+    try:
+        payload = json.loads(verified.stdout)
+    except Exception:
+        payload = {}
+    report["loopback_verify_ok"] = verified.returncode == 0 and bool(payload.get("verified"))
+    # Echo only the non-secret verification facts (never the consent URL/state).
+    report["loopback_verify"] = {
+        key: payload.get(key)
+        for key in (
+            "interpreter",
+            "imports_ok",
+            "client_configured",
+            "loopback_bound",
+            "loopback_host",
+            "loopback_port",
+            "consent_url_built",
+            "error",
+        )
+        if key in payload
+    }
+    if not payload:
+        report["loopback_verify_output"] = scrub((verified.stderr or verified.stdout).strip())
+    report["ok"] = bool(
+        report["imports_ok"] and report["bootstrap_google_auth_ok"] and report["loopback_verify_ok"]
+    )
+    return report
 
 
 def verify_heartbeat(
@@ -1639,6 +1846,10 @@ class GoogleOnboardingOutcome:
     authorized: bool = False
     integration_id: str | None = None
     binding_verified: bool = False
+    # The exact interpreter the Google readiness probe AND the Google authorization
+    # ran in (``None`` when no machine runtime interpreter was available). Recorded
+    # so the wizard/tests can prove which Python did the work instead of inferring it.
+    runtime_python: Path | None = None
 
     @property
     def ready(self) -> bool:
@@ -1651,10 +1862,23 @@ class GoogleOnboardingOutcome:
         )
 
 
+# Message printed when the managed agent has no usable machine-owned runtime
+# interpreter for Google authorization. We fail closed here instead of importing
+# Google in the setup CLI's own interpreter: that accidental in-process fallback is
+# what produced the misleading ``No module named 'google_auth_oauthlib'``.
+NO_RUNTIME_FOR_GOOGLE_AUTH_MSG = (
+    "Google authorization requires the machine-owned runtime interpreter "
+    "({runtime_python}), which is not present. Google was NOT authorized. Re-run "
+    "'securedact-mcp setup --agent --google yes' from an elevated Administrator "
+    "PowerShell so the machine runtime is provisioned with the Google extra "
+    "(verify it with 'securedact-mcp agent google-verify')."
+)
+
+
 def _authorize_google_machine(
     *,
     data_dir: Path,
-    runtime_path: Path | str | None,
+    runtime_python: Path | None,
     command_runner: CommandRunner | None,
     input_fn: Callable[[str], str],
     output: Any,
@@ -1663,22 +1887,27 @@ def _authorize_google_machine(
     authorize_google_fn: Callable[..., bool] | None,
     google_byo: bool = False,
 ) -> bool:
-    """Run machine-local Google OAuth, preferring the machine-owned runtime.
+    """Run machine-local Google OAuth in the machine-owned runtime interpreter.
 
-    When a machine runtime interpreter exists (the supported, secure path) the
-    authorization executes *inside* it via the local loopback flow — so the same
-    Google extra that the scheduled agent uses is the one that authorizes, and a
-    missing ``google_auth_oauthlib`` in the setup CLI's interpreter cannot break
-    it. Only when no machine runtime is available (dev / non-Windows) does it fall
-    back to the injected (or default) in-process implementation via the BYO/
-    managed selection.
+    ``runtime_python`` is the interpreter resolved once by
+    :func:`resolve_machine_runtime_python` — the same one the readiness probe used.
+    When it exists (the supported, secure path) the authorization executes *inside*
+    it via the local loopback flow, so the Google extra that the scheduled agent
+    uses is the one that authorizes.
+
+    When there is no machine runtime interpreter:
+
+    * an explicitly injected ``authorize_google_fn`` (dev / embedders / tests) is
+      used; otherwise
+    * on Windows we FAIL CLOSED. Importing Google in the setup CLI's own
+      interpreter was an accidental fallback: it raised
+      ``ModuleNotFoundError: google_auth_oauthlib`` from a completely different
+      Python than the one the readiness probe reported on, producing the
+      contradictory "dependencies available / not authorized" pair;
+    * on non-Windows (dev only, where there is no machine runtime at all) the
+      in-process implementation remains available.
     """
 
-    runtime_python: Path | None = None
-    if runtime_path is not None:
-        candidate = resolve_runtime_python(Path(runtime_path))
-        if candidate.exists():
-            runtime_python = candidate
     if runtime_python is not None:
         return _authorize_google_via_runtime(
             runtime_python,
@@ -1687,9 +1916,26 @@ def _authorize_google_machine(
             output,
             google_byo=google_byo,
         )
-    _authorize = authorize_google_fn or google_setup.authorize_google_machine
+    if authorize_google_fn is not None:
+        return bool(
+            authorize_google_fn(
+                data_dir,
+                input_fn=input_fn,
+                output=output,
+                non_interactive=non_interactive,
+                require_enabled=False,
+            )
+        )
+    if sys.platform == "win32":
+        print(
+            NO_RUNTIME_FOR_GOOGLE_AUTH_MSG.format(
+                runtime_python=resolve_runtime_python(default_runtime_path())
+            ),
+            file=output,
+        )
+        return False
     return bool(
-        _authorize(
+        google_setup.authorize_google_machine(
             data_dir,
             input_fn=input_fn,
             output=output,
@@ -1697,6 +1943,41 @@ def _authorize_google_machine(
             require_enabled=False,
         )
     )
+
+
+def build_google_auth_argv(
+    runtime_python: Path | str,
+    data_dir: Path | str,
+    *,
+    google_byo: bool = False,
+    verify: bool = False,
+) -> list[str]:
+    """Return the exact argv used to run Google OAuth inside the machine runtime.
+
+    Single source of truth for the command line, so the wizard, the verification
+    command, and the tests all assert the same thing:
+
+        <runtime python> -m securedact_mcp.agent.runtime_bootstrap google-auth
+            --data-dir <machine root> --loopback [--google-byo] [--verify]
+
+    No OAuth code/token/client secret is ever placed on this argv; ``--google-byo``
+    is a non-secret selection marker only.
+    """
+
+    argv = [
+        str(runtime_python),
+        "-m",
+        "securedact_mcp.agent.runtime_bootstrap",
+        "google-auth",
+        "--data-dir",
+        str(data_dir),
+        "--loopback",
+    ]
+    if google_byo:
+        argv.append("--google-byo")
+    if verify:
+        argv.append("--verify")
+    return argv
 
 
 def _authorize_google_via_runtime(
@@ -1722,19 +2003,13 @@ def _authorize_google_via_runtime(
     """
 
     runner = command_runner or _default_runner
-    loopback_argv = [
-        str(runtime_python),
-        "-m",
-        "securedact_mcp.agent.runtime_bootstrap",
-        "google-auth",
-        "--data-dir",
-        str(data_dir),
-        "--loopback",
-    ]
-    if google_byo:
-        loopback_argv.append("--google-byo")
+    loopback_argv = build_google_auth_argv(runtime_python, data_dir, google_byo=google_byo)
+    # Name the interpreter that performs the authorization, so the operator can see
+    # (and the retest can prove) that it is the machine-owned runtime and not the
+    # setup CLI's own Python.
+    print(f"Google authorization interpreter: {runtime_python}", file=output)
     try:
-        result = runner(loopback_argv, RunInput())
+        result = runner(loopback_argv, RunInput(env=_env_for(Path(data_dir))))
     except Exception as exc:  # a runtime that cannot be launched is a hard stop
         print(
             f"Google authorization could not run in the machine runtime: {scrub(str(exc))}",
@@ -1801,29 +2076,43 @@ def run_google_machine_onboarding(
     Returns a :class:`GoogleOnboardingOutcome` whose ``ready`` property is the
     single fail-closed signal the wizard uses. Nothing here is ever silently
     skipped: every unmet pre-condition is reported and leaves ``ready`` False.
+
+    ``runtime_path`` is the machine-owned runtime the caller actually provisioned.
+    The interpreter inside it is resolved ONCE here and used for both the readiness
+    probe and the authorization, so the two can never report on different Pythons.
     """
 
-    _authorize = authorize_google_fn or google_setup.authorize_google_machine
     _bind = bind_google_fn or google_setup.bind_google_machine
     _apply_env = apply_google_env_fn or google_setup.apply_google_machine_env
     _verify = verify_binding_fn or google_setup.verify_machine_binding
     _client_config = client_config_fn or google_setup.prompt_google_client_config
+    # One resolution, one interpreter: the probe below and the authorization further
+    # down are guaranteed to talk about the same Python.
+    runtime_python = resolve_machine_runtime_python(runtime_path)
     _deps_ready = deps_ready_fn or (
-        lambda: _google_runtime_deps_ready(runtime_path, command_runner)
+        lambda: _google_runtime_deps_ready(runtime_python, command_runner)
     )
 
-    outcome = GoogleOnboardingOutcome(selected=True)
+    outcome = GoogleOnboardingOutcome(selected=True, runtime_python=runtime_python)
 
     print(file=output)
     print("[Google Workspace]", file=output)
+    print(
+        "Machine runtime interpreter: "
+        + (str(runtime_python) if runtime_python is not None else "not available"),
+        file=output,
+    )
 
-    # 1. Required Google dependencies must be importable from the machine runtime.
+    # 1. Required Google dependencies must be importable from the machine runtime,
+    #    and that runtime's bootstrap must actually carry the google-auth command.
     outcome.deps_ready = bool(_deps_ready())
     if not outcome.deps_ready:
         print(
-            "The machine runtime is missing the Google connector dependencies; "
-            "Google scans cannot run. Re-run setup so the Google extra is "
-            "installed into the machine runtime.",
+            "The machine runtime cannot perform Google work (missing Google "
+            "connector dependencies, or a stale runtime whose bootstrap has no "
+            "'google-auth' command); Google scans cannot run. Re-run setup so the "
+            "Google extra and the current agent build are installed into the "
+            "machine runtime, then check 'securedact-mcp agent google-verify'.",
             file=output,
         )
         return outcome
@@ -1838,19 +2127,20 @@ def run_google_machine_onboarding(
     # 2. Machine-local OAuth must be valid (reused idempotently when present). The
     #    authorization runs inside the *machine-owned runtime* (which carries the
     #    Google extra) whenever one is available, so a ``google_auth_oauthlib``
-    #    import error in the setup CLI's own interpreter can never break it. A
-    #    missing runtime dependency is an INSTALLATION/readiness failure, not a
-    #    reason to ask the customer for OAuth credentials (fail closed).
+    #    import error in the setup CLI's own interpreter can never break it — and
+    #    when no machine runtime exists we fail closed instead of importing Google
+    #    in-process. A missing runtime dependency is an INSTALLATION/readiness
+    #    failure, not a reason to ask the customer for OAuth credentials.
     print("Authorizing Google locally against the machine data root...", file=output)
     outcome.authorized = _authorize_google_machine(
         data_dir=data_dir,
-        runtime_path=runtime_path,
+        runtime_python=runtime_python,
         command_runner=command_runner,
         input_fn=input_fn,
         output=output,
         non_interactive=non_interactive,
         secret_input_fn=secret_input_fn,
-        authorize_google_fn=_authorize,
+        authorize_google_fn=authorize_google_fn,
         google_byo=google_byo,
     )
     if not outcome.authorized:
@@ -1871,13 +2161,13 @@ def run_google_machine_onboarding(
             if collected:
                 outcome.authorized = _authorize_google_machine(
                     data_dir=data_dir,
-                    runtime_path=runtime_path,
+                    runtime_python=runtime_python,
                     command_runner=command_runner,
                     input_fn=input_fn,
                     output=output,
                     non_interactive=non_interactive,
                     secret_input_fn=secret_input_fn,
-                    authorize_google_fn=_authorize,
+                    authorize_google_fn=authorize_google_fn,
                     google_byo=google_byo,
                 )
         if not outcome.authorized:
@@ -2195,6 +2485,15 @@ def run_managed_agent_module(
     print("Service:", result.get("service_name"), "as", result.get("account"), file=output)
     print("Registered agent:", result.get("agent_id"), file=output)
 
+    # The runtime that was ACTUALLY provisioned above is authoritative for every
+    # subsequent runtime-scoped step (Google authorization, heartbeat). Passing
+    # ``runtime_path`` (which is normally ``None``, because neither the setup CLI nor
+    # the wizard supplies it) made the Google authorization believe there was no
+    # machine runtime and fall back to an in-process import in the setup CLI's own
+    # interpreter -> ``No module named 'google_auth_oauthlib'`` while the readiness
+    # probe (which did default to ProgramData) reported "available".
+    resolved_runtime_path: Path | str | None = result.get("runtime_path") or runtime_path  # type: ignore[assignment]
+
     # --- Google Workspace onboarding (only when configured/selected) -----------
     resolved_data = machine_data_dir
     google_outcome = GoogleOnboardingOutcome(selected=google_enabled)
@@ -2206,7 +2505,7 @@ def run_managed_agent_module(
             secret_input_fn=_secret_input,
             non_interactive=non_interactive,
             google_integration_id=google_integration_id,
-            runtime_path=runtime_path,
+            runtime_path=resolved_runtime_path,
             command_runner=command_runner,
             google_byo=byo,
             authorize_google_fn=authorize_google_fn,
@@ -2233,6 +2532,15 @@ def run_managed_agent_module(
                 file=output,
             )
             print(
+                "  Google runtime interpreter: "
+                + (
+                    str(google_outcome.runtime_python)
+                    if google_outcome.runtime_python is not None
+                    else "not available"
+                ),
+                file=output,
+            )
+            print(
                 f"  Machine-local Google OAuth: "
                 f"{'valid' if google_outcome.authorized else 'not authorized'}",
                 file=output,
@@ -2253,7 +2561,7 @@ def run_managed_agent_module(
     print("Starting managed agent...", file=output)
     online = verify_heartbeat(
         data_dir=cast("str | None", result.get("data_dir")),
-        runtime_path=runtime_path,
+        runtime_path=resolved_runtime_path,
         command_runner=command_runner,
     )
     print("Status:", "Online" if online else "Installed (heartbeat pending)", file=output)

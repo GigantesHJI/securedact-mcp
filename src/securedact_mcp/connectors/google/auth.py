@@ -53,6 +53,10 @@ LOOPBACK_STAGE_MISSING_CODE = "missing_code"
 LOOPBACK_STAGE_TOKEN_EXCHANGE = "token_exchange"  # noqa: S105 - safe stage name
 LOOPBACK_STAGE_PERSISTENCE = "persistence"
 LOOPBACK_STAGE_COMPLETE = "complete"
+# Pre-authorization structural check: a managed (SecuRedact-owned) Desktop OAuth
+# client requires the SecuRedact-managed client secret before any browser launch
+# or Google request. Reported before the loopback server is even built.
+LOOPBACK_STAGE_PRE_AUTHORIZATION = "pre_authorization"
 
 # Safe error codes (bounded vocabulary, no PII / secrets).
 ERR_STATE_MISMATCH = "google_loopback_state_mismatch"
@@ -62,6 +66,11 @@ ERR_TOKEN_EXCHANGE_FAILED = "google_token_exchange_failed"  # noqa: S105 - safe 
 ERR_PERSISTENCE_FAILED = "google_token_persistence_failed"
 ERR_UNEXPECTED = "google_loopback_unexpected_error"
 ERR_CONFIG_MISSING = "google_config_missing"
+# A managed (SecuRedact-owned) Desktop OAuth client was selected but its
+# SecuRedact-managed client secret is absent. Fail closed before any browser
+# launch / Google request (Google would reject the exchange with
+# ``invalid_request`` / "client_secret is missing").
+ERR_MANAGED_CLIENT_SECRET_MISSING = "google_managed_client_secret_missing"  # noqa: S105 - error code, not a secret
 
 # Local (pre-network) structural defects in the token exchange. These are raised
 # *before* any request reaches Google, so they can never be confused with a real
@@ -385,16 +394,20 @@ class _GoogleCredentials(Protocol):
 def build_flow(config: GoogleConnectorConfig, *, use_pkce: bool = True) -> Any:
     """Build an OAuth flow for the configured client/scopes.
 
-    Uses the Desktop/Installed application client type when no client secret is
-    present (a SecuRedact-managed public client), or the confidential ``web`` type
-    when a secret is supplied (BYO/enterprise). A public client requires no secret.
+    Uses the Desktop/Installed application client type (``installed``) for the
+    SecuRedact-managed Desktop OAuth application -- even when the SecuRedact-managed
+    Desktop client secret is present -- or the confidential ``web`` type for BYO
+    (customer-supplied client id/secret). For the managed Desktop client, Google's
+    token endpoint expects the installed-app client type AND requires the secret in
+    the token request, so the secret is sent (it is SecuRedact-managed application
+    configuration, not a customer secret).
 
     The ``client_secret`` key is **always present** in the client config, empty for a
-    public Desktop client. ``google_auth_oauthlib.flow.Flow.fetch_token`` reads it
+    genuinely public client. ``google_auth_oauthlib.flow.Flow.fetch_token`` reads it
     with a hard ``self.client_config["client_secret"]`` subscript, so omitting the
     key raised ``KeyError: 'client_secret'`` *before any request left the machine* --
-    which surfaced as a bogus ``google_token_exchange_failed``. An empty value keeps
-    the Desktop secret optional (it is dropped from the request, never required).
+    which surfaced as a bogus ``google_token_exchange_failed``. A present (managed or
+    BYO) secret is sent in the token request; only a truly empty value is omitted.
 
     ``use_pkce`` drives ``autogenerate_code_verifier``, which is the only supported
     way to turn PKCE on/off in this library. ``authorization_url`` forwards unknown
@@ -559,9 +572,15 @@ def _exchange_token_only(
             flow.fetch_token(
                 code=code,
                 # RFC 6749 s2.3.1 / RFC 8252: a public Desktop client authenticates by
-                # sending ``client_id`` in the request body and no client secret at all.
+                # sending ``client_id`` in the request body. When a client secret is
+                # configured it is sent alongside ``client_id`` in the body. For the
+                # SecuRedact-managed Desktop OAuth application the Google-issued client
+                # secret IS required at token exchange, so it is sent (it is
+                # SecuRedact-managed application configuration, not a customer secret).
                 # ``include_client_id=True`` also suppresses the HTTP Basic header that
-                # requests-oauthlib would otherwise build from an empty secret.
+                # requests-oauthlib would otherwise build from an empty secret; an empty
+                # secret is passed as ``None`` so it is omitted entirely (genuinely
+                # public client / BYO public client).
                 client_secret=client_secret or None,
                 include_client_id=True,
             )
@@ -863,6 +882,17 @@ def run_local_oauth(
     Injectable boundaries (``_exchange_fn`` / ``_browser_open`` / ``_server_cls``)
     make the flow unit-testable without a real browser or network.
     """
+
+    # Fail closed *before* any browser launch or Google request: a managed
+    # (SecuRedact-owned) Desktop OAuth client requires the SecuRedact-managed
+    # client secret at token exchange. If it is missing, opening the browser would
+    # only let the user authorize and then be rejected by Google with
+    # ``invalid_request`` / "client_secret is missing" -- so we stop here with a
+    # clear, bounded outcome (no prompt, no secret material).
+    if config.managed and not config.client_secret:
+        return _loopback_failure(
+            LOOPBACK_STAGE_PRE_AUTHORIZATION, ERR_MANAGED_CLIENT_SECRET_MISSING
+        )
 
     server_cls = _server_cls or LoopbackOAuthServer
     server = server_cls(expected_state="", timeout=timeout_seconds)

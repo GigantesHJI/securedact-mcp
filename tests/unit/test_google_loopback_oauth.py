@@ -1000,3 +1000,242 @@ def test_readiness_becomes_google_authorized_only_after_success(
     assert outcome.binding_verified is True
     assert outcome.ready is True
     assert (machine / "agent" / "connector-bindings.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# 24. Managed Desktop mode sends the configured managed client secret
+# ---------------------------------------------------------------------------
+#
+# Google's Desktop OAuth token endpoint for the SecuRedact-managed application
+# REQUIRES the Google-issued Desktop client secret at token exchange (a missing
+# value is rejected with ``invalid_request`` / "client_secret is missing"). The
+# managed Desktop client secret is SecuRedact-managed application configuration
+# (not a customer secret and not a customer token); it must be sent in the token
+# request for the managed Desktop client.
+
+
+@requires_google
+def test_managed_desktop_sends_configured_secret(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    monkeypatch.setenv(
+        managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, "managed-desktop-secret-value"
+    )
+    cfg = load_google_config(data_dir=tmp_path)
+    # Managed Desktop client: owned by SecuRedact, installed client type, secret present.
+    assert cfg.managed is True
+    assert cfg.client_type == "installed"
+    assert cfg.client_secret == "managed-desktop-secret-value"  # noqa: S105
+
+    if not _HAS_GOOGLE:
+        pytest.skip("google extra not installed")
+
+    from google_auth_oauthlib.flow import Flow
+
+    class _FakeCreds:
+        def to_json(self) -> str:
+            return '{"refresh_token": "RT_MACHINE_ONLY"}'
+
+    captured: dict[str, object] = {}
+
+    def _fake_fetch(self, *, code, client_secret, include_client_id, **_kw):  # type: ignore[no-untyped-def]
+        captured["code"] = code
+        captured["client_secret"] = client_secret
+        captured["include_client_id"] = include_client_id
+        # ``Flow.credentials`` is a read-only property that builds a Credentials
+        # object from the oauth2session; emulate a successful exchange by making
+        # it return a fake creds (the real fetch_token would have populated it).
+        return None
+
+    monkeypatch.setattr(Flow, "fetch_token", _fake_fetch)
+    monkeypatch.setattr(Flow, "credentials", property(lambda self: _FakeCreds()))
+
+    outcome = run_local_oauth(cfg, _server_cls=_GoodServer, _browser_open=lambda _u: None)
+    assert outcome.authorized is True
+    # The configured managed Desktop client secret was actually sent to Google's
+    # token endpoint (this is the regression: previously it was omitted).
+    assert captured["client_secret"] == "managed-desktop-secret-value"  # noqa: S105
+    assert captured["code"] == "AUTHCODE_SECRET"
+    assert captured["include_client_id"] is True
+
+
+# ---------------------------------------------------------------------------
+# 25. Missing managed client secret fails clearly before the browser opens
+# ---------------------------------------------------------------------------
+
+
+@requires_google
+def test_missing_managed_secret_fails_before_browser(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+    cfg = load_google_config(data_dir=tmp_path)
+    assert cfg.managed is True
+    assert not cfg.client_secret
+
+    browser_urls: list[str] = []
+    outcome = run_local_oauth(cfg, _browser_open=lambda u: browser_urls.append(u))
+    # Fail closed with a clear, bounded outcome -- before any browser launch and
+    # before any Google request.
+    assert outcome.authorized is False
+    assert outcome.stage == google_auth_mod.LOOPBACK_STAGE_PRE_AUTHORIZATION
+    assert outcome.error_code == google_auth_mod.ERR_MANAGED_CLIENT_SECRET_MISSING
+    # The browser must not have been opened and no network request made.
+    assert browser_urls == []
+
+
+# ---------------------------------------------------------------------------
+# 26. Normal customer setup never prompts for client id/secret
+# ---------------------------------------------------------------------------
+
+
+def test_normal_customer_setup_resolves_managed_without_prompt(tmp_path: Path, monkeypatch) -> None:
+    # Normal (managed) mode: only the SecuRedact-managed client id is supplied by
+    # packaging; the customer is never asked for an OAuth client id or secret.
+    monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+
+    cfg = load_google_config(data_dir=tmp_path)
+    assert cfg.managed is True
+    assert cfg.client_id == "managed.app.id.example"
+    # No customer secret is required for the resolution itself; the managed Desktop
+    # secret is SecuRedact application configuration supplied out-of-band.
+    assert cfg.client_secret in (None, "")
+
+
+# ---------------------------------------------------------------------------
+# 27. The managed secret never appears in argv / logs / Task Scheduler
+# ---------------------------------------------------------------------------
+
+
+def test_managed_secret_not_in_argv_or_task_scheduler_action(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    monkeypatch.setenv(
+        managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, "managed-desktop-secret-value"
+    )
+    runtime_python = tmp_path / "runtime" / "python.exe"
+    argv = deploy.build_google_auth_argv(runtime_python, tmp_path, google_byo=False)
+    blob = " ".join(argv)
+    # The loopback argv is what becomes the scheduled-task action: the managed
+    # secret (and the managed id override) must never be embedded there.
+    assert "managed-desktop-secret-value" not in blob
+    assert "SECUREDACT_GOOGLE_MANAGED" not in blob
+
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="securedact_mcp.agent.deploy"):
+        env = deploy._env_for(Path(tmp_path))
+    # The secret IS forwarded via the subprocess environment (transient, not argv,
+    # not Task Scheduler, not a machine env var), but it is never logged.
+    assert (
+        env.get(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV)
+        == "managed-desktop-secret-value"
+    )
+    assert "managed-desktop-secret-value" not in caplog.text
+
+
+@requires_google
+def test_managed_secret_not_logged_during_exchange(tmp_path: Path, monkeypatch, caplog) -> None:
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    monkeypatch.setenv(
+        managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, "managed-desktop-secret-value"
+    )
+    cfg = load_google_config(data_dir=tmp_path)
+
+    class _FakeCreds:
+        def to_json(self) -> str:
+            return '{"refresh_token": "RT_MACHINE_ONLY"}'
+
+    from google_auth_oauthlib.flow import Flow
+
+    def _fake_fetch(self, *, code, client_secret, include_client_id, **_kw):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(Flow, "fetch_token", _fake_fetch)
+    monkeypatch.setattr(Flow, "credentials", property(lambda self: _FakeCreds()))
+
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="securedact_mcp.connectors.google.auth"):
+        outcome = run_local_oauth(cfg, _server_cls=_GoodServer, _browser_open=lambda _u: None)
+    assert outcome.authorized is True
+    log_text = caplog.text
+    assert "managed-desktop-secret-value" not in log_text
+    assert "AUTHCODE_SECRET" not in log_text
+
+
+# ---------------------------------------------------------------------------
+# 28. invalid_request / client_secret-is-missing regression is fixed
+# ---------------------------------------------------------------------------
+
+
+@requires_google
+def test_invalid_request_client_secret_missing_surfaced_safely(tmp_path: Path, monkeypatch) -> None:
+    from google_auth_oauthlib.flow import Flow
+    from oauthlib.oauth2.rfc6749.errors import InvalidRequestError
+
+    cfg = GoogleConnectorConfig(
+        enabled=True,
+        client_id="byo.app.id",
+        client_secret="byo-secret",  # noqa: S106 - synthetic test secret
+        redirect_uri="http://127.0.0.1:0/",
+        scopes=default_connector_scopes(),
+        token_path=Path(tmp_path) / "google" / "token.json.enc",
+        key_path=Path(tmp_path) / "google" / "token.key",
+        client_type="web",
+        managed=False,
+    )
+
+    # Simulate Google's token endpoint rejecting the exchange exactly as the laptop
+    # observed: ``invalid_request`` / "client_secret is missing". The real
+    # fetch_token wrapper must surface Google's RFC 6749 error token verbatim.
+    def _boom(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise InvalidRequestError(description="client_secret is missing")
+
+    monkeypatch.setattr(Flow, "fetch_token", _boom)
+    outcome = run_local_oauth(cfg, _server_cls=_GoodServer)
+    assert outcome.authorized is False
+    assert outcome.stage == "token_exchange"
+    # Google's RFC 6749 error token is preserved verbatim (the regression was that
+    # a missing secret produced a bogus generic failure); the secret itself is not.
+    assert outcome.oauth_error == "invalid_request"
+    assert "client_secret" in (outcome.error_description or "")
+    assert "byo-secret" not in json.dumps(outcome.to_payload())
+    assert "AUTHCODE_SECRET" not in json.dumps(outcome.to_payload())
+
+
+# ---------------------------------------------------------------------------
+# 29. BYO flow remains separate from managed
+# ---------------------------------------------------------------------------
+
+
+def test_byo_flow_uses_own_secret_not_managed(tmp_path: Path, monkeypatch) -> None:
+    # Explicit BYO client id/secret from env are NOT the managed app and are not
+    # flagged as managed.
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    monkeypatch.setenv("SECUREDACT_GOOGLE_CLIENT_ID", "byo.app.id")
+    monkeypatch.setenv("SECUREDACT_GOOGLE_CLIENT_SECRET", "byo-secret")
+    cfg = load_google_config(data_dir=tmp_path)
+    assert cfg.managed is False
+    assert cfg.client_id == "byo.app.id"
+    assert cfg.client_secret == "byo-secret"  # noqa: S105
+    assert cfg.client_type == "web"
+
+
+def test_managed_secret_not_persisted_to_customer_store(tmp_path: Path, monkeypatch) -> None:
+    from securedact_mcp.agent import google_setup
+    from securedact_mcp.connectors.google.storage import GoogleClientConfigStore
+
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    monkeypatch.setenv(
+        managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, "managed-desktop-secret-value"
+    )
+    monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_SECRET", raising=False)
+    google_setup.apply_google_machine_env(tmp_path)
+    # The customer BYO client-config store must remain empty: the managed secret is
+    # SecuRedact application configuration supplied via env, never stored as a
+    # customer (BYO) client secret.
+    assert not (Path(tmp_path) / "google" / "client_config.json.enc").exists()
+    assert GoogleClientConfigStore(tmp_path).load() == (None, None)

@@ -23,10 +23,21 @@ from __future__ import annotations
 
 import os
 
-# Non-secret environment override. This is the least operationally fragile source
-# of truth and is what packaging/configuration should supply (e.g. baked into the
-# released installer or provided by a configuration management policy).
+# Non-secret environment override for the SecuRedact-managed (owned) Google OAuth
+# *client id*. This is the least operationally fragile source of truth and is what
+# packaging/configuration should supply (e.g. baked into the released installer or
+# provided by a configuration management policy). A client id is public by design.
 SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV = "SECUREDACT_GOOGLE_MANAGED_CLIENT_ID"
+
+# Non-secret environment override for the SecuRedact-managed Desktop OAuth *client
+# secret*. This is **SecuRedact-managed application configuration**, not a customer
+# secret and not a customer OAuth token: normal customers never see, type, or own
+# it. It is consumed only inside the local token exchange and is never stored
+# outside the local machine, never logged, never placed on argv, and never sent to
+# the control plane. Google's Desktop OAuth token endpoint for this client requires
+# it (a missing value is rejected with ``invalid_request`` / "client_secret is
+# missing"), so it must be configured before the browser authorization begins.
+SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV = "SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET"  # noqa: S105 - env name, not a secret
 
 # Package-compiled default. Intentionally empty: no real Google credential is
 # invented or committed. Operators/packaging provide the public client id via the
@@ -40,6 +51,23 @@ MANAGED_CLIENT_NOT_CONFIGURED_MSG = (
     "SecuRedact Google Workspace authorization is not yet configured for this build. "
     "The SecuRedact-managed Google OAuth application is unavailable in this build."
 )
+
+# Clear, customer-safe failure used when the managed app id is configured but the
+# SecuRedact-managed Desktop client secret is missing. Normal customers must never
+# be prompted for this value; it is SecuRedact-managed application configuration
+# supplied by packaging/policy.
+MANAGED_CLIENT_SECRET_NOT_CONFIGURED_MSG = (
+    "The SecuRedact-managed Google Desktop OAuth client secret is not configured. "  # noqa: S105
+    "Google rejects the token exchange without it (invalid_request: client_secret is "
+    "missing). This is SecuRedact-managed configuration, not a value a customer "
+    "supplies; set SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET (or have it provided by "
+    "packaging) and re-run setup."
+)
+
+# Safe error code surfaced by the token-exchange pre-check when a managed Desktop
+# client is selected but its client secret is absent (fail closed before any
+# browser interaction or Google request).
+MANAGED_CLIENT_SECRET_MISSING_CODE = "google_managed_client_secret_missing"  # noqa: S105 - error code, not a secret
 
 # UX labels that distinguish the normal (managed) path from the advanced/enterprise
 # bring-your-own (BYO) path. Normal customers should never see OAuth client prompts.
@@ -82,3 +110,44 @@ def assert_managed_client_configured() -> str:
 
         raise GoogleConfigError(MANAGED_CLIENT_NOT_CONFIGURED_MSG)
     return client_id
+
+
+def resolve_managed_client_secret() -> str | None:
+    """Return the SecuRedact-managed Desktop OAuth client secret, or ``None``.
+
+    This is SecuRedact-managed application configuration (not a customer secret and
+    not a customer OAuth token). It is resolved from a non-secret environment
+    override supplied by packaging/policy. A blank/whitespace value is treated as
+    not configured. Never raises.
+    """
+
+    env_secret = os.getenv(SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV)
+    if env_secret and env_secret.strip():
+        return env_secret.strip()
+    return None
+
+
+def is_managed_client_secret_configured() -> bool:
+    """True only when a managed (owned) Desktop client secret is available."""
+
+    return resolve_managed_client_secret() is not None
+
+
+def assert_managed_client_secret_configured() -> str:
+    """Return the managed Desktop client secret, or raise (fail closed).
+
+    The managed client id must already be configured (otherwise this is a genuine
+    "managed app unavailable" situation, not a missing-secret situation). The raised
+    message is customer-safe and must never prompt the customer for this value.
+    """
+
+    if not is_managed_client_configured():
+        from .config import GoogleConfigError
+
+        raise GoogleConfigError(MANAGED_CLIENT_NOT_CONFIGURED_MSG)
+    secret = resolve_managed_client_secret()
+    if not secret:
+        from .config import GoogleConfigError
+
+        raise GoogleConfigError(MANAGED_CLIENT_SECRET_NOT_CONFIGURED_MSG)
+    return secret

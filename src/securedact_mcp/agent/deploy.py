@@ -1488,10 +1488,24 @@ def _safe_bootstrap_diagnostic(result: RunResult) -> str:
 
 
 def _env_for(data_dir: Path) -> dict[str, str]:
-    return {
+    env: dict[str, str] = {
         DEFAULT_DATA_DIR_ENV: str(data_dir),
         "PYTHONNOUSERSITE": "1",
     }
+    # Forward the SecuRedact-managed Google application identifiers to the
+    # machine-owned runtime so the loopback authorization can use the managed
+    # Desktop client secret. These are passed through the subprocess environment
+    # only -- never on argv, in logs, or in Task Scheduler -- and are SecuRedact
+    # application configuration, not a customer secret. (Customer BYO material is
+    # loaded from the encrypted machine-local store inside the runtime instead.)
+    for key in (
+        google_managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV,
+        google_managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV,
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
 
 
 def _run_bootstrap(
@@ -1966,6 +1980,13 @@ def _report_google_auth_failure(
 
     stage = outcome.auth_stage
     error_code = outcome.auth_error_code
+    # A managed (SecuRedact-owned) Desktop client that is configured but missing its
+    # SecuRedact-managed client secret fails the pre-authorization check. This is NOT
+    # a "managed app unavailable" situation and must NOT prompt the customer for a
+    # secret -- it is SecuRedact-managed configuration supplied by packaging/policy.
+    if error_code == google_managed.MANAGED_CLIENT_SECRET_MISSING_CODE:
+        print(google_managed.MANAGED_CLIENT_SECRET_NOT_CONFIGURED_MSG, file=output)
+        return
     if stage or error_code:
         msg = "Google authorization failed after the browser returned to SecuRedact"
         if stage:

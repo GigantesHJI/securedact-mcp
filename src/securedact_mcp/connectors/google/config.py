@@ -40,10 +40,19 @@ class GoogleConnectorConfig:
     scopes: list[str]
     token_path: Path
     key_path: Path
-    # "installed" (Desktop/Installed public client, no secret required) or "web"
-    # (confidential client with a secret). Derived from whether a client secret is
-    # present; the OAuth flow builder uses this to pick the correct client config.
+    # "installed" (Desktop/Installed application) or "web" (confidential client).
+    # For a SecuRedact-managed Desktop OAuth application this stays "installed"
+    # even when the managed Desktop client secret is present (Google's Desktop app
+    # token endpoint expects the installed-app client type, but still requires the
+    # secret in the token request). For BYO it is "web" when a customer secret is
+    # supplied and "installed" otherwise. The OAuth flow builder uses this to pick
+    # the correct client config block.
     client_type: str = "installed"
+    # True only when the resolved configuration uses the SecuRedact-managed (owned)
+    # Google OAuth application. The managed Desktop client secret is SecuRedact
+    # application configuration, not a customer secret; this flag lets the token
+    # exchange send it without treating it as customer-supplied BYO material.
+    managed: bool = False
 
     def require_credentials(self) -> tuple[str, str]:
         """Return ``(client_id, client_secret)`` or raise (fail closed).
@@ -144,15 +153,19 @@ def load_google_config(
 
     # Final fallback: the SecuRedact-managed (owned) Google OAuth application. When
     # this is configured, normal customers connect through SecuRedact's own app and
-    # never need to create their own Google Cloud project / OAuth client. An
-    # installed-app managed client may carry no secret (public client). Resolution
-    # goes through :mod:`securedact_mcp.connectors.google.managed` so the env
-    # override and the package default share one source of truth.
+    # never need to create their own Google Cloud project / OAuth client. The managed
+    # Desktop client secret is SecuRedact-managed application configuration (not a
+    # customer secret) and, for this Google client, is *required* at token exchange
+    # even though the client type stays "installed". Resolution goes through
+    # :mod:`securedact_mcp.connectors.google.managed` so the env override and the
+    # package default share one source of truth.
+    is_managed = False
     if client_id is None:
         managed_id = managed.resolve_managed_client_id()
-        managed_secret = os.getenv(GOOGLE_MANAGED_CLIENT_SECRET_ENV) or None
         if managed_id:
+            is_managed = True
             client_id = managed_id
+            managed_secret = os.getenv(GOOGLE_MANAGED_CLIENT_SECRET_ENV) or None
             client_secret = managed_secret
 
     redirect_uri = os.getenv("SECUREDACT_GOOGLE_REDIRECT_URI", "http://localhost:8080/")
@@ -177,6 +190,16 @@ def load_google_config(
     else:
         token_path, key_path = _resolve_token_paths(profile, data_dir=data_dir)
 
+    # A SecuRedact-managed Desktop OAuth application uses the "installed" client
+    # type even when its (SecuRedact-managed) client secret is present, because
+    # Google's Desktop app token endpoint expects the installed-app client type
+    # while still requiring the secret. BYO is "web" when a customer secret is
+    # supplied, otherwise "installed".
+    if is_managed:
+        client_type = "installed"
+    else:
+        client_type = "web" if client_secret else "installed"
+
     return GoogleConnectorConfig(
         enabled=enabled,
         client_id=client_id,
@@ -185,7 +208,8 @@ def load_google_config(
         scopes=scopes,
         token_path=token_path,
         key_path=key_path,
-        client_type="web" if client_secret else "installed",
+        client_type=client_type,
+        managed=is_managed,
     )
 
 

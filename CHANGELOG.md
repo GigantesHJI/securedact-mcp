@@ -48,6 +48,20 @@ public server release.
   machine-owned runtime (which always carries the Google extra), and a missing
   runtime dependency fails closed instead of asking for credentials.
 
+- **Managed Desktop OAuth now sends the SecuRedact-managed client secret at token
+  exchange.** Google's Desktop OAuth token endpoint for the SecuRedact-managed
+  application requires the Google-issued Desktop client secret (a missing value is
+  rejected with `invalid_request` / "client_secret is missing"). The managed
+  (`SECUREDACT_GOOGLE_MANAGED_CLIENT_ID`) and managed-secret
+  (`SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET`) environment overrides now both resolve
+  into the OAuth flow as SecuRedact-managed application configuration (not a customer
+  secret and not a customer OAuth token). A managed Desktop client missing its secret
+  now fails closed with a clear, bounded message *before* the browser opens or any
+  Google request is made, instead of reaching Google and being rejected. Normal
+  customers are never prompted for either value; BYO continues to accept the customer's
+  own client id/secret explicitly, and the managed secret is never placed on argv, in
+  logs, or in Task Scheduler.
+
 - **Managed-agent UAC elevation hand-off now continues setup in the same RC
   environment.** The elevated re-launch uses `sys.executable` plus the
   `-m securedact_mcp.cli` module form with the working directory preserved, so it

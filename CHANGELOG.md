@@ -10,6 +10,14 @@ public server release.
 
 ### Added
 
+- **Internal integration-resolution abstraction for Google Workspace onboarding.**
+  Integration selection now lives in a single place
+  (`securedact_mcp.agent.google_setup.resolve_google_integration`) with explicit
+  result states (`resolved_explicit`, `resolved_existing_binding`,
+  `resolved_control_plane`, `unavailable`, `ambiguous`). It is ready for a future
+  tenant-scoped control-plane lookup (an injected `ControlPlaneIntegrationSource`)
+  without inventing that endpoint now.
+
 - **First-class Google Workspace onboarding for the managed agent.** `securedact-mcp
   setup` now provisions the Google connector dependencies into the machine-owned
   runtime (installing `securedact-mcp[google]==<running version>` plus a fail-closed

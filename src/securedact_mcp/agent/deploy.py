@@ -1860,6 +1860,9 @@ class GoogleOnboardingOutcome:
     authorized: bool = False
     integration_id: str | None = None
     binding_verified: bool = False
+    # The structured integration-resolution result (single source of truth for which
+    # dashboard integration was selected). ``None`` until resolution runs.
+    resolution: google_setup.GoogleIntegrationResolution | None = None
     # Bounded, safe diagnostics for a failed authorization (no secret material):
     # the post-callback stage and a safe error code surfaced by the machine runtime.
     auth_stage: str | None = None
@@ -2290,24 +2293,63 @@ def run_google_machine_onboarding(
             )
             return outcome
 
-    # 3. Resolve the dashboard integration id (ask clearly when not discoverable).
+    # 3. Resolve the dashboard integration id through the single integration
+    #    resolver. Normal customers are never asked for a raw id; the only
+    #    interactive path to a manual id is the explicit --google-integration-id
+    #    advanced flag. When automatic resolution is unavailable the wizard reports
+    #    the advisory + advanced escape hatch rather than prompting for an opaque id.
     try:
-        outcome.integration_id = google_setup.resolve_google_integration_id(
-            data_dir,
-            google_integration_id=google_integration_id,
-            non_interactive=non_interactive,
+        resolution = google_setup.resolve_google_integration(
+            explicit_id=google_integration_id,
+            data_dir=data_dir,
+            interactive=not non_interactive,
             input_fn=input_fn,
             output=output,
         )
     except AgentError as exc:
         print(f"Google Workspace integration ID rejected: {scrub(str(exc))}", file=output)
         return outcome
-    if not outcome.integration_id:
+    outcome.resolution = resolution
+    outcome.integration_id = resolution.integration_id
+
+    if resolution.state == google_setup.GoogleIntegrationResolutionState.RESOLVED_EXISTING_BINDING:
+        print("Google Workspace integration already bound locally; reusing it.", file=output)
+    elif resolution.state == google_setup.GoogleIntegrationResolutionState.RESOLVED_CONTROL_PLANE:
         print(
-            "No Google Workspace integration ID was provided, so the machine-local "
-            "connector binding could not be created. Google jobs will fail with "
-            "'no local connector binding' until it is supplied; re-run "
-            "'securedact-mcp setup --agent --google yes --google-integration-id <id>'.",
+            "Selected the Google Workspace integration from your SecuRedact account.", file=output
+        )
+    elif resolution.state == google_setup.GoogleIntegrationResolutionState.AMBIGUOUS:
+        print(
+            "Multiple Google Workspace integrations are available; an explicit choice "
+            "is required. Re-run with --google-integration-id <id>, or select one in "
+            "the dashboard first.",
+            file=output,
+        )
+        return outcome
+
+    if not outcome.integration_id:
+        # Automatic resolution unavailable: tell the operator clearly, do NOT ask for
+        # a raw opaque id, and point at the advanced/manual escape hatch.
+        print("Google authorization complete.", file=output)
+        print(file=output)
+        if resolution.message:
+            print(resolution.message, file=output)
+            print(file=output)
+        print(
+            "Automatic tenant-scoped integration selection will be supported by the "
+            "dashboard/control plane.",
+            file=output,
+        )
+        print(file=output)
+        print("Advanced / manual setup:", file=output)
+        print(
+            "  securedact-mcp setup --agent --google yes --google-integration-id <id>",
+            file=output,
+        )
+        print(file=output)
+        print(
+            "Managed Agent: NOT ready - Google Workspace authorization succeeded but "
+            "no dashboard integration is bound.",
             file=output,
         )
         return outcome
@@ -2624,11 +2666,26 @@ def run_managed_agent_module(
             # binding is exactly the defect that made scheduled Google jobs fail
             # with 'no local connector binding for integration_id ...'.
             print(file=output)
-            print(
-                "Managed Agent: NOT ready - Google Workspace was selected but the "
-                "machine-local Google onboarding is incomplete.",
-                file=output,
-            )
+            if (
+                google_outcome.authorized
+                and google_outcome.integration_id is None
+                and google_outcome.resolution is not None
+                and google_outcome.resolution.state
+                == google_setup.GoogleIntegrationResolutionState.UNAVAILABLE
+            ):
+                # Onboarding already printed the detailed advisory + advanced escape
+                # hatch; keep the one-line readiness summary consistent with it.
+                print(
+                    "Managed Agent: NOT ready - Google Workspace authorization succeeded "
+                    "but no dashboard integration is bound.",
+                    file=output,
+                )
+            else:
+                print(
+                    "Managed Agent: NOT ready - Google Workspace was selected but the "
+                    "machine-local Google onboarding is incomplete.",
+                    file=output,
+                )
             print(
                 f"  Google dependencies: {'available' if google_outcome.deps_ready else 'missing'}",
                 file=output,

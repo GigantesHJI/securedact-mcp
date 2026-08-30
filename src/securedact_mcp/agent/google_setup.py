@@ -30,6 +30,7 @@ import re
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, TextIO, cast
 
@@ -46,7 +47,6 @@ GOOGLE_CONNECTOR_PLATFORM = "google_workspace"
 GOOGLE_ENABLED_ENV = "SECUREDACT_GOOGLE_ENABLED"
 GOOGLE_CLIENT_ID_ENV = "SECUREDACT_GOOGLE_CLIENT_ID"
 GOOGLE_CLIENT_SECRET_ENV = "SECUREDACT_GOOGLE_CLIENT_SECRET"  # noqa: S105 - env name, not a secret
-GOOGLE_INTEGRATION_ID_ENV = "SECUREDACT_GOOGLE_INTEGRATION_ID"
 
 # Bring the SecuRedact-managed (owned) Google OAuth application identifiers into
 # scope. When these are configured, normal customers connect through SecuRedact's
@@ -65,7 +65,26 @@ _INTEGRATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 GOOGLE_SELECTION_PROMPT = (
     "Connect a Google Workspace integration to this computer's managed agent? [y/N] "
 )
-GOOGLE_INTEGRATION_ID_PROMPT = "Google Workspace integration ID (from your SecuRedact dashboard): "
+
+# The raw dashboard integration id is an internal implementation detail. Normal
+# customers must never be asked to find/paste it (see :func:`resolve_google_integration`
+# and the RC setup UX). The only supported interactive surface for a manual id is the
+# explicit advanced/enterprise flag ``--google-integration-id``; it is intentionally
+# NOT surfaced as a routine wizard question.
+GOOGLE_INTEGRATION_ID_ADVANCED_HINT = (
+    "For advanced/manual setup, rerun with:\n"
+    "  securedact-mcp setup --agent --google yes --google-integration-id <id>"
+)
+
+# Conceptual control-plane capability the dashboard/webapp must eventually provide.
+# It is NOT implemented in this task; the resolver accepts an injected source so the
+# future endpoint can plug in without changing the wizard. See the roadmap note in
+# docs/managed-agent.md ("tenant-scoped eligible integration discovery").
+#
+# Response shape (future, agent-authenticated, tenant-scoped, safe metadata only):
+#   {"integrations": [{"id": "...", "platform": "google_workspace",
+#                      "display_name": "My Workspace"}, ...]}
+CONTROL_PLANE_INTEGRATIONS_PATH = "/v1/agents/integrations/eligible"
 
 
 @dataclass
@@ -141,6 +160,186 @@ def normalize_integration_id(raw: str | None) -> str | None:
             "SecuRedact dashboard (letters, digits, '-', '_', '.', ':')"
         )
     return text
+
+
+# ---------------------------------------------------------------------------
+# Internal integration-resolution abstraction (single source of truth)
+# ---------------------------------------------------------------------------
+#
+# Integration selection must live in ONE place instead of being scattered through
+# the wizard. This resolver implements the supported precedence and is the only
+# component that decides *which* dashboard Google Workspace integration a machine
+# should bind to. It is deliberately ready for a future tenant-scoped control-plane
+# lookup without inventing that endpoint now.
+
+
+class GoogleIntegrationResolutionState(StrEnum):
+    """Outcome of :func:`resolve_google_integration`."""
+
+    RESOLVED_EXPLICIT = "resolved_explicit"
+    RESOLVED_EXISTING_BINDING = "resolved_existing_binding"
+    RESOLVED_CONTROL_PLANE = "resolved_control_plane"
+    UNAVAILABLE = "unavailable"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class GoogleIntegrationCandidate:
+    """Safe, credential-free metadata about an eligible Google Workspace integration."""
+
+    id: str
+    platform: str
+    display_name: str | None = None
+
+    def label(self) -> str:
+        return self.display_name or self.id
+
+
+class ControlPlaneIntegrationSource(Protocol):
+    """Future agent-authenticated, tenant-scoped integration discovery (NOT implemented).
+
+    The resolver accepts an injected source so the eventual dashboard/webapp endpoint
+    can plug in without changing the wizard. It must be tenant-scoped, authenticated
+    with the registered managed-agent credential, and return ONLY safe metadata (never
+    an OAuth token, client secret, Drive content, or customer PII).
+    """
+
+    def list_eligible_google_integrations(
+        self, *, agent_identity: str | None = ...
+    ) -> list[GoogleIntegrationCandidate]: ...
+
+
+@dataclass(slots=True)
+class GoogleIntegrationResolution:
+    """Structured result of integration resolution (no secrets)."""
+
+    state: GoogleIntegrationResolutionState
+    integration_id: str | None = None
+    candidates: list[GoogleIntegrationCandidate] | None = None
+    message: str | None = None
+
+    @property
+    def resolved(self) -> bool:
+        return self.integration_id is not None
+
+
+def resolve_google_integration(
+    *,
+    explicit_id: str | None = None,
+    data_dir: Path | str | None = None,
+    files: AgentFiles | None = None,
+    env: Mapping[str, str] | None = None,
+    state: GoogleMachineState | None = None,
+    control_plane_client: ControlPlaneIntegrationSource | None = None,
+    agent_identity: str | None = None,
+    interactive: bool = True,
+    input_fn: Callable[[str], str] = input,
+    output: TextIO = sys.stderr,
+) -> GoogleIntegrationResolution:
+    """Resolve the Google Workspace integration id to bind on this machine.
+
+    Precedence (single source of truth for integration selection):
+
+    1. explicit ``--google-integration-id`` -> ``resolved_explicit`` (advanced/manual
+       override; validated before use);
+    2. an existing valid machine-local Google binding -> ``resolved_existing_binding``
+       (reused idempotently, never prompted);
+    3. a tenant-scoped control-plane lookup, IF a source is supplied:
+         * exactly one eligible integration -> ``resolved_control_plane``;
+         * more than one -> ``ambiguous`` (human-readable selection when interactive);
+         * none -> ``unavailable``;
+    4. otherwise -> ``unavailable`` (no automatic resolution in this build).
+
+    The normal wizard must NEVER present a raw integration id prompt to a customer.
+    The only interactive surface for a manual id is the explicit advanced flag; when
+    automatic resolution is unavailable the caller reports the advisory + escape hatch.
+    """
+
+    # 1. Explicit advanced/manual override (validated; fails safe on malformed input).
+    try:
+        normalized_explicit = normalize_integration_id(explicit_id)
+    except AgentError:
+        return GoogleIntegrationResolution(
+            state=GoogleIntegrationResolutionState.UNAVAILABLE,
+            message=(
+                "The provided --google-integration-id is invalid. Use the exact id "
+                "from your SecuRedact dashboard, or create an integration there first."
+            ),
+        )
+    if normalized_explicit:
+        return GoogleIntegrationResolution(
+            state=GoogleIntegrationResolutionState.RESOLVED_EXPLICIT,
+            integration_id=normalized_explicit,
+        )
+
+    # 2. Reuse an existing valid machine-local Google binding (no prompt).
+    detected = (
+        state
+        if state is not None
+        else (
+            inspect_google_machine(data_dir, files=files, env=env) if data_dir is not None else None
+        )
+    )
+    if detected is not None and detected.binding_integration_id:
+        return GoogleIntegrationResolution(
+            state=GoogleIntegrationResolutionState.RESOLVED_EXISTING_BINDING,
+            integration_id=detected.binding_integration_id,
+        )
+
+    # 3. Future tenant-scoped control-plane lookup (only when a source is injected).
+    if control_plane_client is not None:
+        try:
+            candidates = control_plane_client.list_eligible_google_integrations(
+                agent_identity=agent_identity
+            )
+        except Exception as exc:  # a control-plane failure never invents an id
+            return GoogleIntegrationResolution(
+                state=GoogleIntegrationResolutionState.UNAVAILABLE,
+                message=f"Could not look up eligible integrations: {scrub(str(exc))}",
+            )
+        candidates = [c for c in candidates if c.platform == GOOGLE_CONNECTOR_PLATFORM]
+        if len(candidates) == 1:
+            return GoogleIntegrationResolution(
+                state=GoogleIntegrationResolutionState.RESOLVED_CONTROL_PLANE,
+                integration_id=candidates[0].id,
+                candidates=candidates,
+            )
+        if len(candidates) > 1:
+            if interactive:
+                print(
+                    "Which Google Workspace integration should this computer use?",
+                    file=output,
+                )
+                for index, candidate in enumerate(candidates, 1):
+                    print(f"  {index}. {candidate.label()}", file=output)
+                try:
+                    raw = input_fn("Selection: ").strip()
+                except (EOFError, StopIteration):
+                    raw = ""
+                if raw.isdigit() and 1 <= int(raw) <= len(candidates):
+                    picked = candidates[int(raw) - 1]
+                    return GoogleIntegrationResolution(
+                        state=GoogleIntegrationResolutionState.RESOLVED_CONTROL_PLANE,
+                        integration_id=picked.id,
+                        candidates=candidates,
+                    )
+            return GoogleIntegrationResolution(
+                state=GoogleIntegrationResolutionState.AMBIGUOUS,
+                candidates=candidates,
+                message=(
+                    "Multiple Google Workspace integrations are available in your "
+                    "SecuRedact account; select one explicitly with --google-integration-id."
+                ),
+            )
+
+    # 4. No automatic resolution available in this build.
+    return GoogleIntegrationResolution(
+        state=GoogleIntegrationResolutionState.UNAVAILABLE,
+        message=(
+            "SecuRedact could not automatically determine which dashboard Google "
+            "Workspace integration should be bound to this machine."
+        ),
+    )
 
 
 def machine_agent_files(data_dir: Path | str, files: AgentFiles | None = None) -> AgentFiles:
@@ -286,60 +485,6 @@ def resolve_google_selection(
     except (EOFError, StopIteration):
         answer = "n"
     return answer in {"y", "yes"}
-
-
-def resolve_google_integration_id(
-    data_dir: Path | str,
-    *,
-    google_integration_id: str | None = None,
-    non_interactive: bool = False,
-    input_fn: Callable[[str], str] = input,
-    output: TextIO = sys.stderr,
-    files: AgentFiles | None = None,
-    env: Mapping[str, str] | None = None,
-    state: GoogleMachineState | None = None,
-) -> str | None:
-    """Resolve the dashboard integration id to bind machine-locally.
-
-    Discovery order: the explicit ``--google-integration-id`` value, the non-secret
-    ``SECUREDACT_GOOGLE_INTEGRATION_ID`` override, an integration id already bound
-    under the machine root (idempotent rerun), and finally an explicit interactive
-    question. The control plane never supplies OAuth material, so when the id cannot
-    be discovered automatically the wizard asks for it clearly instead of silently
-    skipping the binding.
-    """
-
-    explicit = normalize_integration_id(google_integration_id)
-    if explicit:
-        return explicit
-
-    environ = os.environ if env is None else env
-    from_env = normalize_integration_id(environ.get(GOOGLE_INTEGRATION_ID_ENV))
-    if from_env:
-        return from_env
-
-    detected = (
-        state if state is not None else inspect_google_machine(data_dir, files=files, env=env)
-    )
-    if detected.binding_integration_id:
-        print(
-            "Reusing the Google Workspace integration already bound on this "
-            f"computer: {detected.binding_integration_id}",
-            file=output,
-        )
-        return detected.binding_integration_id
-
-    if non_interactive:
-        return None
-
-    print(file=output)
-    print("Find the integration ID in your SecuRedact dashboard:", file=output)
-    print("  Dashboard -> Integrations -> Google Workspace -> integration ID", file=output)
-    try:
-        answer = input_fn(GOOGLE_INTEGRATION_ID_PROMPT)
-    except (EOFError, StopIteration):
-        return None
-    return normalize_integration_id(answer)
 
 
 def prompt_google_client_config(

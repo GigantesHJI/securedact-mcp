@@ -28,20 +28,23 @@ import pytest
 
 from securedact_mcp.agent import deploy
 from securedact_mcp.agent.config import AgentConfig, AgentFiles
-from securedact_mcp.agent.connectors import ConnectorBindingStore
+from securedact_mcp.agent.connectors import ConnectorBinding, ConnectorBindingStore
 from securedact_mcp.agent.deploy import (
     RunResult,
     provision_machine_runtime,
     upgrade_runtime,
 )
 from securedact_mcp.agent.errors import AgentError
-from securedact_mcp.agent.service import ACTIVE_PERSISTENCE_BACKEND
 from securedact_mcp.agent.google_setup import (
     GOOGLE_CONNECTOR_PLATFORM,
+    GoogleIntegrationCandidate,
+    GoogleIntegrationResolutionState,
     apply_google_machine_env,
     authorize_google_machine,
     bind_google_machine,
+    resolve_google_integration,
 )
+from securedact_mcp.agent.service import ACTIVE_PERSISTENCE_BACKEND
 from securedact_mcp.connectors.google.config import (
     GoogleConfigError,
     load_google_client_config,
@@ -450,7 +453,7 @@ def test_google_client_secret_not_persisted_as_machine_env(tmp_path: Path, monke
     # (setx /M); it must be persisted encrypted under the machine data root instead.
     monkeypatch.setenv("SECUREDACT_GOOGLE_ENABLED", "1")
     monkeypatch.setenv("SECUREDACT_GOOGLE_CLIENT_ID", "cfg.app.id.example")
-    secret = "super-secret-client-secret-value"
+    secret = "super-secret-client-secret-value"  # noqa: S105
     monkeypatch.setenv("SECUREDACT_GOOGLE_CLIENT_SECRET", secret)
 
     captured: list[list[str]] = []
@@ -484,7 +487,7 @@ def test_google_client_secret_not_persisted_as_machine_env(tmp_path: Path, monke
 
 def test_google_client_secret_encrypted_at_rest(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SECUREDACT_GOOGLE_ENABLED", "1")
-    secret = "plaintext-client-secret"
+    secret = "plaintext-client-secret"  # noqa: S105
     monkeypatch.setenv("SECUREDACT_GOOGLE_CLIENT_SECRET", secret)
 
     apply_google_machine_env(tmp_path / "machine")
@@ -512,12 +515,12 @@ def test_google_client_secret_loaded_from_store_after_reboot(tmp_path: Path, mon
 
     config = load_google_config(data_dir=tmp_path / "machine")
     assert config.client_id == "cfg.app.id.reboot"
-    assert config.client_secret == "reboot-secret"
+    assert config.client_secret == "reboot-secret"  # noqa: S105
 
 
 def test_google_client_secret_not_written_to_logs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SECUREDACT_GOOGLE_ENABLED", "1")
-    secret = "logging-leak-secret"
+    secret = "logging-leak-secret"  # noqa: S105
     monkeypatch.setenv("SECUREDACT_GOOGLE_CLIENT_SECRET", secret)
 
     err = io.StringIO()
@@ -881,3 +884,356 @@ def test_setup_does_not_report_ready_before_binding_exists(tmp_path, monkeypatch
     assert rc == 2
     assert "setup complete" not in output.getvalue().lower()
     assert "NOT ready" in output.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Integration-resolution abstraction (single source of truth for which dashboard
+# Google Workspace integration a machine binds). Normal customers are never asked
+# for a raw integration id; the only manual surface is --google-integration-id.
+# ---------------------------------------------------------------------------
+
+
+CLEAN_LAPTOP_BINDING = "9db63be0e4437be6c21816bdde91942f"
+
+
+def _seed_google_binding(machine_root: Path, integration_id: str = CLEAN_LAPTOP_BINDING) -> None:
+    files = AgentFiles.resolve(root=Path(machine_root) / "agent")
+    files.ensure()
+    ConnectorBindingStore(files).bind(
+        ConnectorBinding(
+            integration_id=integration_id,
+            platform=GOOGLE_CONNECTOR_PLATFORM,
+            local_profile="default",
+        )
+    )
+
+
+def _fail_if_prompted(_prompt: str) -> str:
+    raise AssertionError(f"integration resolver must not prompt, but asked: {_prompt!r}")
+
+
+class _FakeIntegrationSource:
+    """Stand-in for the future tenant-scoped control-plane endpoint."""
+
+    def __init__(self, candidates: list[GoogleIntegrationCandidate]) -> None:
+        self.candidates = candidates
+        self.calls = 0
+        self.last_agent_identity: str | None = None
+
+    def list_eligible_google_integrations(self, *, agent_identity: str | None = None):
+        self.calls += 1
+        self.last_agent_identity = agent_identity
+        return list(self.candidates)
+
+
+def test_resolver_explicit_id_resolves_directly() -> None:
+    res = resolve_google_integration(explicit_id="int-abc123")
+    assert res.state == GoogleIntegrationResolutionState.RESOLVED_EXPLICIT
+    assert res.integration_id == "int-abc123"
+
+
+def test_resolver_malformed_explicit_id_fails_safely() -> None:
+    # A malformed raw id (shell metacharacters / whitespace) must fail closed,
+    # never be forwarded to a binding or the elevated continuation's argv.
+    res = resolve_google_integration(explicit_id="bad id;rm -rf")
+    assert res.state == GoogleIntegrationResolutionState.UNAVAILABLE
+    assert res.integration_id is None
+
+
+def test_resolver_existing_binding_reused_without_prompt(tmp_path: Path) -> None:
+    machine = tmp_path / "machine"
+    _seed_google_binding(machine)
+    res = resolve_google_integration(data_dir=machine, input_fn=_fail_if_prompted)
+    assert res.state == GoogleIntegrationResolutionState.RESOLVED_EXISTING_BINDING
+    assert res.integration_id == CLEAN_LAPTOP_BINDING
+
+
+def test_resolver_wrong_platform_binding_not_reused(tmp_path: Path) -> None:
+    machine = tmp_path / "machine"
+    files = AgentFiles.resolve(root=machine / "agent")
+    files.ensure()
+    # Seed a binding for a platform that is NOT google_workspace directly (the store
+    # would reject binding an unsupported platform, so write the record as the
+    # runtime would never do for a bound integration).
+    (files.connector_bindings).write_text(
+        json.dumps(
+            {
+                "ms-1": {
+                    "integration_id": "ms-1",
+                    "platform": "microsoft365",
+                    "local_profile": "default",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    res = resolve_google_integration(data_dir=machine, input_fn=_fail_if_prompted)
+    assert res.state == GoogleIntegrationResolutionState.UNAVAILABLE
+    assert res.integration_id is None
+
+
+def test_resolver_does_not_invent_id(tmp_path: Path) -> None:
+    # Clean machine, no existing binding, no control-plane source: must NOT invent
+    # an id and must NOT prompt.
+    res = resolve_google_integration(data_dir=tmp_path / "machine", input_fn=_fail_if_prompted)
+    assert res.state == GoogleIntegrationResolutionState.UNAVAILABLE
+    assert res.integration_id is None
+
+
+def test_resolver_does_not_infer_from_token_or_logs(tmp_path: Path) -> None:
+    # A valid machine OAuth token on disk (but no binding, no control plane) must
+    # NOT be used to infer an integration id. No scan/job-history/log parsing.
+    machine = tmp_path / "machine"
+    (machine / "google").mkdir(parents=True)
+    (machine / "google" / "token.json.enc").write_text("{}", encoding="utf-8")
+    res = resolve_google_integration(data_dir=machine, input_fn=_fail_if_prompted)
+    assert res.state == GoogleIntegrationResolutionState.UNAVAILABLE
+    assert res.integration_id is None
+
+
+def test_resolver_existing_binding_short_circuits_control_plane(tmp_path: Path) -> None:
+    machine = tmp_path / "machine"
+    _seed_google_binding(machine)
+    source = _FakeIntegrationSource([])
+    res = resolve_google_integration(
+        data_dir=machine, control_plane_client=source, input_fn=_fail_if_prompted
+    )
+    assert res.state == GoogleIntegrationResolutionState.RESOLVED_EXISTING_BINDING
+    assert source.calls == 0
+
+
+def test_resolver_accepts_future_control_plane_result() -> None:
+    source = _FakeIntegrationSource([])
+    resolve_google_integration(control_plane_client=source, agent_identity="agent-1")
+    assert source.calls == 1
+    assert source.last_agent_identity == "agent-1"
+
+
+def test_resolver_one_eligible_control_plane_autoresolves() -> None:
+    source = _FakeIntegrationSource(
+        [GoogleIntegrationCandidate(id="g-1", platform="google_workspace", display_name="My WS")]
+    )
+    res = resolve_google_integration(control_plane_client=source)
+    assert res.state == GoogleIntegrationResolutionState.RESOLVED_CONTROL_PLANE
+    assert res.integration_id == "g-1"
+
+
+def test_resolver_filters_non_google_candidates() -> None:
+    source = _FakeIntegrationSource(
+        [
+            GoogleIntegrationCandidate(id="ms-1", platform="microsoft365"),
+            GoogleIntegrationCandidate(id="g-1", platform="google_workspace"),
+        ]
+    )
+    res = resolve_google_integration(control_plane_client=source)
+    assert res.state == GoogleIntegrationResolutionState.RESOLVED_CONTROL_PLANE
+    assert res.integration_id == "g-1"
+
+
+def test_resolver_zero_eligible_control_plane_unavailable() -> None:
+    source = _FakeIntegrationSource([])
+    res = resolve_google_integration(control_plane_client=source)
+    assert res.state == GoogleIntegrationResolutionState.UNAVAILABLE
+    assert res.integration_id is None
+
+
+def test_resolver_many_eligible_ambiguous_noninteractive() -> None:
+    source = _FakeIntegrationSource(
+        [
+            GoogleIntegrationCandidate(
+                id="g-1", platform="google_workspace", display_name="Company"
+            ),
+            GoogleIntegrationCandidate(id="g-2", platform="google_workspace", display_name="Test"),
+        ]
+    )
+    # Non-interactive: must not pick arbitrarily; reports ambiguous, no prompt.
+    res = resolve_google_integration(control_plane_client=source, interactive=False)
+    assert res.state == GoogleIntegrationResolutionState.AMBIGUOUS
+    assert res.integration_id is None
+    assert res.candidates is not None and len(res.candidates) == 2
+
+
+def test_resolver_many_eligible_interactive_prompts_choices() -> None:
+    source = _FakeIntegrationSource(
+        [
+            GoogleIntegrationCandidate(
+                id="g-1", platform="google_workspace", display_name="Company"
+            ),
+            GoogleIntegrationCandidate(id="g-2", platform="google_workspace", display_name="Test"),
+        ]
+    )
+    out = io.StringIO()
+    # Operator gives no valid selection -> ambiguous, but the human-readable choices
+    # were offered (the id stays hidden/internal).
+    res = resolve_google_integration(
+        control_plane_client=source, interactive=True, input_fn=lambda _p: "", output=out
+    )
+    assert res.state == GoogleIntegrationResolutionState.AMBIGUOUS
+    assert res.integration_id is None
+    text = out.getvalue()
+    assert "Which Google Workspace integration should this computer use?" in text
+    assert "1. Company" in text and "2. Test" in text
+
+
+def test_resolver_many_eligible_interactive_selection() -> None:
+    source = _FakeIntegrationSource(
+        [
+            GoogleIntegrationCandidate(
+                id="g-1", platform="google_workspace", display_name="Company"
+            ),
+            GoogleIntegrationCandidate(id="g-2", platform="google_workspace", display_name="Test"),
+        ]
+    )
+    out = io.StringIO()
+    res = resolve_google_integration(
+        control_plane_client=source, interactive=True, input_fn=lambda _p: "2", output=out
+    )
+    assert res.state == GoogleIntegrationResolutionState.RESOLVED_CONTROL_PLANE
+    assert res.integration_id == "g-2"
+
+
+# ---------------------------------------------------------------------------
+# Setup-level behavior: the normal wizard must never ask for a raw integration id
+# ---------------------------------------------------------------------------
+
+
+def _setup_google_module(
+    machine: Path,
+    *,
+    google: str = "yes",
+    google_integration_id: str | None = None,
+    non_interactive: bool = False,
+    authorize: bool = True,
+    input_side_effects: list[str] | None = None,
+) -> tuple[int, str]:
+    """Drive ``run_managed_agent_module`` for a registered machine and return (rc, output)."""
+
+    recorded: list[str] = input_side_effects if input_side_effects is not None else []
+
+    def _input(prompt: str) -> str:
+        recorded.append(prompt)
+        # The only legitimate prompts are the agent-confirm / registration token
+        # prompts; the integration-id prompt must never appear in the normal flow.
+        return "y"
+
+    out = io.StringIO()
+    rc = deploy.run_managed_agent_module(
+        input_fn=_input,
+        output=out,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google=google,
+        google_integration_id=google_integration_id,
+        non_interactive=non_interactive,
+        authorize_google_fn=lambda *_a, **_k: authorize,
+        apply_google_env_fn=lambda _d, **_k: None,
+        verify_google_binding_fn=lambda *_a, **_k: True,
+    )
+    return rc, out.getvalue()
+
+
+def _patch_install_and_heartbeat(monkeypatch, machine: Path) -> None:
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+    monkeypatch.setattr(
+        deploy,
+        "install_service_from_runtime",
+        lambda **k: {
+            "installed": True,
+            "service_name": "SecuredactAgent",
+            "data_dir": str(machine),
+            "account": r"NT SERVICE\SecuredactAgent",
+            "running": True,
+            "agent_id": "agent-1",
+        },
+    )
+    monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
+
+
+def test_normal_setup_without_binding_prompts_no_raw_id(tmp_path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _patch_install_and_heartbeat(monkeypatch, machine)
+
+    prompts: list[str] = []
+    rc, text = _setup_google_module(machine, input_side_effects=prompts)
+    assert rc == 2
+    # The old "Find the integration ID in your SecuRedact dashboard" prompt is gone.
+    assert "Find the integration ID" not in text
+    assert "Dashboard -> Integrations -> Google Workspace -> integration ID" not in text
+    # Instead it reports automatic resolution unavailable + the advanced escape hatch.
+    assert "could not automatically determine which dashboard Google Workspace integration" in text
+    assert "securedact-mcp setup --agent --google yes --google-integration-id <id>" in text
+    assert "NOT ready" in text
+    # And it never asked the operator for a raw integration id.
+    assert not any("integration ID" in p.lower() and "dashboard" in p.lower() for p in prompts)
+
+
+def test_google_oauth_success_without_binding_not_ready(tmp_path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _patch_install_and_heartbeat(monkeypatch, machine)
+
+    # OAuth authorized but no binding/integration resolvable -> NOT ready.
+    rc, text = _setup_google_module(machine, authorize=True)
+    assert rc == 2
+    assert (
+        "Managed Agent: NOT ready - Google Workspace authorization succeeded but no "
+        "dashboard integration is bound." in text
+    )
+
+
+def test_existing_binding_and_oauth_reuses_without_prompt(tmp_path, monkeypatch) -> None:
+    # Clean-laptop regression: connector-bindings.json already holds the integration,
+    # Google OAuth already authorized (injected as success = reused), rerun with no
+    # --google-integration-id must reuse the binding, ask nothing, and reach Online.
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    _seed_google_binding(machine)
+    (machine / "google").mkdir(parents=True, exist_ok=True)
+    (machine / "google" / "token.json.enc").write_text("{}", encoding="utf-8")
+    _patch_install_and_heartbeat(monkeypatch, machine)
+
+    prompts: list[str] = []
+    rc, text = _setup_google_module(
+        machine,
+        google_integration_id=None,
+        input_side_effects=prompts,
+    )
+    assert rc == 0
+    assert "Google Workspace integration already bound locally" in text
+    assert "Online" in text
+    assert "setup complete" in text.lower()
+    # No integration-id prompt of any kind.
+    assert not any("integration ID" in p.lower() for p in prompts)
+    # The binding file still holds exactly the clean-laptop integration, no duplicate.
+    binding_file = machine / "agent" / "connector-bindings.json"
+    payload = json.loads(binding_file.read_text(encoding="utf-8"))
+    assert list(payload.keys()) == [CLEAN_LAPTOP_BINDING]
+    assert payload[CLEAN_LAPTOP_BINDING]["platform"] == GOOGLE_CONNECTOR_PLATFORM
+
+
+def test_resolver_reports_unavailable_advisory(tmp_path, monkeypatch) -> None:
+    # The onboarding prints the dashboard/control-plane advisory when automatic
+    # resolution is unavailable (no invented id, no raw-id prompt).
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    _patch_install_and_heartbeat(monkeypatch, machine)
+
+    out = io.StringIO()
+    deploy.run_managed_agent_module(
+        input_fn=lambda _p: "y",
+        output=out,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google="yes",
+        authorize_google_fn=lambda *_a, **_k: True,
+        apply_google_env_fn=lambda _d, **_k: None,
+        verify_google_binding_fn=lambda *_a, **_k: True,
+    )
+    text = out.getvalue()
+    assert (
+        "Automatic tenant-scoped integration selection will be supported by the "
+        "dashboard/control plane." in text
+    )

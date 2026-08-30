@@ -116,8 +116,9 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument(
         "--google-integration-id",
         default=None,
-        help="Google Workspace integration ID from the SecuRedact dashboard to "
-        "bind locally (skips the interactive prompt)",
+        help="(advanced/manual) bind a specific SecuRedact Google Workspace "
+        "integration by its internal ID instead of automatic resolution. Normal "
+        "customers should not need this.",
     )
     setup.add_argument(
         "--google-byo",

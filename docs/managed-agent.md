@@ -487,3 +487,69 @@ heartbeat (it detects the `agent_revoked` response and exits cleanly). Local
 Google credentials can be revoked with `securedact-mcp google` revocation (best
 effort remote revoke + local token deletion); the agent never deletes local
 Google data.
+
+## Roadmap: tenant-scoped eligible integration discovery
+
+**TODO (dashboard/webapp, not implemented in this task):** Implement tenant-scoped
+eligible integration discovery for registered managed agents.
+
+The managed-agent registration already establishes the machine's SecuRedact agent
+identity / tenant relationship. The setup wizard must eventually use that identity
+to resolve *which* Google Workspace integration the machine should bind, instead of
+asking the operator to copy an opaque integration ID. The internal resolver
+(`securedact_mcp.agent.google_setup.resolve_google_integration`) already accepts an
+injected `ControlPlaneIntegrationSource`; this endpoint is the thing it will call.
+
+### Endpoint purpose
+
+Given the registered managed agent, return the list of Google Workspace
+integrations the agent's tenant is eligible to bind on this machine. The setup
+wizard then auto-selects when exactly one is eligible, presents a human-readable
+choice when several are, and tells the operator to create one in the dashboard when
+none are.
+
+### Security requirements
+
+- **Authenticated** with the existing managed-agent credential (`Bearer <sra_...>`).
+- **Tenant-scoped**: the agent must only ever see its own tenant's integrations; it
+  must never be able to enumerate another tenant's integrations (fail closed on a
+  cross-tenant request).
+- Only **safe metadata** is returned: integration id, platform, and a
+  human-readable display name.
+- **Never** returns a Google OAuth token, a Google client secret, Drive content, or
+  any customer PII.
+- Disabled / stale integrations are filtered appropriately before being returned.
+
+### Conceptual response
+
+```json
+{
+  "integrations": [
+    { "id": "...", "platform": "google_workspace", "display_name": "My Workspace" }
+  ]
+}
+```
+
+### 0 / 1 / many behavior
+
+- **0 eligible integrations** → setup reports: "No Google Workspace integration
+  exists in your SecuRedact account. Create one in the dashboard first."
+- **Exactly 1 eligible** → selected automatically (no operator choice required).
+- **>1 eligible** → interactive human-readable selection, e.g.:
+
+  ```
+  Which Google Workspace integration should this computer use?
+  1. Company Workspace
+  2. Test Workspace
+  ```
+
+The internal id stays hidden/internal in every case.
+
+### Preferred future UX (scoped registration token)
+
+Even better: the dashboard's "Add local agent" flow for a specific Google Workspace
+integration can issue a one-time registration token *already scoped to that
+integration*. The setup wizard then knows the intended integration immediately and
+skips discovery entirely. This scoped-token architecture is the preferred long-term
+direction but is **not** implemented in this task — the resolver only consumes it
+once the control plane exposes it.

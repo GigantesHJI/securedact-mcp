@@ -2085,7 +2085,16 @@ def _authorize_google_via_runtime(
     if not payload.get("authorized"):
         stage = payload.get("stage")
         error_code = payload.get("error_code") or payload.get("error")
+        # Google's own RFC 6749 error token, when the token endpoint actually
+        # answered. This is the field that distinguishes "Google rejected the
+        # exchange" (and why) from "the exchange never reached Google".
+        oauth_error = payload.get("oauth_error")
+        error_description = payload.get("error_description")
         detail = f" (stage: {stage})" if stage else ""
+        if oauth_error:
+            detail += f" (google error: {scrub(str(oauth_error))})"
+        if error_description:
+            detail += f" ({scrub(str(error_description))})"
         # Surface the safe stage/code; never any OAuth secret/token/code.
         print(
             "Google authorization failed"
@@ -2094,7 +2103,11 @@ def _authorize_google_via_runtime(
             file=output,
         )
         return google_setup.GoogleMachineAuthResult(
-            authorized=False, stage=stage, error_code=error_code
+            authorized=False,
+            stage=stage,
+            error_code=error_code,
+            oauth_error=oauth_error,
+            error_description=error_description,
         )
     return google_setup.GoogleMachineAuthResult(authorized=True, stage="complete")
 

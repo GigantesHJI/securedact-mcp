@@ -81,6 +81,12 @@ class GoogleMachineAuthResult:
     stage: str | None = None
     error_code: str | None = None
     error: str | None = None
+    # Google's RFC 6749 ``error`` token from the token endpoint (e.g. ``invalid_grant``,
+    # ``redirect_uri_mismatch``), present only when Google actually answered. This is
+    # what names the real rejection instead of the generic stage code.
+    oauth_error: str | None = None
+    # Bounded, credential-free rendering of Google's ``error_description``.
+    error_description: str | None = None
 
 
 class _GoogleConfigModule(Protocol):
@@ -577,13 +583,19 @@ def begin_google_authorization(data_dir: Path | str) -> tuple[str, str]:
 
     Runs inside the *machine-owned runtime* (which carries the Google extra), so
     it never depends on the setup CLI's interpreter having ``google_auth_oauthlib``.
+
+    This is the two-phase copy/paste flow: the consent URL is issued here and the code
+    is exchanged by a *separate* runtime invocation. A PKCE ``code_verifier`` cannot
+    survive that process boundary, so PKCE is genuinely disabled for both legs. The
+    preferred path remains :func:`run_google_loopback_authorization`, which stays
+    in-process and therefore keeps PKCE.
     """
 
     from ..connectors.google import auth as default_auth
     from ..connectors.google import config as default_config
 
     config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
-    return default_auth.get_authorization_url(config)
+    return default_auth.get_authorization_url(config, pkce=False)
 
 
 def complete_google_authorization(
@@ -593,13 +605,18 @@ def complete_google_authorization(
 
     Runs inside the *machine-owned runtime*. The token is persisted encrypted under
     the machine data root; no OAuth material is returned to the caller.
+
+    ``state`` can only locate a pending authorization inside the process that issued
+    the consent URL. When it cannot (the two-phase flow above), the exchange runs
+    without a pending flow, which matches the PKCE-free consent URL that was issued.
     """
 
     from ..connectors.google import auth as default_auth
     from ..connectors.google import config as default_config
 
     config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
-    default_auth.exchange_code(config, code, state=state)
+    pending_state = state if default_auth.has_pending_authorization(state) else None
+    default_auth.exchange_code(config, code, state=pending_state)
     return True
 
 

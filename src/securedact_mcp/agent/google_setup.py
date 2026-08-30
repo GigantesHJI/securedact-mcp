@@ -68,6 +68,21 @@ GOOGLE_SELECTION_PROMPT = (
 GOOGLE_INTEGRATION_ID_PROMPT = "Google Workspace integration ID (from your SecuRedact dashboard): "
 
 
+@dataclass
+class GoogleMachineAuthResult:
+    """Bounded result of machine-local Google authorization (no secret material).
+
+    Carries the structured ``stage``/``error_code`` surfaced by the machine runtime so
+    the setup CLI can report an actionable, safe message (and never misreport a
+    post-callback failure as "managed OAuth application unavailable").
+    """
+
+    authorized: bool
+    stage: str | None = None
+    error_code: str | None = None
+    error: str | None = None
+
+
 class _GoogleConfigModule(Protocol):
     """Narrow boundary over the optional Google connector config loader."""
 
@@ -588,21 +603,31 @@ def complete_google_authorization(
     return True
 
 
-def run_google_loopback_authorization(data_dir: Path | str) -> bool:
+def run_google_loopback_authorization(data_dir: Path | str) -> dict[str, object]:
     """Run the full local loopback OAuth flow inside the machine-owned runtime.
 
-    Picks a random loopback port, opens the browser, receives the redirect
-    locally, validates the OAuth ``state``, and exchanges the code in-process (so
-    PKCE works). The token is persisted encrypted under the machine data root. No
-    authorization code/token/client secret is ever placed on argv, in a command
-    file, in the environment, or in logs. Returns ``True`` only when authorized.
+    Returns a bounded, machine-readable result (``authorized`` plus a safe
+    ``stage``/``error_code`` on failure). No OAuth code/token/client secret/verifier
+    is ever placed on argv, in a command file, in the environment, or in logs. When
+    the managed client is genuinely absent the result carries ``stage="config"`` with
+    the safe ``google_config_missing`` code (the only correct place to report that).
     """
 
     from ..connectors.google import auth as default_auth
     from ..connectors.google import config as default_config
+    from ..connectors.google.config import GoogleConfigError
 
-    config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
-    return bool(default_auth.run_local_oauth(config))
+    try:
+        config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
+    except GoogleConfigError as exc:
+        return {
+            "authorized": False,
+            "stage": "config",
+            "error_code": "google_config_missing",
+            "error": scrub(str(exc)),
+        }
+    outcome = default_auth.run_local_oauth(config)
+    return outcome.to_payload()
 
 
 # Concrete modules the machine-local Google OAuth flow imports. Kept here (next to

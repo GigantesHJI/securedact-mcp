@@ -345,8 +345,13 @@ class _StateMismatchServer(LoopbackOAuthServer):
 @requires_google
 def test_state_mismatch_fails_closed(tmp_path: Path) -> None:
     cfg = _loopback_config(tmp_path)
-    ok = run_local_oauth(cfg, _server_cls=_StateMismatchServer, _exchange_fn=lambda *_a, **_k: None)
-    assert ok is False
+    outcome = run_local_oauth(
+        cfg, _server_cls=_StateMismatchServer, _exchange_fn=lambda *_a, **_k: None
+    )
+    assert outcome.authorized is False
+    # The stage is reported instead of a generic authorized=false.
+    assert outcome.stage == "state_validation"
+    assert outcome.error_code == "google_loopback_state_mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -376,8 +381,9 @@ class _TimeoutServer(LoopbackOAuthServer):
 @requires_google
 def test_callback_timeout_fails_safely(tmp_path: Path) -> None:
     cfg = _loopback_config(tmp_path)
-    ok = run_local_oauth(cfg, _server_cls=_TimeoutServer, _exchange_fn=lambda *_a, **_k: None)
-    assert ok is False
+    outcome = run_local_oauth(cfg, _server_cls=_TimeoutServer, _exchange_fn=lambda *_a, **_k: None)
+    assert outcome.authorized is False
+    assert outcome.stage == "callback"
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +440,7 @@ def test_exchanged_code_never_logged_or_on_argv(tmp_path: Path, monkeypatch) -> 
         _exchange_fn=_exchange,
         _browser_open=_open,
     )
-    assert ok is True
+    assert ok.authorized is True
     # The browser is opened with the consent URL, never the code.
     assert browser_urls and "code=" not in browser_urls[0]
     # The exchange received exactly the callback code (in-memory only).
@@ -472,7 +478,7 @@ def test_runtime_google_auth_invokes_machine_loopback(tmp_path: Path, monkeypatc
         output=out,
         google_byo=False,
     )
-    assert ok is True
+    assert ok.authorized is True
     # The machine-owned runtime is what performed the OAuth (--loopback), not the
     # setup interpreter's own process.
     assert any("--loopback" in c for c in runner.calls)
@@ -501,7 +507,7 @@ def test_loopback_failure_is_fail_closed(tmp_path: Path, monkeypatch) -> None:
         output=out,
         google_byo=False,
     )
-    assert ok is False
+    assert ok.authorized is False
     text = out.getvalue()
     # Fail closed: report the failure, never prompt the customer for an OAuth
     # client id/secret, and never fall back to a manual two-phase flow.
@@ -509,6 +515,8 @@ def test_loopback_failure_is_fail_closed(tmp_path: Path, monkeypatch) -> None:
     assert "Open a browser to authorize" not in text
     assert "Google OAuth client ID:" not in text
     assert "Google OAuth client secret:" not in text
+    # The safe error/stage surfaced from the runtime is preserved verbatim.
+    assert "managed app not configured" in text
 
 
 def test_loopback_byo_uses_byo_flag(tmp_path: Path, monkeypatch) -> None:
@@ -523,7 +531,7 @@ def test_loopback_byo_uses_byo_flag(tmp_path: Path, monkeypatch) -> None:
             args = [str(a) for a in arguments]
             self.calls.append(args)
             if "--loopback" in args:
-                return RunResult(0, stdout='{"authorized": true}')
+                return RunResult(0, stdout='{"authorized": true, "stage": "complete"}')
             return RunResult(1)
 
     runner = _ByoRunner()
@@ -535,7 +543,7 @@ def test_loopback_byo_uses_byo_flag(tmp_path: Path, monkeypatch) -> None:
         output=out,
         google_byo=True,
     )
-    assert ok is True
+    assert ok.authorized is True
     assert any("--google-byo" in c for c in runner.calls)
 
 
@@ -577,7 +585,7 @@ def test_token_stored_under_machine_root_via_loopback(tmp_path: Path) -> None:
         return {}
 
     ok = run_local_oauth(cfg, _server_cls=_GoodServer, _exchange_fn=_store)
-    assert ok is True
+    assert ok.authorized is True
     token_file = tmp_path / "google" / "token.json.enc"
     assert token_file.is_file()
     # No token material leaked into the process environment.
@@ -739,3 +747,256 @@ def test_system_agent_loads_machine_local_google_config(tmp_path: Path, monkeypa
     assert cfg.scopes == [DRIVE_READONLY]
     # The SYSTEM task reads the same machine root; no control-plane round trip.
     assert str(tmp_path) in str(cfg.token_path)
+
+
+# ---------------------------------------------------------------------------
+# 21. Post-callback failures report a bounded stage (no secret material)
+# ---------------------------------------------------------------------------
+
+
+from securedact_core.connectors.google import GoogleAuthError  # noqa: E402
+from securedact_mcp.connectors.google import auth as google_auth_mod  # noqa: E402
+
+
+def _store_token(config, code, *, state=None):
+    """Injected exchange that persists a synthetic token (no network)."""
+
+    config.credential_store().save_token({"refresh_token": "RT_MACHINE_ONLY"})
+    return {}
+
+
+@requires_google
+def test_successful_loopback_reports_complete_stage(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+    outcome = run_local_oauth(cfg, _server_cls=_GoodServer, _exchange_fn=_store_token)
+    assert outcome.authorized is True
+    assert outcome.stage == "complete"
+    assert (tmp_path / "google" / "token.json.enc").is_file()
+
+
+@requires_google
+def test_token_exchange_failure_reports_stage(tmp_path: Path, monkeypatch) -> None:
+    cfg = _loopback_config(tmp_path)
+
+    def _boom(*_a, **_k):
+        raise GoogleAuthError("Google token exchange failed: InvalidGrantError")
+
+    monkeypatch.setattr(google_auth_mod, "_exchange_token_only", _boom)
+    outcome = run_local_oauth(cfg, _server_cls=_GoodServer)
+    assert outcome.authorized is False
+    assert outcome.stage == "token_exchange"
+    assert outcome.error_code == "google_token_exchange_failed"
+    # The browser must not have been told the authorization completed.
+    assert "complete" not in google_auth_mod.LOOPBACK_CALLBACK_HTML
+    assert b"AUTHCODE_SECRET" not in google_auth_mod.LOOPBACK_CALLBACK_HTML.encode()
+    # No token material leaks into the machine-readable result.
+    assert "AUTHCODE_SECRET" not in json.dumps(outcome.to_payload())
+
+
+@requires_google
+def test_persistence_failure_reports_stage(tmp_path: Path, monkeypatch) -> None:
+    cfg = _loopback_config(tmp_path)
+
+    class _FakeCreds:
+        def to_json(self) -> str:
+            return '{"refresh_token": "RT_MACHINE_ONLY"}'
+
+    def _fake_exchange(*_a, **_k):
+        return _FakeCreds()
+
+    def _boom(*_a, **_k):
+        raise GoogleAuthError("Google token persistence failed: OSError")
+
+    # Exchange must succeed so the failure is genuinely at the persistence stage.
+    monkeypatch.setattr(google_auth_mod, "_exchange_token_only", _fake_exchange)
+    monkeypatch.setattr(google_auth_mod, "_persist_credentials", _boom)
+    outcome = run_local_oauth(cfg, _server_cls=_GoodServer)
+    assert outcome.authorized is False
+    assert outcome.stage == "persistence"
+    assert outcome.error_code == "google_token_persistence_failed"
+    # On persistence failure nothing durable is written.
+    assert not (tmp_path / "google" / "token.json.enc").exists()
+
+
+@requires_google
+def test_successful_loopback_persists_loadable_token(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+    outcome = run_local_oauth(cfg, _server_cls=_GoodServer, _exchange_fn=_store_token)
+    assert outcome.authorized is True
+    loaded = cfg.credential_store().load_token()
+    assert loaded is not None
+    assert loaded.get("refresh_token") == "RT_MACHINE_ONLY"
+
+
+@requires_google
+def test_no_oauth_secret_leaks_in_logs_or_output(tmp_path: Path, caplog) -> None:
+    import logging
+
+    cfg = _loopback_config(tmp_path)
+    exchanged: dict[str, str] = {}
+
+    def _exchange(config, code, *, state=None):
+        exchanged["code"] = code
+        config.credential_store().save_token({"refresh_token": "RT_MACHINE_ONLY"})
+        return {}
+
+    with caplog.at_level(logging.DEBUG, logger="securedact_mcp.connectors.google.auth"):
+        outcome = run_local_oauth(
+            cfg, _server_cls=_GoodServer, _exchange_fn=_exchange, _browser_open=lambda _u: None
+        )
+    assert outcome.authorized is True
+    blob = json.dumps(outcome.to_payload())
+    assert "AUTHCODE_SECRET" not in blob
+    assert "RT_MACHINE_ONLY" not in blob
+    log_text = caplog.text
+    assert "AUTHCODE_SECRET" not in log_text
+    assert "RT_MACHINE_ONLY" not in log_text
+
+
+# ---------------------------------------------------------------------------
+# 22. State mismatch and missing code fail closed (with a stage)
+# ---------------------------------------------------------------------------
+
+
+class _MissingCodeServer(LoopbackOAuthServer):
+    def __init__(self, *, expected_state: str = "", timeout: float = 5.0) -> None:
+        self.expected_state = expected_state
+        self.timeout = timeout
+        self.port = 54322
+        from securedact_mcp.connectors.google.auth import _LoopbackResult
+
+        self._result = _LoopbackResult()
+        self._result.set(code="", error=None, state=expected_state)
+
+    def start(self) -> None:
+        pass
+
+    def wait_for_callback(self):
+        return self._result
+
+    def shutdown(self) -> None:
+        pass
+
+
+class _GoogleErrorServer(LoopbackOAuthServer):
+    def __init__(self, *, expected_state: str = "", timeout: float = 5.0) -> None:
+        self.expected_state = expected_state
+        self.timeout = timeout
+        self.port = 54323
+        from securedact_mcp.connectors.google.auth import _LoopbackResult
+
+        self._result = _LoopbackResult()
+        self._result.set(code="", error="access_denied", state=expected_state)
+
+    def start(self) -> None:
+        pass
+
+    def wait_for_callback(self):
+        return self._result
+
+    def shutdown(self) -> None:
+        pass
+
+
+@requires_google
+def test_missing_code_fails_closed_with_stage(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+    outcome = run_local_oauth(cfg, _server_cls=_MissingCodeServer)
+    assert outcome.authorized is False
+    assert outcome.stage == "missing_code"
+    assert outcome.error_code == "google_loopback_missing_code"
+
+
+@requires_google
+def test_google_callback_error_fails_closed_with_stage(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+    outcome = run_local_oauth(cfg, _server_cls=_GoogleErrorServer)
+    assert outcome.authorized is False
+    assert outcome.stage == "callback_error"
+    assert outcome.error_code == "google_callback_error"
+
+
+# ---------------------------------------------------------------------------
+# 23. Managed client configured + post-callback failure must NOT be reported as
+#     "managed OAuth application unavailable"; binding must not be created.
+# ---------------------------------------------------------------------------
+
+
+class _FailRunner:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def __call__(self, arguments, run_input: RunInput) -> RunResult:
+        args = [str(a) for a in arguments]
+        if "--loopback" in args:
+            return RunResult(2, stdout=json.dumps(self.payload))
+        return RunResult(0)
+
+
+def _machine_runtime_at(runtime_path: Path) -> Path:
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    python = runtime_path / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True, exist_ok=True)
+    python.write_bytes(b"")
+    return python
+
+
+def test_post_callback_failure_not_reported_as_managed_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    runtime_python = _machine_runtime_at(tmp_path / "runtime")
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-pc",
+        runtime_path=tmp_path / "runtime",
+        command_runner=_FailRunner(
+            {
+                "authorized": False,
+                "stage": "token_exchange",
+                "error_code": "google_token_exchange_failed",
+            }
+        ),
+        verify_binding_fn=lambda *_a, **_k: True,
+    )
+    text = out.getvalue()
+    # The managed client WAS configured: the "unavailable in this build" message must
+    # NOT appear. The actionable post-callback failure stage/code must instead.
+    assert managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG not in text
+    assert "token_exchange" in text
+    assert outcome.authorized is False
+    assert outcome.ready is False
+    # No binding until OAuth verification succeeds.
+    assert not (machine / "agent" / "connector-bindings.json").is_file()
+    # Sanity: the runtime that ran was the machine runtime.
+    assert str(runtime_python) in text
+
+
+def test_readiness_becomes_google_authorized_only_after_success(
+    tmp_path: Path, monkeypatch
+) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    _machine_runtime_at(tmp_path / "runtime")
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-ok",
+        runtime_path=tmp_path / "runtime",
+        command_runner=_FailRunner({"authorized": True, "stage": "complete"}),
+        verify_binding_fn=lambda *_a, **_k: True,
+    )
+    assert outcome.authorized is True
+    assert outcome.binding_verified is True
+    assert outcome.ready is True
+    assert (machine / "agent" / "connector-bindings.json").is_file()

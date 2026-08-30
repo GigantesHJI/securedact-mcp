@@ -30,6 +30,70 @@ from .storage import GoogleCredentialStore
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Safe, bounded post-callback diagnostics (no secret material)
+# ---------------------------------------------------------------------------
+#
+# Every post-callback failure used to collapse to ``{"authorized": false}``,
+# hiding the real stage from the setup CLI and the operator. The runtime now returns
+# a bounded, machine-readable outcome that names only the stage and a safe error code
+# (never the authorization code, token, verifier, client secret, or any part of the
+# OAuth token response).
+
+# Post-callback stages, in execution order. None of these ever carries secret data.
+LOOPBACK_STAGE_CALLBACK = "callback"
+LOOPBACK_STAGE_STATE_VALIDATION = "state_validation"
+LOOPBACK_STAGE_CALLBACK_ERROR = "callback_error"
+LOOPBACK_STAGE_MISSING_CODE = "missing_code"
+LOOPBACK_STAGE_TOKEN_EXCHANGE = "token_exchange"  # noqa: S105 - safe stage name
+LOOPBACK_STAGE_PERSISTENCE = "persistence"
+LOOPBACK_STAGE_COMPLETE = "complete"
+
+# Safe error codes (bounded vocabulary, no PII / secrets).
+ERR_STATE_MISMATCH = "google_loopback_state_mismatch"
+ERR_GOOGLE_CALLBACK_ERROR = "google_callback_error"
+ERR_MISSING_CODE = "google_loopback_missing_code"
+ERR_TOKEN_EXCHANGE_FAILED = "google_token_exchange_failed"  # noqa: S105 - safe code
+ERR_PERSISTENCE_FAILED = "google_token_persistence_failed"
+ERR_UNEXPECTED = "google_loopback_unexpected_error"
+ERR_CONFIG_MISSING = "google_config_missing"
+
+
+@dataclasses.dataclass
+class GoogleLoopbackOutcome:
+    """Bounded result of a local loopback OAuth attempt (no secret material)."""
+
+    authorized: bool
+    stage: str | None = None
+    error_code: str | None = None
+    error: str | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {"authorized": self.authorized}
+        if self.stage is not None:
+            payload["stage"] = self.stage
+        if self.error_code is not None:
+            payload["error_code"] = self.error_code
+        if self.error is not None:
+            # Only stage names / exception types are ever reported here.
+            payload["error"] = str(self.error)
+        return payload
+
+
+def _loopback_failure(
+    stage: str, error_code: str, exc: BaseException | None = None
+) -> GoogleLoopbackOutcome:
+    """Build a fail-closed outcome that names only the stage and a safe code."""
+
+    detail = type(exc).__name__ if exc is not None else stage
+    return GoogleLoopbackOutcome(
+        authorized=False,
+        stage=stage,
+        error_code=error_code,
+        error=f"{stage}: {detail}",
+    )
+
+
 class _GoogleCredentials(Protocol):
     """Narrow surface of ``google.oauth2.credentials.Credentials`` consumed here."""
 
@@ -113,6 +177,21 @@ def exchange_code(
 ) -> dict[str, Any]:
     """Exchange an authorization code for tokens, persist them, return the dict."""
 
+    credentials = _exchange_token_only(config, code, state=state)
+    return _persist_credentials(config, credentials)
+
+
+def _exchange_token_only(
+    config: GoogleConnectorConfig, code: str, *, state: str | None = None
+) -> Any:
+    """Exchange the authorization code for credentials without persisting them.
+
+    PKCE is honored because the in-process flow that built the consent URL left its
+    ``code_verifier`` on the flow object (keyed by CSRF ``state`` in ``_FLOW_STATE``).
+    Any network / invalid-code / revoked-consent failure raises :class:`GoogleAuthError`
+    carrying only the exception type (no token material).
+    """
+
     if state is not None and state in _FLOW_STATE:
         flow = _FLOW_STATE.pop(state)
     else:
@@ -120,15 +199,25 @@ def exchange_code(
     try:
         flow.fetch_token(code=code)
     except Exception as exc:  # network / invalid code / revoked consent
-        raise GoogleAuthError(f"Google authorization failed: {type(exc).__name__}") from exc
-    return _persist(config, flow.credentials)
+        raise GoogleAuthError(f"Google token exchange failed: {type(exc).__name__}") from exc
+    return flow.credentials
+
+
+def _persist_credentials(config: GoogleConnectorConfig, credentials: Any) -> dict[str, Any]:
+    """Encrypt and persist credentials, raising on any storage failure."""
+
+    store: GoogleCredentialStore = config.credential_store()
+    token = _credentials_to_dict(credentials)
+    try:
+        store.save_token(token)
+    except Exception as exc:
+        raise GoogleAuthError(f"Google token persistence failed: {type(exc).__name__}") from exc
+    return token
 
 
 def _persist(config: GoogleConnectorConfig, credentials: Any) -> dict[str, Any]:
-    store: GoogleCredentialStore = config.credential_store()
-    token = _credentials_to_dict(credentials)
-    store.save_token(token)
-    return token
+    # Retained for backwards compatibility with older callers/tests.
+    return _persist_credentials(config, credentials)
 
 
 def _credentials_to_dict(credentials: Any) -> dict[str, Any]:
@@ -223,6 +312,15 @@ def require_valid_credentials(config: GoogleConnectorConfig) -> Any:
 
 # Bind only to the loopback interface (never 0.0.0.0 / a routable address).
 LOOPBACK_HOST = "127.0.0.1"
+# HTML shown to the user after the OAuth redirect is *received*. It deliberately does
+# NOT claim the authorization is complete: state validation, the token exchange against
+# Google, and encrypted persistence all happen in the parent flow AFTER this handler
+# returns. No code/token/verifier/secret is ever embedded in this page.
+LOOPBACK_CALLBACK_HTML = (
+    "<html><body><h2>SecuRedact</h2>"
+    "<p>Google authorization received. Finishing setup locally...</p>"
+    "</body></html>"
+)
 # Upper bound on how long the listener waits for the browser redirect before the
 # authorization fails safely.
 LOOPBACK_TIMEOUT_SECONDS = 300.0
@@ -322,11 +420,12 @@ class LoopbackOAuthServer:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(
-                    b"<html><body><h2>SecuRedact</h2>"
-                    b"<p>Google authorization complete. You may close this tab.</p>"
-                    b"</body></html>"
-                )
+                # The callback has only just been *received* here. State validation,
+                # the token exchange against Google, and encrypted persistence all
+                # happen in the parent flow AFTER this handler returns. Claiming
+                # "complete" here would falsely report success before any of that has
+                # run, so we only acknowledge receipt and let the local flow finish.
+                self.wfile.write(LOOPBACK_CALLBACK_HTML.encode("utf-8"))
                 # Stop serving once a callback (valid or not) has been handled.
                 threading.Thread(target=server._httpd.shutdown, daemon=True).start()
 
@@ -385,7 +484,7 @@ def run_local_oauth(
     _exchange_fn: Callable[..., object] | None = None,
     _browser_open: Callable[[str], None] | None = None,
     _server_cls: type[LoopbackOAuthServer] | None = None,
-) -> bool:
+) -> GoogleLoopbackOutcome:
     """Perform the full local loopback OAuth flow and persist the token.
 
     Picks a random loopback port, builds the (PKCE) consent URL, starts the
@@ -402,7 +501,10 @@ def run_local_oauth(
     server = server_cls(expected_state="", timeout=timeout_seconds)
     # Bind the flow to the exact loopback redirect URI the listener will receive.
     loopback_config = dataclasses.replace(config, redirect_uri=server.redirect_uri)
-    url, state = get_authorization_url(loopback_config, pkce=True)
+    try:
+        url, state = get_authorization_url(loopback_config, pkce=True)
+    except Exception as exc:
+        return _loopback_failure(LOOPBACK_STAGE_CALLBACK, ERR_UNEXPECTED, exc)
     server.expected_state = state
     server.start()
 
@@ -411,20 +513,40 @@ def run_local_oauth(
     elif open_browser:
         try:
             webbrowser.open(url)
-        except Exception:  # noqa: S110 - pragma: no cover - browser launch is best-effort
+        except Exception:  # noqa: S110 - browser launch is best-effort
             pass
 
     try:
         result = server.wait_for_callback()
-    except LoopbackAuthError:
-        return False
+    except LoopbackAuthError as exc:
+        return _loopback_failure(LOOPBACK_STAGE_CALLBACK, ERR_UNEXPECTED, exc)
+
+    # CSRF / state validation failure: fail closed (no exchange, no token).
+    if result.error == "state_mismatch":
+        return _loopback_failure(LOOPBACK_STAGE_STATE_VALIDATION, ERR_STATE_MISMATCH)
+    # Google returned an OAuth error (e.g. access_denied) in the redirect.
     if result.error:
-        return False
+        return _loopback_failure(LOOPBACK_STAGE_CALLBACK_ERROR, ERR_GOOGLE_CALLBACK_ERROR)
+    # A callback without a code cannot be exchanged (fail closed).
     if not result.code:
-        return False
-    exchange = _exchange_fn or exchange_code
+        return _loopback_failure(LOOPBACK_STAGE_MISSING_CODE, ERR_MISSING_CODE)
+
+    # Injected boundary performs the full exchange + persist (tests / dev). The real
+    # path splits token exchange and persistence so the exact post-callback stage is
+    # reported instead of a generic ``authorized=false``.
+    if _exchange_fn is not None:
+        try:
+            _exchange_fn(loopback_config, result.code, state=state)
+        except Exception as exc:
+            return _loopback_failure(LOOPBACK_STAGE_TOKEN_EXCHANGE, ERR_TOKEN_EXCHANGE_FAILED, exc)
+        return GoogleLoopbackOutcome(authorized=True, stage=LOOPBACK_STAGE_COMPLETE)
+
     try:
-        exchange(loopback_config, result.code, state=state)
-    except Exception:
-        return False
-    return True
+        credentials = _exchange_token_only(loopback_config, result.code, state=state)
+    except Exception as exc:
+        return _loopback_failure(LOOPBACK_STAGE_TOKEN_EXCHANGE, ERR_TOKEN_EXCHANGE_FAILED, exc)
+    try:
+        _persist_credentials(loopback_config, credentials)
+    except Exception as exc:
+        return _loopback_failure(LOOPBACK_STAGE_PERSISTENCE, ERR_PERSISTENCE_FAILED, exc)
+    return GoogleLoopbackOutcome(authorized=True, stage=LOOPBACK_STAGE_COMPLETE)

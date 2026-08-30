@@ -1846,6 +1846,11 @@ class GoogleOnboardingOutcome:
     authorized: bool = False
     integration_id: str | None = None
     binding_verified: bool = False
+    # Bounded, safe diagnostics for a failed authorization (no secret material):
+    # the post-callback stage and a safe error code surfaced by the machine runtime.
+    auth_stage: str | None = None
+    auth_error_code: str | None = None
+    auth_error: str | None = None
     # The exact interpreter the Google readiness probe AND the Google authorization
     # ran in (``None`` when no machine runtime interpreter was available). Recorded
     # so the wizard/tests can prove which Python did the work instead of inferring it.
@@ -1886,7 +1891,7 @@ def _authorize_google_machine(
     secret_input_fn: Callable[[str], str],
     authorize_google_fn: Callable[..., bool] | None,
     google_byo: bool = False,
-) -> bool:
+) -> google_setup.GoogleMachineAuthResult:
     """Run machine-local Google OAuth in the machine-owned runtime interpreter.
 
     ``runtime_python`` is the interpreter resolved once by
@@ -1895,15 +1900,13 @@ def _authorize_google_machine(
     it via the local loopback flow, so the Google extra that the scheduled agent
     uses is the one that authorizes.
 
-    When there is no machine runtime interpreter:
+    Returns a bounded :class:`~securedact_mcp.agent.google_setup.GoogleMachineAuthResult`
+    (``authorized`` plus a safe ``stage``/``error_code`` on failure). When there is no
+    machine runtime interpreter and no injected ``authorize_google_fn``:
 
-    * an explicitly injected ``authorize_google_fn`` (dev / embedders / tests) is
-      used; otherwise
-    * on Windows we FAIL CLOSED. Importing Google in the setup CLI's own
-      interpreter was an accidental fallback: it raised
-      ``ModuleNotFoundError: google_auth_oauthlib`` from a completely different
-      Python than the one the readiness probe reported on, producing the
-      contradictory "dependencies available / not authorized" pair;
+    * on Windows we FAIL CLOSED (importing Google in the setup CLI's own interpreter
+      was the accidental fallback that produced the contradictory "dependencies
+      available / not authorized" pair);
     * on non-Windows (dev only, where there is no machine runtime at all) the
       in-process implementation remains available.
     """
@@ -1917,7 +1920,7 @@ def _authorize_google_machine(
             google_byo=google_byo,
         )
     if authorize_google_fn is not None:
-        return bool(
+        ok = bool(
             authorize_google_fn(
                 data_dir,
                 input_fn=input_fn,
@@ -1926,6 +1929,7 @@ def _authorize_google_machine(
                 require_enabled=False,
             )
         )
+        return google_setup.GoogleMachineAuthResult(authorized=ok)
     if sys.platform == "win32":
         print(
             NO_RUNTIME_FOR_GOOGLE_AUTH_MSG.format(
@@ -1933,8 +1937,10 @@ def _authorize_google_machine(
             ),
             file=output,
         )
-        return False
-    return bool(
+        return google_setup.GoogleMachineAuthResult(
+            authorized=False, stage="no_runtime", error_code="google_no_runtime"
+        )
+    ok = bool(
         google_setup.authorize_google_machine(
             data_dir,
             input_fn=input_fn,
@@ -1943,6 +1949,43 @@ def _authorize_google_machine(
             require_enabled=False,
         )
     )
+    return google_setup.GoogleMachineAuthResult(authorized=ok)
+
+
+def _report_google_auth_failure(
+    outcome: GoogleOnboardingOutcome, output: Any, google_byo: bool
+) -> None:
+    """Report an actionable, safe message for a post-callback OAuth failure.
+
+    ``outcome`` carries only a bounded ``stage`` / ``error_code`` (never any token,
+    code, verifier, or secret). This is the exact path that must NOT print the
+    managed-OAuth-unavailable message: the managed client was resolved and Google
+    accepted the OAuth client, so the failure is downstream (state validation, token
+    exchange, or persistence).
+    """
+
+    stage = outcome.auth_stage
+    error_code = outcome.auth_error_code
+    if stage or error_code:
+        msg = "Google authorization failed after the browser returned to SecuRedact"
+        if stage:
+            msg += f" (stage: {stage})"
+        if error_code:
+            msg += f" [code: {error_code}]"
+        msg += ". Finish the machine-local OAuth with 'securedact-mcp setup --agent --google yes'."
+        if google_byo:
+            msg += (
+                " For BYO, verify the Google Cloud OAuth client id/secret and the "
+                "authorized redirect URI."
+            )
+        print(msg, file=output)
+    else:
+        print(
+            "Google authorization could not be completed locally. Re-run setup with "
+            "'securedact-mcp setup --agent --google yes' (or --google-byo for your own "
+            "Google Cloud OAuth app).",
+            file=output,
+        )
 
 
 def build_google_auth_argv(
@@ -1986,20 +2029,20 @@ def _authorize_google_via_runtime(
     command_runner: CommandRunner | None,
     output: Any,
     google_byo: bool = False,
-) -> bool:
+) -> google_setup.GoogleMachineAuthResult:
     """Authorize Google using the machine-owned runtime interpreter via loopback.
 
     The machine runtime opens the browser on 127.0.0.1, validates state, and
     exchanges the code in-process. Running authorization *inside the machine
     runtime* (which carries the Google extra) means a missing
-    ``google_auth_oauthlib`` in the setup CLI's interpreter cannot break it, and
-    we never ask the customer for an OAuth client secret.
+    ``google_auth_oauthlib`` in the setup CLI's interpreter cannot break it, and we
+    never ask the customer for an OAuth client secret.
 
-    The default production path uses the SecuRedact-managed app. If the loopback
-    flow does not complete, we fail closed (return False) — the caller reports
-    the failure and, on the normal (managed) path, never prompts the customer
-    for OAuth credentials. Fails closed on any non-zero runtime exit or malformed
-    response.
+    The machine runtime returns a bounded JSON result (``authorized`` plus a safe
+    ``stage``/``error_code``). That result is preserved and surfaced to the parent
+    setup CLI, so a post-callback failure is reported with its exact stage instead of
+    the collapsed ``{"authorized": false}``. Fails closed on any non-zero runtime exit
+    or malformed response.
     """
 
     runner = command_runner or _default_runner
@@ -2011,34 +2054,49 @@ def _authorize_google_via_runtime(
     try:
         result = runner(loopback_argv, RunInput(env=_env_for(Path(data_dir))))
     except Exception as exc:  # a runtime that cannot be launched is a hard stop
-        print(
-            f"Google authorization could not run in the machine runtime: {scrub(str(exc))}",
-            file=output,
+        return google_setup.GoogleMachineAuthResult(
+            authorized=False,
+            stage="runtime_launch",
+            error_code="google_runtime_launch_failed",
+            error=scrub(str(exc)),
         )
-        return False
-    if result.returncode != 0:
-        print(
-            "Google authorization could not be started in the machine runtime: "
-            f"{scrub(result.stderr or result.stdout)}",
-            file=output,
-        )
-        return False
+
+    # The machine runtime always emits JSON on stdout and exits non-zero on any
+    # auth failure, so parse the payload even when the exit code is non-zero. A
+    # parse failure means the runtime did not produce the expected JSON (a genuine
+    # runtime/launch defect), which we fail closed on.
     try:
         payload = json.loads(result.stdout)
     except Exception:
-        print(
-            "Google authorization failed: malformed machine-runtime response",
-            file=output,
+        if result.returncode != 0:
+            return google_setup.GoogleMachineAuthResult(
+                authorized=False,
+                stage="runtime_exit",
+                error_code="google_runtime_exit_nonzero",
+                error=scrub(result.stderr or result.stdout),
+            )
+        return google_setup.GoogleMachineAuthResult(
+            authorized=False,
+            stage="runtime_response",
+            error_code="google_runtime_malformed_response",
+            error="malformed machine-runtime response",
         )
-        return False
+
     if not payload.get("authorized"):
-        err = payload.get("error")
+        stage = payload.get("stage")
+        error_code = payload.get("error_code") or payload.get("error")
+        detail = f" (stage: {stage})" if stage else ""
+        # Surface the safe stage/code; never any OAuth secret/token/code.
         print(
-            "Google authorization failed" + (f": {scrub(str(err))}" if err else ""),
+            "Google authorization failed"
+            + (f": {scrub(str(error_code))}" if error_code else "")
+            + detail,
             file=output,
         )
-        return False
-    return True
+        return google_setup.GoogleMachineAuthResult(
+            authorized=False, stage=stage, error_code=error_code
+        )
+    return google_setup.GoogleMachineAuthResult(authorized=True, stage="complete")
 
 
 def run_google_machine_onboarding(
@@ -2132,7 +2190,7 @@ def run_google_machine_onboarding(
     #    in-process. A missing runtime dependency is an INSTALLATION/readiness
     #    failure, not a reason to ask the customer for OAuth credentials.
     print("Authorizing Google locally against the machine data root...", file=output)
-    outcome.authorized = _authorize_google_machine(
+    auth_result = _authorize_google_machine(
         data_dir=data_dir,
         runtime_python=runtime_python,
         command_runner=command_runner,
@@ -2143,11 +2201,15 @@ def run_google_machine_onboarding(
         authorize_google_fn=authorize_google_fn,
         google_byo=google_byo,
     )
+    outcome.authorized = auth_result.authorized
+    outcome.auth_stage = auth_result.stage
+    outcome.auth_error_code = auth_result.error_code
+    outcome.auth_error = auth_result.error
     if not outcome.authorized:
-        # Only when the operator explicitly opts into BYO/enterprise (their own
-        # Google Cloud OAuth app) do we collect a client id/secret. The default
-        # production path is the SecuRedact-managed app, so a normal customer never
-        # has to create their own Google Cloud project / OAuth application.
+        # On the normal (managed) path, only the genuine absence of a managed client
+        # warrants the "managed OAuth application unavailable" message. A failure that
+        # happens *after* the browser OAuth flow started (state validation, token
+        # exchange, or persistence) must never be misreported as managed-app absence.
         if google_byo:
             collected = bool(
                 _client_config(
@@ -2159,7 +2221,7 @@ def run_google_machine_onboarding(
                 )
             )
             if collected:
-                outcome.authorized = _authorize_google_machine(
+                auth_result = _authorize_google_machine(
                     data_dir=data_dir,
                     runtime_python=runtime_python,
                     command_runner=command_runner,
@@ -2170,8 +2232,12 @@ def run_google_machine_onboarding(
                     authorize_google_fn=authorize_google_fn,
                     google_byo=google_byo,
                 )
+                outcome.authorized = auth_result.authorized
+                outcome.auth_stage = auth_result.stage
+                outcome.auth_error_code = auth_result.error_code
+                outcome.auth_error = auth_result.error
         if not outcome.authorized:
-            if not google_byo:
+            if not google_byo and not google_managed.is_managed_client_configured():
                 print(
                     google_managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG
                     + " Normal customers should not create their own Google Cloud "
@@ -2181,6 +2247,8 @@ def run_google_machine_onboarding(
                     "OAuth app (advanced/enterprise).",
                     file=output,
                 )
+            else:
+                _report_google_auth_failure(outcome, output, google_byo)
             print(
                 "Google authorization was not completed. No Google job can run until "
                 "it is (finish it with 'securedact-mcp setup --agent --google yes').",

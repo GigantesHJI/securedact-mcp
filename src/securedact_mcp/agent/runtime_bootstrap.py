@@ -195,9 +195,9 @@ def _cmd_google_auth(arguments: Any) -> int:
             print(json.dumps(payload))
             return 0 if payload.get("verified") else 2
         if arguments.loopback:
-            ok = google_setup.run_google_loopback_authorization(arguments.data_dir)
-            print(json.dumps({"authorized": bool(ok)}))
-            return 0 if ok else 2
+            payload = google_setup.run_google_loopback_authorization(arguments.data_dir)
+            print(json.dumps(payload))
+            return 0 if payload.get("authorized") else 2
         if arguments.begin:
             url, state = google_setup.begin_google_authorization(arguments.data_dir)
             print(json.dumps({"url": url, "state": state}))
@@ -213,7 +213,13 @@ def _cmd_google_auth(arguments: Any) -> int:
         print(json.dumps({"authorized": bool(ok)}))
         return 0 if ok else 2
     except Exception as exc:  # fail closed; surface only a safe message
-        payload = {"authorized": False, "error": scrub(str(exc)), "interpreter": sys.executable}
+        payload = {
+            "authorized": False,
+            "stage": "google_auth_unexpected",
+            "error_code": "google_auth_unexpected_error",
+            "error": scrub(str(exc)),
+            "interpreter": sys.executable,
+        }
         if getattr(arguments, "verify", False):
             payload["verified"] = False
         print(json.dumps(payload))

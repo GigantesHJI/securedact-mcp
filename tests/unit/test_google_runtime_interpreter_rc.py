@@ -342,7 +342,7 @@ def test_authorize_google_machine_never_imports_google_in_process(tmp_path: Path
         authorize_google_fn=None,
         google_byo=False,
     )
-    assert ok is True
+    assert ok.authorized is True
     assert runner.loopback_calls()[0][0] == str(runtime_python)
 
 
@@ -396,7 +396,7 @@ def test_injected_implementation_still_serves_dev_when_no_runtime(tmp_path: Path
         authorize_google_fn=lambda *_a, **_k: calls.append(1) or True,
         google_byo=False,
     )
-    assert ok is True
+    assert ok.authorized is True
     assert calls == [1]
 
 

@@ -203,6 +203,9 @@ def test_agent_elevated_reaches_resumed_flow_once(
         agent="yes",
         agent_elevated=True,
         data_dir=tmp_path / "data",
+        # Elevation-resume coverage only; decline Google explicitly so the test
+        # never reads/writes machine-local Google state.
+        google="no",
         elevated_check=lambda: False,
         elevate=lambda a: elevate.append(list(a)) or 0,
         secret_input_fn=lambda _p: "srr_dummy_token",

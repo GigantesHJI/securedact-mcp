@@ -201,6 +201,9 @@ def test_resumed_continuation_does_not_re_elevate(
         output=output,
         agent="yes",
         data_dir=tmp_path / "data",
+        # This test covers elevation only; decline Google explicitly so it never
+        # depends on (or touches) machine-local Google state.
+        google="no",
         elevated_check=lambda: True,
         elevate=elevate,
         secret_input_fn=lambda _p: "srr_tok",

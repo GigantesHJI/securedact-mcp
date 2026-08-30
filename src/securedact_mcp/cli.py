@@ -110,8 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--google",
         choices=("yes", "no"),
         default=None,
-        help="enable/disable Google Workspace onboarding during setup "
-        "(default: auto-detect via SECUREDACT_GOOGLE_ENABLED)",
+        help="enable/disable Google Workspace onboarding during setup (default: "
+        "detect existing machine configuration, otherwise ask during the wizard)",
     )
     setup.add_argument(
         "--google-integration-id",

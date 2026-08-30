@@ -229,6 +229,9 @@ def test_reuse_does_not_consume_token_in_module(
         output=output,
         agent="yes",
         data_dir=machine_root,
+        # This test covers token reuse only; decline Google explicitly so the
+        # wizard never reads/writes machine-local Google state.
+        google="no",
         elevated_check=lambda: True,
         secret_input_fn=lambda _p: "srr_should_not_be_used",
     )

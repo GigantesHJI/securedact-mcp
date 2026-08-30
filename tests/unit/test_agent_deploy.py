@@ -569,6 +569,10 @@ def test_managed_agent_module_reports_online(tmp_path: Path, monkeypatch) -> Non
         output=output,
         secret_input_fn=lambda _p: "srr_tok",
         agent="yes",
+        # Hermetic: pin the machine root to tmp and decline Google explicitly so
+        # this elevation/heartbeat test never reads the real ProgramData state.
+        data_dir=tmp_path / "data",
+        google="no",
         elevated_check=lambda: True,
     )
     assert rc == 0

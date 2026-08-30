@@ -12,6 +12,13 @@ If a valid machine-local Google token already exists it is reused idempotently.
 A user-profile token is never silently migrated; the operator is offered the
 local authorization flow instead.
 
+The onboarding is *selected by the wizard itself*, not by hidden environment
+flags: :func:`resolve_google_selection` honours an explicit ``--google`` choice,
+the non-secret ``SECUREDACT_GOOGLE_ENABLED`` override, machine-local evidence that
+Google is already configured, and otherwise asks the operator a plain question.
+:func:`verify_machine_binding` is the fail-closed post-condition the wizard checks
+before it may report the Managed Agent as ready.
+
 Both behaviours are fully injectable (config loader, auth flow, input reader,
 output stream) so the policy is testable without Windows or network access.
 """
@@ -19,8 +26,10 @@ output stream) so the policy is testable without Windows or network access.
 from __future__ import annotations
 
 import os
+import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TextIO, cast
 
@@ -30,6 +39,24 @@ from .errors import AgentError
 from .safe_log import scrub
 
 GOOGLE_CONNECTOR_PLATFORM = "google_workspace"
+
+# Non-secret operational environment overrides. They are *additional* discovery
+# sources only: the setup wizard must never require an operator to know them (see
+# :func:`resolve_google_selection`).
+GOOGLE_ENABLED_ENV = "SECUREDACT_GOOGLE_ENABLED"
+GOOGLE_CLIENT_ID_ENV = "SECUREDACT_GOOGLE_CLIENT_ID"
+GOOGLE_CLIENT_SECRET_ENV = "SECUREDACT_GOOGLE_CLIENT_SECRET"  # noqa: S105 - env name, not a secret
+GOOGLE_INTEGRATION_ID_ENV = "SECUREDACT_GOOGLE_INTEGRATION_ID"
+
+# A dashboard integration id is a non-secret opaque identifier. It is validated
+# before it is ever stored, or forwarded on the elevated continuation's argv, so a
+# malformed / injected value can never reach a command line or the binding store.
+_INTEGRATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+GOOGLE_SELECTION_PROMPT = (
+    "Connect a Google Workspace integration to this computer's managed agent? [y/N] "
+)
+GOOGLE_INTEGRATION_ID_PROMPT = "Google Workspace integration ID (from your SecuRedact dashboard): "
 
 
 class _GoogleConfigModule(Protocol):
@@ -62,6 +89,317 @@ def _extract_code(raw: str) -> str:
     return raw.strip()
 
 
+# ---------------------------------------------------------------------------
+# Machine-local Google state detection + first-class wizard selection
+# ---------------------------------------------------------------------------
+
+
+def normalize_integration_id(raw: str | None) -> str | None:
+    """Return a validated dashboard integration id, or ``None`` when absent.
+
+    Fail-closed on anything that is not an opaque identifier: the value is stored
+    in the machine binding store and may be forwarded on the elevated
+    continuation's command line, so shell metacharacters/whitespace are rejected.
+    """
+
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if not _INTEGRATION_ID_RE.match(text):
+        raise AgentError(
+            "invalid Google Workspace integration ID; copy it exactly from the "
+            "SecuRedact dashboard (letters, digits, '-', '_', '.', ':')"
+        )
+    return text
+
+
+def machine_agent_files(data_dir: Path | str, files: AgentFiles | None = None) -> AgentFiles:
+    """Return the agent file layout rooted at the *machine* data root.
+
+    All managed-agent state (registration, bindings) lives under
+    ``<machine data root>/agent`` -- e.g. ``C:\\ProgramData\\Securedact\\agent`` --
+    never in the interactive user's profile.
+    """
+
+    return files or AgentFiles.resolve(root=Path(data_dir) / "agent")
+
+
+@dataclass(frozen=True, slots=True)
+class GoogleMachineState:
+    """Evidence that Google Workspace managed scanning is configured here."""
+
+    client_configured: bool = False
+    token_present: bool = False
+    binding_integration_id: str | None = None
+
+    @property
+    def configured(self) -> bool:
+        """True when this machine already carries Google Workspace configuration."""
+
+        return bool(self.client_configured or self.token_present or self.binding_integration_id)
+
+
+def inspect_google_machine(
+    data_dir: Path | str,
+    *,
+    files: AgentFiles | None = None,
+    env: Mapping[str, str] | None = None,
+) -> GoogleMachineState:
+    """Detect machine-local Google Workspace configuration (no network, no prompts).
+
+    Reads only non-secret presence signals: whether an OAuth client (app) config is
+    resolvable, whether a machine-local OAuth token file exists, and whether a
+    Google connector binding is already recorded under the machine root. Never
+    decrypts or logs any secret value.
+    """
+
+    environ = os.environ if env is None else env
+    root = Path(data_dir)
+
+    client_configured = bool(
+        environ.get(GOOGLE_CLIENT_ID_ENV) and environ.get(GOOGLE_CLIENT_SECRET_ENV)
+    )
+    if not client_configured:
+        try:
+            from ..connectors.google.storage import GoogleClientConfigStore
+
+            stored_id, stored_secret = GoogleClientConfigStore(root).load()
+            client_configured = bool(stored_id and stored_secret)
+        except Exception:
+            client_configured = False
+
+    token_present = (root / "google" / "token.json.enc").is_file()
+
+    binding_integration_id: str | None = None
+    try:
+        for binding in ConnectorBindingStore(machine_agent_files(root, files)).list():
+            if binding.platform == GOOGLE_CONNECTOR_PLATFORM:
+                binding_integration_id = binding.integration_id
+                break
+    except Exception:
+        binding_integration_id = None
+
+    return GoogleMachineState(
+        client_configured=client_configured,
+        token_present=token_present,
+        binding_integration_id=binding_integration_id,
+    )
+
+
+def resolve_google_selection(
+    data_dir: Path | str,
+    *,
+    google: str | None = None,
+    non_interactive: bool = False,
+    input_fn: Callable[[str], str] = input,
+    output: TextIO = sys.stderr,
+    files: AgentFiles | None = None,
+    env: Mapping[str, str] | None = None,
+    state: GoogleMachineState | None = None,
+) -> bool:
+    """Decide whether the wizard must perform Google Workspace onboarding.
+
+    Resolution order (the interactive wizard never requires a hidden env flag):
+
+    1. an explicit ``--google no`` always wins (Google onboarding is skipped);
+    2. an explicit ``--google yes`` always wins (including a value forwarded to the
+       elevated continuation on argv);
+    3. the non-secret ``SECUREDACT_GOOGLE_ENABLED=1`` operational override;
+    4. *detected* machine-local Google configuration (client config, OAuth token, or
+       an existing Google binding) -- an idempotent rerun re-verifies it;
+    5. an explicit interactive question, defaulting to "no";
+    6. a non-interactive run with none of the above skips Google safely.
+    """
+
+    if google == "no":
+        return False
+    if google == "yes":
+        return True
+
+    environ = os.environ if env is None else env
+    if environ.get(GOOGLE_ENABLED_ENV) == "1":
+        return True
+
+    detected = (
+        state if state is not None else inspect_google_machine(data_dir, files=files, env=env)
+    )
+    if detected.configured:
+        print(
+            "Google Workspace configuration detected on this computer; "
+            "verifying the machine-local Google onboarding.",
+            file=output,
+        )
+        return True
+
+    if non_interactive:
+        print(
+            "Google Workspace onboarding was not selected (non-interactive run). "
+            "Re-run 'securedact-mcp setup --agent --google yes' to connect one.",
+            file=output,
+        )
+        return False
+
+    print(file=output)
+    print(
+        "SecuRedact can scan a Google Workspace (Drive) integration from this "
+        "computer. Files and detected values never leave the machine.",
+        file=output,
+    )
+    try:
+        answer = input_fn(GOOGLE_SELECTION_PROMPT).strip().casefold()
+    except (EOFError, StopIteration):
+        answer = "n"
+    return answer in {"y", "yes"}
+
+
+def resolve_google_integration_id(
+    data_dir: Path | str,
+    *,
+    google_integration_id: str | None = None,
+    non_interactive: bool = False,
+    input_fn: Callable[[str], str] = input,
+    output: TextIO = sys.stderr,
+    files: AgentFiles | None = None,
+    env: Mapping[str, str] | None = None,
+    state: GoogleMachineState | None = None,
+) -> str | None:
+    """Resolve the dashboard integration id to bind machine-locally.
+
+    Discovery order: the explicit ``--google-integration-id`` value, the non-secret
+    ``SECUREDACT_GOOGLE_INTEGRATION_ID`` override, an integration id already bound
+    under the machine root (idempotent rerun), and finally an explicit interactive
+    question. The control plane never supplies OAuth material, so when the id cannot
+    be discovered automatically the wizard asks for it clearly instead of silently
+    skipping the binding.
+    """
+
+    explicit = normalize_integration_id(google_integration_id)
+    if explicit:
+        return explicit
+
+    environ = os.environ if env is None else env
+    from_env = normalize_integration_id(environ.get(GOOGLE_INTEGRATION_ID_ENV))
+    if from_env:
+        return from_env
+
+    detected = (
+        state if state is not None else inspect_google_machine(data_dir, files=files, env=env)
+    )
+    if detected.binding_integration_id:
+        print(
+            "Reusing the Google Workspace integration already bound on this "
+            f"computer: {detected.binding_integration_id}",
+            file=output,
+        )
+        return detected.binding_integration_id
+
+    if non_interactive:
+        return None
+
+    print(file=output)
+    print("Find the integration ID in your SecuRedact dashboard:", file=output)
+    print("  Dashboard -> Integrations -> Google Workspace -> integration ID", file=output)
+    try:
+        answer = input_fn(GOOGLE_INTEGRATION_ID_PROMPT)
+    except (EOFError, StopIteration):
+        return None
+    return normalize_integration_id(answer)
+
+
+def prompt_google_client_config(
+    data_dir: Path | str,
+    *,
+    input_fn: Callable[[str], str] = input,
+    secret_input_fn: Callable[[str], str] | None = None,
+    output: TextIO = sys.stderr,
+    non_interactive: bool = False,
+    env: Mapping[str, str] | None = None,
+    save_fn: Callable[[Path | str, str | None, str | None], None] | None = None,
+) -> bool:
+    """Collect + persist the Google OAuth client (app) config when it is missing.
+
+    Returns ``True`` only when a NEW client id/secret was collected and persisted,
+    so the caller may retry authorization exactly once. Returns ``False`` when a
+    client config is already available (nothing to do) or when it could not be
+    collected (non-interactive run, or the operator declined).
+
+    The client secret is read with a non-echoing prompt and persisted encrypted
+    under the machine data root. It is never placed in the process environment, in
+    a machine-wide environment variable, on argv, in logs, or sent to the control
+    plane.
+    """
+
+    root = Path(data_dir)
+    state = inspect_google_machine(root, env=env)
+    if state.client_configured:
+        return False
+    if non_interactive:
+        print(
+            "A Google OAuth client id/secret is required for machine-local "
+            "authorization; re-run this step interactively to supply it.",
+            file=output,
+        )
+        return False
+
+    import getpass
+
+    read_secret = secret_input_fn or getpass.getpass
+    print(file=output)
+    print(
+        "Google requires an OAuth client (from your Google Cloud project) to "
+        "authorize Drive read-only access on this computer.",
+        file=output,
+    )
+    try:
+        client_id = input_fn("Google OAuth client ID: ").strip()
+        client_secret = read_secret("Google OAuth client secret: ").strip()
+    except (EOFError, StopIteration):
+        print("No Google OAuth client supplied; skipping.", file=output)
+        return False
+    if not client_id or not client_secret:
+        print("No Google OAuth client supplied; skipping.", file=output)
+        return False
+
+    if save_fn is not None:
+        save_fn(root, client_id, client_secret)
+    else:
+        from ..connectors.google.config import save_google_client_config
+
+        save_google_client_config(root, client_id, client_secret)
+    print("Google OAuth client stored encrypted under the machine data root.", file=output)
+    return True
+
+
+def verify_machine_binding(
+    data_dir: Path | str,
+    integration_id: str,
+    *,
+    files: AgentFiles | None = None,
+    profile: str = "default",
+) -> bool:
+    """Fail-closed proof that the machine-local Google binding really exists.
+
+    Re-reads ``<machine data root>/agent/connector-bindings.json`` from disk and
+    confirms it records exactly the resolved integration id on the
+    ``google_workspace`` platform. This is the post-condition the wizard checks
+    before it may report the Managed Agent as ready.
+    """
+
+    resolved = machine_agent_files(data_dir, files)
+    if not resolved.connector_bindings.is_file():
+        return False
+    try:
+        binding = ConnectorBindingStore(resolved).get(integration_id)
+    except Exception:
+        return False
+    if binding is None:
+        return False
+    return (
+        binding.platform == GOOGLE_CONNECTOR_PLATFORM
+        and (binding.local_profile or "default") == profile
+    )
+
+
 def authorize_google_machine(
     data_dir: Path | str,
     *,
@@ -70,12 +408,20 @@ def authorize_google_machine(
     config_module: _GoogleConfigModule | None = None,
     auth_module: _GoogleAuthModule | None = None,
     non_interactive: bool = False,
+    require_enabled: bool = True,
 ) -> bool:
     """Authorize Google locally on the machine (or reuse a valid machine token).
 
     Returns ``True`` when a valid machine-local Google credential exists or was
     just created. Returns ``False`` when Google is not enabled/configured, or when
     an interactive authorization could not be completed (e.g. non-interactive run).
+
+    ``require_enabled`` controls whether the non-secret ``SECUREDACT_GOOGLE_ENABLED``
+    operational flag must be present. The setup wizard passes ``False`` because an
+    explicit Google selection (``--google yes``, detected machine configuration, or
+    the interactive question) *is* the enablement signal -- the operator must never
+    need to know a hidden environment flag. Direct/CLI callers keep the fail-closed
+    default.
 
     The OAuth token is written only to ``<data_dir>/google`` via the injected
     config's credential store; no OAuth material is ever placed on argv, in the
@@ -84,14 +430,21 @@ def authorize_google_machine(
     """
 
     from ..connectors.google import auth as default_auth
-    from ..connectors.google.config import GoogleConfigError, load_google_config
+    from ..connectors.google import config as default_config
+    from ..connectors.google.config import GoogleConfigError
 
-    cfg_module = config_module or cast("_GoogleConfigModule", load_google_config)
+    # The fallback must be the config *module* (it is called as
+    # ``cfg_module.load_google_config(...)``); binding the bare function here made
+    # every real, non-injected call raise ``AttributeError: 'function' object has
+    # no attribute 'load_google_config'`` instead of authorizing.
+    cfg_module = config_module or cast("_GoogleConfigModule", default_config)
     auth_mod = auth_module or default_auth
 
     machine_data = Path(data_dir)
     try:
-        config = cfg_module.load_google_config(require_enabled=True, data_dir=machine_data)
+        config = cfg_module.load_google_config(
+            require_enabled=require_enabled, data_dir=machine_data
+        )
     except GoogleConfigError as exc:
         print(f"Google Workspace is not enabled/configured: {scrub(str(exc))}", file=output)
         return False
@@ -159,10 +512,11 @@ def bind_google_machine(
 
     from . import agent_runner
 
-    if not integration_id:
+    resolved_id = normalize_integration_id(integration_id)
+    if not resolved_id:
         raise AgentError("a Google Workspace integration_id is required to create a local binding")
     store = binding_store_cls(files)
-    existing = store.get(integration_id)
+    existing = store.get(resolved_id)
     if (
         existing is not None
         and existing.platform == GOOGLE_CONNECTOR_PLATFORM
@@ -173,7 +527,7 @@ def bind_google_machine(
     # Create or repair via the existing shipped binding mechanism.
     return agent_runner.bind_connector(
         config,
-        integration_id,
+        resolved_id,
         GOOGLE_CONNECTOR_PLATFORM,
         profile=profile,
         files=files,
@@ -211,7 +565,7 @@ def _set_machine_env_var(key: str, value: str) -> None:
         print(f"could not set machine env {key}: {scrub(str(exc))}", file=sys.stderr)
 
 
-def apply_google_machine_env(data_dir: Path | str) -> None:
+def apply_google_machine_env(data_dir: Path | str, *, enabled: bool | None = None) -> None:
     """Persist non-secret Google config at machine scope; encrypt the client secret.
 
     The OAuth client secret (and client id) are stored encrypted under the machine
@@ -221,6 +575,11 @@ def apply_google_machine_env(data_dir: Path | str) -> None:
     control plane. Only the non-secret enable flag is published at machine scope (it is
     inherited by the SYSTEM-run scheduled task); the client id/secret are NOT written to
     the machine environment.
+
+    ``enabled`` lets the setup wizard publish the non-secret enable flag when Google
+    was selected interactively, so an operator never has to know
+    ``SECUREDACT_GOOGLE_ENABLED``. When it is ``None`` the pre-existing environment
+    value decides.
 
     Invariants preserved:
       * OAuth access/refresh tokens remain machine-local (separate token vault).
@@ -232,8 +591,8 @@ def apply_google_machine_env(data_dir: Path | str) -> None:
     from ..connectors.google.storage import GoogleClientConfigStore
 
     data_dir = Path(data_dir)
-    env_client_id = os.environ.get("SECUREDACT_GOOGLE_CLIENT_ID")
-    env_client_secret = os.environ.get("SECUREDACT_GOOGLE_CLIENT_SECRET")
+    env_client_id = os.environ.get(GOOGLE_CLIENT_ID_ENV)
+    env_client_secret = os.environ.get(GOOGLE_CLIENT_SECRET_ENV)
 
     # Persist the client (app) config encrypted under the machine data root. This
     # is what lets the background task obtain the secret after reboot, without it
@@ -245,5 +604,6 @@ def apply_google_machine_env(data_dir: Path | str) -> None:
             print(f"could not persist google client config: {scrub(str(exc))}", file=sys.stderr)
 
     # Only the non-secret enable flag is published at machine scope.
-    if os.environ.get("SECUREDACT_GOOGLE_ENABLED") == "1":
-        _set_machine_env_var("SECUREDACT_GOOGLE_ENABLED", "1")
+    publish = enabled if enabled is not None else os.environ.get(GOOGLE_ENABLED_ENV) == "1"
+    if publish:
+        _set_machine_env_var(GOOGLE_ENABLED_ENV, "1")

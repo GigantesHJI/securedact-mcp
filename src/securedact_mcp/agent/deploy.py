@@ -182,7 +182,9 @@ def is_elevated() -> bool:
 AGENT_ELEVATED_ENV = "SECUREDACT_AGENT_ELEVATED"
 
 
-def build_elevation_argv() -> list[str]:
+def build_elevation_argv(
+    *, google: str | None = None, google_integration_id: str | None = None
+) -> list[str]:
     """Return the exact argv params for the elevated managed-agent re-launch.
 
     The file executed is always ``sys.executable`` (the RC venv interpreter that
@@ -193,12 +195,26 @@ def build_elevation_argv() -> list[str]:
     securedact-mcp.exe``). The ``--agent`` flag selects only the managed-agent
     module; ``--agent-elevated`` is the internal resume marker (carries no
     secret). No registration token or credential is ever placed here.
+
+    An explicit Google Workspace selection is forwarded so the elevated
+    continuation -- which is the process that actually performs the machine-local
+    Google onboarding -- cannot lose it across the UAC boundary. Only non-secret
+    values are forwarded: the ``yes``/``no`` choice and the validated dashboard
+    integration id (never a token, credential, or OAuth client secret).
     """
 
-    return ["-m", "securedact_mcp.cli", "setup", "--agent", "--agent-elevated"]
+    argv = ["-m", "securedact_mcp.cli", "setup", "--agent", "--agent-elevated"]
+    if google in {"yes", "no"}:
+        argv += ["--google", google]
+    validated = google_setup.normalize_integration_id(google_integration_id)
+    if validated:
+        argv += ["--google-integration-id", validated]
+    return argv
 
 
-def resolve_elevation_target() -> tuple[str, list[str]]:
+def resolve_elevation_target(
+    *, google: str | None = None, google_integration_id: str | None = None
+) -> tuple[str, list[str]]:
     """Return ``(interpreter, params)`` for the elevated re-launch.
 
     The interpreter is the currently-running RC venv python and the params use the
@@ -207,7 +223,10 @@ def resolve_elevation_target() -> tuple[str, list[str]]:
     the exact RC interpreter/code is used during elevation.
     """
 
-    return (sys.executable, build_elevation_argv())
+    return (
+        sys.executable,
+        build_elevation_argv(google=google, google_integration_id=google_integration_id),
+    )
 
 
 def self_elevate(
@@ -1057,6 +1076,24 @@ def _runtime_has_google_imports(runtime_path: Path, runner: CommandRunner) -> bo
     return result.returncode == 0
 
 
+def _google_runtime_deps_ready(
+    runtime_path: Path | str | None,
+    command_runner: CommandRunner | None,
+) -> bool:
+    """Readiness gate: the machine runtime can import the Google provider deps.
+
+    Provisioning already fails closed when the Google extra cannot be installed;
+    this is the *readiness* re-check performed just before the wizard is allowed to
+    report the Managed Agent as ready. When no runtime interpreter exists there is
+    nothing to probe (the provisioning gate owns that case), so it does not block.
+    """
+
+    runtime = Path(runtime_path or default_runtime_path())
+    if not resolve_runtime_python(runtime).exists():
+        return True
+    return _runtime_has_google_imports(runtime, command_runner or _default_runner)
+
+
 def _google_extra_install_target() -> str:
     """Return the exact pinned ``securedact-mcp[google]`` install target.
 
@@ -1580,6 +1617,195 @@ def _agent_already_registered(
         return False
 
 
+@dataclass(slots=True)
+class GoogleOnboardingOutcome:
+    """Result of the machine-local Google Workspace onboarding step."""
+
+    selected: bool
+    deps_ready: bool = False
+    authorized: bool = False
+    integration_id: str | None = None
+    binding_verified: bool = False
+
+    @property
+    def ready(self) -> bool:
+        """True only when every Google readiness pre-condition is satisfied."""
+
+        if not self.selected:
+            return True
+        return bool(
+            self.deps_ready and self.authorized and self.integration_id and self.binding_verified
+        )
+
+
+def run_google_machine_onboarding(
+    *,
+    data_dir: Path,
+    output: Any,
+    input_fn: Callable[[str], str],
+    secret_input_fn: Callable[[str], str],
+    non_interactive: bool = False,
+    google_integration_id: str | None = None,
+    runtime_path: Path | str | None = None,
+    command_runner: CommandRunner | None = None,
+    authorize_google_fn: Callable[..., bool] | None = None,
+    bind_google_fn: Callable[..., Any] | None = None,
+    apply_google_env_fn: Callable[..., None] | None = None,
+    verify_binding_fn: Callable[..., bool] | None = None,
+    client_config_fn: Callable[..., bool] | None = None,
+    deps_ready_fn: Callable[[], bool] | None = None,
+) -> GoogleOnboardingOutcome:
+    """Perform the machine-local Google onboarding and prove its post-conditions.
+
+    Order (each step is a hard pre-condition of the next):
+
+    1. the machine runtime can import the Google provider dependencies;
+    2. Google is authorized *locally against the machine data root* (an existing
+       valid machine token is reused; a missing OAuth client is collected once and
+       persisted encrypted, then authorization is retried exactly once);
+    3. the dashboard integration id is resolved (flag, non-secret env override,
+       an already-bound id, or an explicit question);
+    4. the machine-local connector binding is created/reused; and
+    5. the binding is re-read from ``<machine root>/agent/connector-bindings.json``
+       and proven to record exactly that integration id.
+
+    Returns a :class:`GoogleOnboardingOutcome` whose ``ready`` property is the
+    single fail-closed signal the wizard uses. Nothing here is ever silently
+    skipped: every unmet pre-condition is reported and leaves ``ready`` False.
+    """
+
+    _authorize = authorize_google_fn or google_setup.authorize_google_machine
+    _bind = bind_google_fn or google_setup.bind_google_machine
+    _apply_env = apply_google_env_fn or google_setup.apply_google_machine_env
+    _verify = verify_binding_fn or google_setup.verify_machine_binding
+    _client_config = client_config_fn or google_setup.prompt_google_client_config
+    _deps_ready = deps_ready_fn or (
+        lambda: _google_runtime_deps_ready(runtime_path, command_runner)
+    )
+
+    outcome = GoogleOnboardingOutcome(selected=True)
+
+    print(file=output)
+    print("[Google Workspace]", file=output)
+
+    # 1. Required Google dependencies must be importable from the machine runtime.
+    outcome.deps_ready = bool(_deps_ready())
+    if not outcome.deps_ready:
+        print(
+            "The machine runtime is missing the Google connector dependencies; "
+            "Google scans cannot run. Re-run setup so the Google extra is "
+            "installed into the machine runtime.",
+            file=output,
+        )
+        return outcome
+
+    # Publish only the non-secret enable flag at machine scope (and persist any
+    # operator-supplied client config encrypted under the machine root).
+    try:
+        _apply_env(data_dir, enabled=True)
+    except Exception as exc:  # pragma: no cover - non-fatal best-effort
+        print(f"Google machine env not applied: {scrub(str(exc))}", file=output)
+
+    # 2. Machine-local OAuth must be valid (reused idempotently when present).
+    print("Authorizing Google locally against the machine data root...", file=output)
+    outcome.authorized = bool(
+        _authorize(
+            data_dir,
+            input_fn=input_fn,
+            output=output,
+            non_interactive=non_interactive,
+            require_enabled=False,
+        )
+    )
+    if not outcome.authorized:
+        # The most common cause on a clean machine is a missing OAuth client
+        # (app) config. Collect it once, persist it encrypted, and retry exactly
+        # once so the operator is not sent away to a separate command.
+        collected = bool(
+            _client_config(
+                data_dir,
+                input_fn=input_fn,
+                secret_input_fn=secret_input_fn,
+                output=output,
+                non_interactive=non_interactive,
+            )
+        )
+        if collected:
+            outcome.authorized = bool(
+                _authorize(
+                    data_dir,
+                    input_fn=input_fn,
+                    output=output,
+                    non_interactive=non_interactive,
+                    require_enabled=False,
+                )
+            )
+    if not outcome.authorized:
+        print(
+            "Google authorization was not completed. No Google job can run until "
+            "it is (finish it with 'securedact-mcp setup --agent --google yes').",
+            file=output,
+        )
+        return outcome
+
+    # 3. Resolve the dashboard integration id (ask clearly when not discoverable).
+    try:
+        outcome.integration_id = google_setup.resolve_google_integration_id(
+            data_dir,
+            google_integration_id=google_integration_id,
+            non_interactive=non_interactive,
+            input_fn=input_fn,
+            output=output,
+        )
+    except AgentError as exc:
+        print(f"Google Workspace integration ID rejected: {scrub(str(exc))}", file=output)
+        return outcome
+    if not outcome.integration_id:
+        print(
+            "No Google Workspace integration ID was provided, so the machine-local "
+            "connector binding could not be created. Google jobs will fail with "
+            "'no local connector binding' until it is supplied; re-run "
+            "'securedact-mcp setup --agent --google yes --google-integration-id <id>'.",
+            file=output,
+        )
+        return outcome
+
+    # 4. Create (or idempotently reuse) the machine-local binding.
+    registered = _load_registered_config(data_dir)
+    if registered is None:
+        print(
+            "Agent is not registered locally; complete registration before "
+            "binding the Google integration.",
+            file=output,
+        )
+        return outcome
+    files = AgentFiles.resolve(root=Path(data_dir) / "agent")
+    try:
+        binding = _bind(registered, outcome.integration_id, files=files)
+    except AgentError as exc:
+        print(f"Google connector binding failed: {scrub(str(exc))}", file=output)
+        return outcome
+    except Exception as exc:  # a store/IO failure must never look like success
+        print(f"Google connector binding failed safely: {scrub(str(exc))}", file=output)
+        return outcome
+
+    # 5. Fail-closed post-condition: the binding really exists on the machine root.
+    outcome.binding_verified = bool(_verify(data_dir, outcome.integration_id, files=files))
+    if not outcome.binding_verified:
+        print(
+            "The Google connector binding could not be verified under "
+            f"{files.connector_bindings}; refusing to report the agent as ready.",
+            file=output,
+        )
+        return outcome
+    print(
+        f"Local connector bound: {binding.integration_id} -> {binding.platform}",
+        file=output,
+    )
+    print(f"Binding file: {files.connector_bindings}", file=output)
+    return outcome
+
+
 def run_managed_agent_module(
     *,
     input_fn: Callable[[str], str],
@@ -1603,12 +1829,22 @@ def run_managed_agent_module(
     google_integration_id: str | None = None,
     authorize_google_fn: Callable[..., bool] | None = None,
     bind_google_fn: Callable[..., Any] | None = None,
-    apply_google_env_fn: Callable[[Path | str], None] | None = None,
+    apply_google_env_fn: Callable[..., None] | None = None,
+    verify_google_binding_fn: Callable[..., bool] | None = None,
+    google_client_config_fn: Callable[..., bool] | None = None,
+    google_deps_ready_fn: Callable[[], bool] | None = None,
+    google_selection_fn: Callable[..., bool] | None = None,
 ) -> int:
     """Orchestrate the Managed Agent setup step inside ``securedact-mcp setup``.
 
     Returns 0 when the agent is installed, skipped safely, or unsupported; 2 on a
     hard failure. The registration token is never echoed or persisted.
+
+    When Google Workspace managed scanning is selected (explicitly, by detected
+    machine configuration, or by the interactive question) the module performs the
+    full machine onboarding -- Google deps, machine-local OAuth, and the
+    machine-local connector binding -- and refuses to report the Managed Agent as
+    ready until all three exist.
     """
 
     import getpass
@@ -1704,7 +1940,13 @@ def run_managed_agent_module(
             # The elevated continuation is launched with the same RC interpreter
             # that initiated setup (``sys.executable``) followed by the module-form
             # argv, so it can never resolve a different/global install via PATH.
-            target = [sys.executable, *build_elevation_argv()]
+            # An explicit Google selection is forwarded (non-secret only) so the
+            # elevated continuation -- which performs the Google machine onboarding
+            # -- cannot lose it across the UAC boundary.
+            target = [
+                sys.executable,
+                *build_elevation_argv(google=google, google_integration_id=google_integration_id),
+            ]
             code = handler(list(rerun_argv) if rerun_argv is not None else target)
             if code != 0:
                 # UAC denied or the elevated launch failed: stop safely without
@@ -1752,10 +1994,21 @@ def run_managed_agent_module(
             print("Empty registration token; aborting agent install.", file=output)
             return 2
 
-    # Google Workspace is "configured" when explicitly selected or when the
-    # dashboard-provided enable flag is present; otherwise we never force it.
-    google_enabled = (google == "yes") or (
-        google is None and os.getenv("SECUREDACT_GOOGLE_ENABLED") == "1"
+    # Google Workspace onboarding selection. The wizard itself decides -- an
+    # explicit ``--google`` choice (including one forwarded across the UAC
+    # boundary), the non-secret ``SECUREDACT_GOOGLE_ENABLED`` override, detected
+    # machine-local Google configuration, or a plain interactive question. An
+    # operator never has to know a hidden environment flag, and Google is never
+    # forced on a machine where it is not configured/selected.
+    _select_google = google_selection_fn or google_setup.resolve_google_selection
+    google_enabled = bool(
+        _select_google(
+            machine_data_dir,
+            google=google,
+            non_interactive=non_interactive,
+            input_fn=input_fn,
+            output=output,
+        )
     )
 
     # Provision secure runtime + install + start. Google deps are installed into
@@ -1783,70 +2036,58 @@ def run_managed_agent_module(
     print("Service:", result.get("service_name"), "as", result.get("account"), file=output)
     print("Registered agent:", result.get("agent_id"), file=output)
 
-    # --- Google Workspace onboarding (only when configured) -------------------
+    # --- Google Workspace onboarding (only when configured/selected) -----------
     resolved_data = machine_data_dir
+    google_outcome = GoogleOnboardingOutcome(selected=google_enabled)
     if google_enabled:
-        print(file=output)
-        print("[Google Workspace]", file=output)
-        print("Google Workspace integration detected.", file=output)
-        _authorize = authorize_google_fn or google_setup.authorize_google_machine
-        _bind = bind_google_fn or google_setup.bind_google_machine
-        _apply_env = apply_google_env_fn or google_setup.apply_google_machine_env
-        try:
-            _apply_env(resolved_data)
-        except Exception as exc:  # pragma: no cover - non-fatal best-effort
-            print(f"Google machine env not applied: {scrub(str(exc))}", file=output)
-        print("Local Google authorization required.", file=output)
-        authorized = _authorize(
-            resolved_data,
-            input_fn=input_fn,
+        google_outcome = run_google_machine_onboarding(
+            data_dir=resolved_data,
             output=output,
+            input_fn=input_fn,
+            secret_input_fn=_secret_input,
             non_interactive=non_interactive,
+            google_integration_id=google_integration_id,
+            runtime_path=runtime_path,
+            command_runner=command_runner,
+            authorize_google_fn=authorize_google_fn,
+            bind_google_fn=bind_google_fn,
+            apply_google_env_fn=apply_google_env_fn,
+            verify_binding_fn=verify_google_binding_fn,
+            client_config_fn=google_client_config_fn,
+            deps_ready_fn=google_deps_ready_fn,
         )
-        if not authorized:
+        if not google_outcome.ready:
+            # Fail closed: the Managed Agent must NOT be reported as ready (and the
+            # heartbeat/"setup complete" milestone must not be printed) while a
+            # required Google pre-condition is missing. A missing machine-local
+            # binding is exactly the defect that made scheduled Google jobs fail
+            # with 'no local connector binding for integration_id ...'.
+            print(file=output)
             print(
-                "Google authorization was not completed; Google scans will fail "
-                "until it is done (run 'securedact-mcp google auth').",
+                "Managed Agent: NOT ready - Google Workspace was selected but the "
+                "machine-local Google onboarding is incomplete.",
                 file=output,
             )
-        # Resolve the integration id via the dashboard-provided value, or prompt
-        # for it; the control plane never supplies OAuth material, so the operator
-        # supplies the integration id shown by the dashboard.
-        integration_id = google_integration_id
-        if not integration_id and not non_interactive:
-            try:
-                integration_id = input_fn(
-                    "Google Workspace integration ID (from your SecuRedact dashboard): "
-                ).strip()
-            except (EOFError, StopIteration):
-                integration_id = None
-        if integration_id:
-            registered = _load_registered_config(resolved_data)
-            if registered is None:
-                print(
-                    "Agent is not registered locally; complete registration before "
-                    "binding the Google integration.",
-                    file=output,
-                )
-            else:
-                try:
-                    binding = _bind(
-                        registered,
-                        integration_id,
-                        files=AgentFiles.resolve(root=resolved_data / "agent"),
-                    )
-                    print(
-                        f"Local connector bound: {binding.integration_id} -> {binding.platform}",
-                        file=output,
-                    )
-                except AgentError as exc:
-                    print(f"Google connector binding failed: {scrub(str(exc))}", file=output)
-        else:
             print(
-                "No Google Workspace integration ID provided; bind it later with "
-                "'securedact-mcp agent connectors bind'.",
+                f"  Google dependencies: {'available' if google_outcome.deps_ready else 'missing'}",
                 file=output,
             )
+            print(
+                f"  Machine-local Google OAuth: "
+                f"{'valid' if google_outcome.authorized else 'not authorized'}",
+                file=output,
+            )
+            print(
+                "  Machine connector binding: "
+                f"{'present' if google_outcome.binding_verified else 'missing'}",
+                file=output,
+            )
+            print(
+                "  Finish it with: securedact-mcp setup --agent --google yes "
+                "--google-integration-id <dashboard integration ID>",
+                file=output,
+            )
+            return 2
 
     print(file=output)
     print("Starting managed agent...", file=output)

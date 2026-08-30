@@ -296,6 +296,16 @@ def _agent_config() -> AgentConfig:
     return AgentConfig.create(control_plane_url="https://example.com", agent_id="agent-1")
 
 
+def _seed_machine_registration(machine_root: Path) -> AgentFiles:
+    """Write a valid machine-root registration (``<root>/agent/agent.json``)."""
+
+    from securedact_mcp.agent.config import save_config
+
+    files = AgentFiles.resolve(root=Path(machine_root) / "agent")
+    save_config(_agent_config(), files)
+    return files
+
+
 def test_binding_created_and_reused_idempotently(tmp_path: Path) -> None:
     files = AgentFiles.resolve(root=tmp_path / "agent")
     config = _agent_config()
@@ -336,6 +346,8 @@ def test_stale_binding_is_repaired(tmp_path: Path) -> None:
 
 
 def test_setup_module_google_branch_prints_bound_and_online(tmp_path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
     monkeypatch.setattr(deploy.sys, "platform", "win32")
     monkeypatch.setattr(
         deploy,
@@ -343,20 +355,13 @@ def test_setup_module_google_branch_prints_bound_and_online(tmp_path, monkeypatc
         lambda **k: {
             "installed": True,
             "service_name": "SecuredactAgent",
-            "data_dir": "C:\\ProgramData\\Securedact",
+            "data_dir": str(machine),
             "account": r"NT SERVICE\SecuredactAgent",
             "running": True,
             "agent_id": "agent-1",
         },
     )
     monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
-    bound: dict[str, object] = {}
-
-    def fake_bind(config, integration_id, *, files=None, profile="default", binding_store_cls=None):
-        bound["integration_id"] = integration_id
-        return type(
-            "B", (), {"integration_id": integration_id, "platform": GOOGLE_CONNECTOR_PLATFORM}
-        )()
 
     def fake_auth(data_dir, **kwargs):
         return True
@@ -367,17 +372,21 @@ def test_setup_module_google_branch_prints_bound_and_online(tmp_path, monkeypatc
         output=output,
         secret_input_fn=lambda _p: "srr_tok",
         agent="yes",
+        data_dir=machine,
         elevated_check=lambda: True,
         google="yes",
         google_integration_id="int-42",
         authorize_google_fn=fake_auth,
-        bind_google_fn=fake_bind,
+        apply_google_env_fn=lambda _d, **_k: None,
     )
     text = output.getvalue()
     assert rc == 0
     assert "[Google Workspace]" in text
     assert "Local connector bound" in text
-    assert bound.get("integration_id") == "int-42"
+    # The REAL binding was written under the machine root with the exact id.
+    bindings = machine / "agent" / "connector-bindings.json"
+    assert bindings.is_file()
+    assert json.loads(bindings.read_text(encoding="utf-8"))["int-42"]["integration_id"] == "int-42"
     assert "Online" in text
     assert "setup complete" in text.lower()
 
@@ -516,3 +525,359 @@ def test_google_client_secret_not_written_to_logs(tmp_path: Path, monkeypatch) -
     apply_google_machine_env(tmp_path / "machine")
 
     assert secret not in err.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Regression: the clean normal `setup` flow must create the machine binding
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_google_selection_picks_interactive_yes(tmp_path: Path) -> None:
+    # A clean machine (no env flag, no detected config) answering "y" must select.
+    assert (
+        deploy.google_setup.resolve_google_selection(
+            tmp_path / "machine",
+            google=None,
+            input_fn=lambda _p: "y",
+            output=io.StringIO(),
+        )
+        is True
+    )
+
+
+def test_resolve_google_selection_detects_existing_machine_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Detected machine-local Google config must select onboarding without a flag.
+    (tmp_path / "machine" / "google").mkdir(parents=True)
+    (tmp_path / "machine" / "google" / "token.json.enc").write_text("{}", encoding="utf-8")
+    selected = deploy.google_setup.resolve_google_selection(
+        tmp_path / "machine",
+        google=None,
+        input_fn=lambda _p: "n",  # operator declines, but it is still detected
+        output=io.StringIO(),
+    )
+    assert selected is True
+
+
+def test_resolve_google_selection_no_flag_not_forced(tmp_path: Path) -> None:
+    # Clean machine, silent (non-interactive) run with no config must NOT select.
+    assert (
+        deploy.google_setup.resolve_google_selection(
+            tmp_path / "machine",
+            google=None,
+            non_interactive=True,
+            input_fn=lambda _p: "y",
+            output=io.StringIO(),
+        )
+        is False
+    )
+
+
+def test_resolve_google_selection_explicit_no_wins(tmp_path: Path, monkeypatch) -> None:
+    # Even on a machine with detected Google config, an explicit --google no skips.
+    (tmp_path / "machine" / "google").mkdir(parents=True)
+    (tmp_path / "machine" / "google" / "token.json.enc").write_text("{}", encoding="utf-8")
+    assert (
+        deploy.google_setup.resolve_google_selection(
+            tmp_path / "machine",
+            google="no",
+            input_fn=lambda _p: "y",
+            output=io.StringIO(),
+        )
+        is False
+    )
+
+
+def test_elevation_argv_forwards_google_selection_nonsecret_only() -> None:
+    params = deploy.build_elevation_argv(google="yes", google_integration_id="9db63be0e4437be6")
+    assert "--google" in params and "yes" in params
+    assert "--google-integration-id" in params
+    assert "9db63be0e4437be6" in params
+    # No secret / token material on the elevated continuation's command line.
+    assert not any("srr_" in p or "sra_" in p for p in params)
+    assert not any("client_secret" in p or "refresh_token" in p for p in params)
+
+
+def test_elevation_argv_rejects_malformed_integration_id() -> None:
+    with pytest.raises(AgentError):
+        deploy.build_elevation_argv(google="yes", google_integration_id="bad id;rm")
+
+
+def test_run_managed_agent_module_creates_machine_binding_under_programdata(
+    tmp_path, monkeypatch
+) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+    monkeypatch.setattr(
+        deploy,
+        "install_service_from_runtime",
+        lambda **k: {
+            "installed": True,
+            "service_name": "SecuredactAgent",
+            "data_dir": str(machine),
+            "account": r"NT SERVICE\SecuredactAgent",
+            "running": True,
+            "agent_id": "agent-1",
+        },
+    )
+    monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
+
+    output = io.StringIO()
+    rc = deploy.run_managed_agent_module(
+        input_fn=lambda _p: "y",
+        output=output,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google="yes",
+        google_integration_id="9db63be0e4437be6c21816bdde91942f",
+        authorize_google_fn=lambda *_a, **_k: True,
+        apply_google_env_fn=lambda _d, **_k: None,
+        verify_google_binding_fn=lambda *_a, **_k: True,
+    )
+    assert rc == 0
+    binding_file = machine / "agent" / "connector-bindings.json"
+    assert binding_file.is_file()
+    payload = json.loads(binding_file.read_text(encoding="utf-8"))
+    assert "9db63be0e4437be6c21816bdde91942f" in payload
+    assert payload["9db63be0e4437be6c21816bdde91942f"]["platform"] == GOOGLE_CONNECTOR_PLATFORM
+    assert "Local connector bound" in output.getvalue()
+
+
+def test_run_managed_agent_module_reuses_existing_valid_binding(tmp_path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    binding = machine / "agent" / "connector-bindings.json"
+    binding.parent.mkdir(parents=True, exist_ok=True)
+    binding.write_text(
+        json.dumps(
+            {
+                "int-1": {
+                    "integration_id": "int-1",
+                    "platform": "google_workspace",
+                    "local_profile": "default",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+    monkeypatch.setattr(
+        deploy,
+        "install_service_from_runtime",
+        lambda **k: {
+            "installed": True,
+            "service_name": "SecuredactAgent",
+            "data_dir": str(machine),
+            "account": r"NT SERVICE\SecuredactAgent",
+            "running": True,
+            "agent_id": "agent-1",
+        },
+    )
+    monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
+
+    output = io.StringIO()
+    rc = deploy.run_managed_agent_module(
+        input_fn=lambda _p: "y",
+        output=output,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google="yes",
+        google_integration_id="int-1",
+        authorize_google_fn=lambda *_a, **_k: True,
+        apply_google_env_fn=lambda _d, **_k: None,
+    )
+    assert rc == 0
+    # The existing valid binding was reused idempotently: exactly one record, no
+    # duplicate was written, and the recorded id matches.
+    payload = json.loads(binding.read_text(encoding="utf-8"))
+    assert list(payload.keys()) == ["int-1"]
+    assert payload["int-1"]["platform"] == GOOGLE_CONNECTOR_PLATFORM
+    assert "Local connector bound" in output.getvalue()
+
+
+def test_missing_binding_cannot_be_silently_skipped_when_google_selected(
+    tmp_path, monkeypatch
+) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+    monkeypatch.setattr(
+        deploy,
+        "install_service_from_runtime",
+        lambda **k: {
+            "installed": True,
+            "service_name": "SecuredactAgent",
+            "data_dir": str(machine),
+            "account": r"NT SERVICE\SecuredactAgent",
+            "running": True,
+            "agent_id": "agent-1",
+        },
+    )
+    monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
+
+    # Authorization succeeds and the operator supplies an integration id, but the
+    # binding step fails to leave a verifiable on-disk record. The wizard must NOT
+    # report success: it must refuse readiness with rc == 2.
+    def fake_bind(config, integration_id, *, files=None, profile="default", binding_store_cls=None):
+        # Pretend to bind, but the verifier (below) finds nothing on disk.
+        return type(
+            "B", (), {"integration_id": integration_id, "platform": GOOGLE_CONNECTOR_PLATFORM}
+        )()
+
+    output = io.StringIO()
+    rc = deploy.run_managed_agent_module(
+        input_fn=lambda _p: "y",
+        output=output,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google="yes",
+        google_integration_id="int-missing",
+        authorize_google_fn=lambda *_a, **_k: True,
+        bind_google_fn=fake_bind,
+        apply_google_env_fn=lambda _d, **_k: None,
+        # Real verifier re-reads the disk and finds no binding.
+    )
+    assert rc == 2
+    assert "NOT ready" in output.getvalue()
+    assert (machine / "agent" / "connector-bindings.json").is_file() is False
+
+
+def test_google_not_selected_does_not_force_auth_or_binding(tmp_path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+    monkeypatch.setattr(
+        deploy,
+        "install_service_from_runtime",
+        lambda **k: {
+            "installed": True,
+            "service_name": "SecuredactAgent",
+            "data_dir": str(machine),
+            "account": r"NT SERVICE\SecuredactAgent",
+            "running": True,
+            "agent_id": "agent-1",
+        },
+    )
+    monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
+
+    authorize_calls = []
+    bind_calls = []
+
+    def fake_auth(*_a, **_k):
+        authorize_calls.append(1)
+        return True
+
+    def fake_bind(config, integration_id, *, files=None, profile="default", binding_store_cls=None):
+        bind_calls.append(integration_id)
+        return type(
+            "B", (), {"integration_id": integration_id, "platform": GOOGLE_CONNECTOR_PLATFORM}
+        )()
+
+    output = io.StringIO()
+    rc = deploy.run_managed_agent_module(
+        input_fn=lambda _p: "y",
+        output=output,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google="no",
+        authorize_google_fn=fake_auth,
+        bind_google_fn=fake_bind,
+    )
+    assert rc == 0
+    assert authorize_calls == []
+    assert bind_calls == []
+    assert "[Google Workspace]" not in output.getvalue()
+    # No binding was written.
+    assert (machine / "agent" / "connector-bindings.json").is_file() is False
+    assert "setup complete" in output.getvalue().lower()
+
+
+def test_uac_resumed_setup_still_executes_google_onboarding(tmp_path, monkeypatch) -> None:
+    # Simulate the elevated continuation of a UAC hand-off (marker inherited), with
+    # an explicit --google yes forwarded across the boundary. It must perform the
+    # Google onboarding and create the machine binding before reporting ready.
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+    monkeypatch.setattr(
+        deploy,
+        "install_service_from_runtime",
+        lambda **k: {
+            "installed": True,
+            "service_name": "SecuredactAgent",
+            "data_dir": str(machine),
+            "account": r"NT SERVICE\SecuredactAgent",
+            "running": True,
+            "agent_id": "agent-1",
+        },
+    )
+    monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
+    monkeypatch.setenv(deploy.AGENT_ELEVATED_ENV, "1")
+
+    output = io.StringIO()
+    rc = deploy.run_managed_agent_module(
+        input_fn=lambda _p: "y",
+        output=output,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        agent_elevated=True,
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google="yes",
+        google_integration_id="int-uac",
+        authorize_google_fn=lambda *_a, **_k: True,
+        apply_google_env_fn=lambda _d, **_k: None,
+        verify_google_binding_fn=lambda *_a, **_k: True,
+    )
+    assert rc == 0
+    assert (machine / "agent" / "connector-bindings.json").is_file()
+    assert "Local connector bound" in output.getvalue()
+
+
+def test_setup_does_not_report_ready_before_binding_exists(tmp_path, monkeypatch) -> None:
+    # When Google deps are present and auth succeeds but no integration id is
+    # discoverable (non-interactive run), the binding cannot be created: the wizard
+    # must refuse final readiness (rc == 2) rather than print "setup complete".
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+    monkeypatch.setattr(
+        deploy,
+        "install_service_from_runtime",
+        lambda **k: {
+            "installed": True,
+            "service_name": "SecuredactAgent",
+            "data_dir": str(machine),
+            "account": r"NT SERVICE\SecuredactAgent",
+            "running": True,
+            "agent_id": "agent-1",
+        },
+    )
+    monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
+
+    output = io.StringIO()
+    rc = deploy.run_managed_agent_module(
+        input_fn=lambda _p: "y",
+        output=output,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google="yes",
+        non_interactive=True,  # no interactive fallback for the integration id
+        authorize_google_fn=lambda *_a, **_k: True,
+        apply_google_env_fn=lambda _d, **_k: None,
+    )
+    assert rc == 2
+    assert "setup complete" not in output.getvalue().lower()
+    assert "NOT ready" in output.getvalue()

@@ -17,7 +17,16 @@ from pathlib import Path
 from securedact_core.app_paths import SecuredactPaths
 from securedact_core.connectors.google import default_connector_scopes, has_write_scope
 
+from . import managed
 from .storage import GoogleClientConfigStore, GoogleCredentialStore
+
+# SecuRedact-owned (managed) Google OAuth application. When configured, normal
+# customers connect to Google Workspace through SecuRedact's own OAuth app and
+# never have to create their own Google Cloud project / OAuth client. These are
+# NON-SECRET overrides: a client id is public, and an installed-app client secret
+# (if any) is provided by operators out-of-band, never committed to the repo.
+GOOGLE_MANAGED_CLIENT_ID_ENV = managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV
+GOOGLE_MANAGED_CLIENT_SECRET_ENV = "SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET"  # noqa: S105 - env name, not a secret
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,16 +40,27 @@ class GoogleConnectorConfig:
     scopes: list[str]
     token_path: Path
     key_path: Path
+    # "installed" (Desktop/Installed public client, no secret required) or "web"
+    # (confidential client with a secret). Derived from whether a client secret is
+    # present; the OAuth flow builder uses this to pick the correct client config.
+    client_type: str = "installed"
 
     def require_credentials(self) -> tuple[str, str]:
-        """Return ``(client_id, client_secret)`` or raise (fail closed)."""
+        """Return ``(client_id, client_secret)`` or raise (fail closed).
 
-        if not self.client_id or not self.client_secret:
+        A missing client *secret* is tolerated (treated as empty): a SecuRedact
+        managed/installed-app OAuth client is public and may carry no secret. A
+        missing client *id* is always a hard failure.
+        """
+
+        if not self.client_id:
             raise GoogleConfigError(
-                "Google OAuth client id/secret are not configured. Set "
-                "SECUREDACT_GOOGLE_CLIENT_ID and SECUREDACT_GOOGLE_CLIENT_SECRET."
+                "Google OAuth client id is not configured. Set "
+                "SECUREDACT_GOOGLE_CLIENT_ID, or configure the SecuRedact-managed "
+                "app via SECUREDACT_GOOGLE_MANAGED_CLIENT_ID, or run setup with "
+                "--google-byo to use your own Google Cloud OAuth app."
             )
-        return self.client_id, self.client_secret
+        return self.client_id, self.client_secret or ""
 
     def credential_store(self) -> GoogleCredentialStore:
         return GoogleCredentialStore(self.token_path, self.key_path)
@@ -122,6 +142,19 @@ def load_google_config(
         client_id = client_id or store_id
         client_secret = client_secret or store_secret
 
+    # Final fallback: the SecuRedact-managed (owned) Google OAuth application. When
+    # this is configured, normal customers connect through SecuRedact's own app and
+    # never need to create their own Google Cloud project / OAuth client. An
+    # installed-app managed client may carry no secret (public client). Resolution
+    # goes through :mod:`securedact_mcp.connectors.google.managed` so the env
+    # override and the package default share one source of truth.
+    if client_id is None:
+        managed_id = managed.resolve_managed_client_id()
+        managed_secret = os.getenv(GOOGLE_MANAGED_CLIENT_SECRET_ENV) or None
+        if managed_id:
+            client_id = managed_id
+            client_secret = managed_secret
+
     redirect_uri = os.getenv("SECUREDACT_GOOGLE_REDIRECT_URI", "http://localhost:8080/")
 
     scopes_override = os.getenv("SECUREDACT_GOOGLE_SCOPES")
@@ -152,6 +185,7 @@ def load_google_config(
         scopes=scopes,
         token_path=token_path,
         key_path=key_path,
+        client_type="web" if client_secret else "installed",
     )
 
 

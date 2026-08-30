@@ -45,6 +45,32 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for name in ("stop", "start", "status", "uninstall"):
         sub.add_parser(name, help=f"{name} the background service")
+
+    # Machine-local Google OAuth authorization. Runs INSIDE the machine-owned
+    # runtime (which carries the Google extra), so the same Google code that the
+    # scheduled agent uses is what authorizes. The preferred production path is
+    # ``--loopback``: a temporary listener bound to 127.0.0.1 on a random port
+    # captures the redirect, validates state, and exchanges the code in-process
+    # (PKCE). The manual two-phase fallback is ``--begin`` (consent URL + state as
+    # JSON) followed by ``--code-stdin`` (reads the pasted code from stdin). No
+    # OAuth secret/token/code is ever printed or placed on argv.
+    google_auth = sub.add_parser(
+        "google-auth", help="machine-local Google OAuth authorization (loopback or two-phase)"
+    )
+    google_auth.add_argument("--data-dir", required=True)
+    google_auth.add_argument(
+        "--loopback",
+        action="store_true",
+        help="run the full local loopback OAuth flow and store the token",
+    )
+    google_auth.add_argument(
+        "--begin", action="store_true", help="print the consent URL + state as JSON"
+    )
+    google_auth.add_argument(
+        "--code-stdin", action="store_true", help="read the authorization code from stdin"
+    )
+    google_auth.add_argument("--state", default="")
+    google_auth.add_argument("--non-interactive", action="store_true")
     return parser
 
 
@@ -73,6 +99,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result))
         return 0
 
+    if arguments.cmd == "google-auth":
+        return _cmd_google_auth(arguments)
+
     handler = {
         "stop": service.stop_service,
         "start": service.start_service,
@@ -89,6 +118,41 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(json.dumps(payload))
     return 0
+
+
+def _cmd_google_auth(arguments: Any) -> int:
+    """Run a machine-local Google OAuth step inside the machine-owned runtime.
+
+    ``--begin`` emits the consent URL + CSRF state (JSON). The exchange reads the
+    code from stdin (``--code-stdin``) or an interactive prompt, persists the token
+    encrypted under the machine data root, and emits ``{"authorized": bool}``. Any
+    failure is reported as a safe JSON error; no secret/token is ever returned.
+    """
+
+    from . import google_setup
+
+    try:
+        if arguments.loopback:
+            ok = google_setup.run_google_loopback_authorization(arguments.data_dir)
+            print(json.dumps({"authorized": bool(ok)}))
+            return 0 if ok else 2
+        if arguments.begin:
+            url, state = google_setup.begin_google_authorization(arguments.data_dir)
+            print(json.dumps({"url": url, "state": state}))
+            return 0
+        code = sys.stdin.readline().strip() if arguments.code_stdin else None
+        if code is None and not arguments.non_interactive:
+            code = input("Paste the 'code' value (or the full redirect URL): ").strip()
+        if not code:
+            print(json.dumps({"authorized": False, "error": "no authorization code"}))
+            return 2
+        code = google_setup._extract_code(code)
+        ok = google_setup.complete_google_authorization(arguments.data_dir, code, arguments.state)
+        print(json.dumps({"authorized": bool(ok)}))
+        return 0 if ok else 2
+    except Exception as exc:  # fail closed; surface only a safe message
+        print(json.dumps({"authorized": False, "error": scrub(str(exc))}))
+        return 2
 
 
 if __name__ == "__main__":

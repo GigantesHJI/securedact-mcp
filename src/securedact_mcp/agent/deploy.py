@@ -62,6 +62,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from ..connectors.google import managed as google_managed
 from . import google_setup, service, service_security
 from .config import AgentFiles
 from .errors import AgentError
@@ -183,7 +184,10 @@ AGENT_ELEVATED_ENV = "SECUREDACT_AGENT_ELEVATED"
 
 
 def build_elevation_argv(
-    *, google: str | None = None, google_integration_id: str | None = None
+    *,
+    google: str | None = None,
+    google_integration_id: str | None = None,
+    google_byo: bool = False,
 ) -> list[str]:
     """Return the exact argv params for the elevated managed-agent re-launch.
 
@@ -209,11 +213,16 @@ def build_elevation_argv(
     validated = google_setup.normalize_integration_id(google_integration_id)
     if validated:
         argv += ["--google-integration-id", validated]
+    if google_byo:
+        argv += ["--google-byo"]
     return argv
 
 
 def resolve_elevation_target(
-    *, google: str | None = None, google_integration_id: str | None = None
+    *,
+    google: str | None = None,
+    google_integration_id: str | None = None,
+    google_byo: bool = False,
 ) -> tuple[str, list[str]]:
     """Return ``(interpreter, params)`` for the elevated re-launch.
 
@@ -225,7 +234,11 @@ def resolve_elevation_target(
 
     return (
         sys.executable,
-        build_elevation_argv(google=google, google_integration_id=google_integration_id),
+        build_elevation_argv(
+            google=google,
+            google_integration_id=google_integration_id,
+            google_byo=google_byo,
+        ),
     )
 
 
@@ -1638,6 +1651,121 @@ class GoogleOnboardingOutcome:
         )
 
 
+def _authorize_google_machine(
+    *,
+    data_dir: Path,
+    runtime_path: Path | str | None,
+    command_runner: CommandRunner | None,
+    input_fn: Callable[[str], str],
+    output: Any,
+    non_interactive: bool,
+    secret_input_fn: Callable[[str], str],
+    authorize_google_fn: Callable[..., bool] | None,
+    google_byo: bool = False,
+) -> bool:
+    """Run machine-local Google OAuth, preferring the machine-owned runtime.
+
+    When a machine runtime interpreter exists (the supported, secure path) the
+    authorization executes *inside* it via the local loopback flow — so the same
+    Google extra that the scheduled agent uses is the one that authorizes, and a
+    missing ``google_auth_oauthlib`` in the setup CLI's interpreter cannot break
+    it. Only when no machine runtime is available (dev / non-Windows) does it fall
+    back to the injected (or default) in-process implementation via the BYO/
+    managed selection.
+    """
+
+    runtime_python: Path | None = None
+    if runtime_path is not None:
+        candidate = resolve_runtime_python(Path(runtime_path))
+        if candidate.exists():
+            runtime_python = candidate
+    if runtime_python is not None:
+        return _authorize_google_via_runtime(
+            runtime_python,
+            data_dir,
+            command_runner,
+            output,
+            google_byo=google_byo,
+        )
+    _authorize = authorize_google_fn or google_setup.authorize_google_machine
+    return bool(
+        _authorize(
+            data_dir,
+            input_fn=input_fn,
+            output=output,
+            non_interactive=non_interactive,
+            require_enabled=False,
+        )
+    )
+
+
+def _authorize_google_via_runtime(
+    runtime_python: Path,
+    data_dir: Path,
+    command_runner: CommandRunner | None,
+    output: Any,
+    google_byo: bool = False,
+) -> bool:
+    """Authorize Google using the machine-owned runtime interpreter via loopback.
+
+    The machine runtime opens the browser on 127.0.0.1, validates state, and
+    exchanges the code in-process. Running authorization *inside the machine
+    runtime* (which carries the Google extra) means a missing
+    ``google_auth_oauthlib`` in the setup CLI's interpreter cannot break it, and
+    we never ask the customer for an OAuth client secret.
+
+    The default production path uses the SecuRedact-managed app. If the loopback
+    flow does not complete, we fail closed (return False) — the caller reports
+    the failure and, on the normal (managed) path, never prompts the customer
+    for OAuth credentials. Fails closed on any non-zero runtime exit or malformed
+    response.
+    """
+
+    runner = command_runner or _default_runner
+    loopback_argv = [
+        str(runtime_python),
+        "-m",
+        "securedact_mcp.agent.runtime_bootstrap",
+        "google-auth",
+        "--data-dir",
+        str(data_dir),
+        "--loopback",
+    ]
+    if google_byo:
+        loopback_argv.append("--google-byo")
+    try:
+        result = runner(loopback_argv, RunInput())
+    except Exception as exc:  # a runtime that cannot be launched is a hard stop
+        print(
+            f"Google authorization could not run in the machine runtime: {scrub(str(exc))}",
+            file=output,
+        )
+        return False
+    if result.returncode != 0:
+        print(
+            "Google authorization could not be started in the machine runtime: "
+            f"{scrub(result.stderr or result.stdout)}",
+            file=output,
+        )
+        return False
+    try:
+        payload = json.loads(result.stdout)
+    except Exception:
+        print(
+            "Google authorization failed: malformed machine-runtime response",
+            file=output,
+        )
+        return False
+    if not payload.get("authorized"):
+        err = payload.get("error")
+        print(
+            "Google authorization failed" + (f": {scrub(str(err))}" if err else ""),
+            file=output,
+        )
+        return False
+    return True
+
+
 def run_google_machine_onboarding(
     *,
     data_dir: Path,
@@ -1654,6 +1782,7 @@ def run_google_machine_onboarding(
     verify_binding_fn: Callable[..., bool] | None = None,
     client_config_fn: Callable[..., bool] | None = None,
     deps_ready_fn: Callable[[], bool] | None = None,
+    google_byo: bool = False,
 ) -> GoogleOnboardingOutcome:
     """Perform the machine-local Google onboarding and prove its post-conditions.
 
@@ -1706,47 +1835,68 @@ def run_google_machine_onboarding(
     except Exception as exc:  # pragma: no cover - non-fatal best-effort
         print(f"Google machine env not applied: {scrub(str(exc))}", file=output)
 
-    # 2. Machine-local OAuth must be valid (reused idempotently when present).
+    # 2. Machine-local OAuth must be valid (reused idempotently when present). The
+    #    authorization runs inside the *machine-owned runtime* (which carries the
+    #    Google extra) whenever one is available, so a ``google_auth_oauthlib``
+    #    import error in the setup CLI's own interpreter can never break it. A
+    #    missing runtime dependency is an INSTALLATION/readiness failure, not a
+    #    reason to ask the customer for OAuth credentials (fail closed).
     print("Authorizing Google locally against the machine data root...", file=output)
-    outcome.authorized = bool(
-        _authorize(
-            data_dir,
-            input_fn=input_fn,
-            output=output,
-            non_interactive=non_interactive,
-            require_enabled=False,
-        )
+    outcome.authorized = _authorize_google_machine(
+        data_dir=data_dir,
+        runtime_path=runtime_path,
+        command_runner=command_runner,
+        input_fn=input_fn,
+        output=output,
+        non_interactive=non_interactive,
+        secret_input_fn=secret_input_fn,
+        authorize_google_fn=_authorize,
+        google_byo=google_byo,
     )
     if not outcome.authorized:
-        # The most common cause on a clean machine is a missing OAuth client
-        # (app) config. Collect it once, persist it encrypted, and retry exactly
-        # once so the operator is not sent away to a separate command.
-        collected = bool(
-            _client_config(
-                data_dir,
-                input_fn=input_fn,
-                secret_input_fn=secret_input_fn,
-                output=output,
-                non_interactive=non_interactive,
-            )
-        )
-        if collected:
-            outcome.authorized = bool(
-                _authorize(
+        # Only when the operator explicitly opts into BYO/enterprise (their own
+        # Google Cloud OAuth app) do we collect a client id/secret. The default
+        # production path is the SecuRedact-managed app, so a normal customer never
+        # has to create their own Google Cloud project / OAuth application.
+        if google_byo:
+            collected = bool(
+                _client_config(
                     data_dir,
+                    input_fn=input_fn,
+                    secret_input_fn=secret_input_fn,
+                    output=output,
+                    non_interactive=non_interactive,
+                )
+            )
+            if collected:
+                outcome.authorized = _authorize_google_machine(
+                    data_dir=data_dir,
+                    runtime_path=runtime_path,
+                    command_runner=command_runner,
                     input_fn=input_fn,
                     output=output,
                     non_interactive=non_interactive,
-                    require_enabled=False,
+                    secret_input_fn=secret_input_fn,
+                    authorize_google_fn=_authorize,
+                    google_byo=google_byo,
                 )
+        if not outcome.authorized:
+            if not google_byo:
+                print(
+                    google_managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG
+                    + " Normal customers should not create their own Google Cloud "
+                    "project; once the managed app is configured (set "
+                    "SECUREDACT_GOOGLE_MANAGED_CLIENT_ID, or have it supplied by "
+                    "packaging), re-run setup, or pass --google-byo to use your own "
+                    "OAuth app (advanced/enterprise).",
+                    file=output,
+                )
+            print(
+                "Google authorization was not completed. No Google job can run until "
+                "it is (finish it with 'securedact-mcp setup --agent --google yes').",
+                file=output,
             )
-    if not outcome.authorized:
-        print(
-            "Google authorization was not completed. No Google job can run until "
-            "it is (finish it with 'securedact-mcp setup --agent --google yes').",
-            file=output,
-        )
-        return outcome
+            return outcome
 
     # 3. Resolve the dashboard integration id (ask clearly when not discoverable).
     try:
@@ -1827,6 +1977,7 @@ def run_managed_agent_module(
     dev_local: bool | None = None,
     google: str | None = None,
     google_integration_id: str | None = None,
+    google_byo: bool | None = None,
     authorize_google_fn: Callable[..., bool] | None = None,
     bind_google_fn: Callable[..., Any] | None = None,
     apply_google_env_fn: Callable[..., None] | None = None,
@@ -1945,7 +2096,11 @@ def run_managed_agent_module(
             # -- cannot lose it across the UAC boundary.
             target = [
                 sys.executable,
-                *build_elevation_argv(google=google, google_integration_id=google_integration_id),
+                *build_elevation_argv(
+                    google=google,
+                    google_integration_id=google_integration_id,
+                    google_byo=google_byo if google_byo is not None else False,
+                ),
             ]
             code = handler(list(rerun_argv) if rerun_argv is not None else target)
             if code != 0:
@@ -2010,6 +2165,10 @@ def run_managed_agent_module(
             output=output,
         )
     )
+    # BYO (bring-your-own Google Cloud OAuth app) is an explicit advanced/enterprise
+    # option. The default production path is the SecuRedact-managed app, so normal
+    # customers never have to create their own Google Cloud project.
+    byo = google_byo if google_byo is not None else os.getenv(google_setup.GOOGLE_BYO_ENV) == "1"
 
     # Provision secure runtime + install + start. Google deps are installed into
     # the machine runtime here when selected (never every optional extra). The
@@ -2049,6 +2208,7 @@ def run_managed_agent_module(
             google_integration_id=google_integration_id,
             runtime_path=runtime_path,
             command_runner=command_runner,
+            google_byo=byo,
             authorize_google_fn=authorize_google_fn,
             bind_google_fn=bind_google_fn,
             apply_google_env_fn=apply_google_env_fn,

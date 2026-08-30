@@ -341,6 +341,7 @@ def run_setup(
     agent_elevated: bool = False,
     google: str | None = None,
     google_integration_id: str | None = None,
+    google_byo: bool = False,
     managed_agent_runner: Callable[..., int] | None = None,
 ) -> int:
     """Run the unified SecuRedact setup wizard.
@@ -391,6 +392,7 @@ def run_setup(
                 non_interactive=non_interactive,
                 google=google,
                 google_integration_id=google_integration_id,
+                google_byo=google_byo,
                 agent_elevated=agent_elevated,
             )
         except agent_deploy._ElevationHandoff:
@@ -506,6 +508,7 @@ def run_setup(
             non_interactive=non_interactive,
             google=google,
             google_integration_id=google_integration_id,
+            google_byo=google_byo,
             agent_elevated=agent_elevated,
         )
     except agent_deploy._ElevationHandoff:

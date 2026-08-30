@@ -12,8 +12,14 @@ error messages.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+import socket
+import threading
+import urllib.parse
+import webbrowser
 from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol, cast
 
 from securedact_core.connectors.google import GoogleAuthError
@@ -35,20 +41,36 @@ class _GoogleCredentials(Protocol):
 
 
 def build_flow(config: GoogleConnectorConfig) -> Any:
-    """Build an installed-app OAuth flow for the configured client/scopes."""
+    """Build an OAuth flow for the configured client/scopes.
+
+    Uses the Desktop/Installed application client type when no client secret is
+    present (a SecuRedact-managed public client), or the confidential ``web`` type
+    when a secret is supplied (BYO/enterprise). A public client requires no secret.
+    """
 
     from google_auth_oauthlib.flow import Flow
 
     client_id, client_secret = config.require_credentials()
-    client_config = {
-        "web": {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [config.redirect_uri],
+    if config.client_type == "web" and client_secret:
+        client_config = {
+            "web": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [config.redirect_uri],
+            }
         }
-    }
+    else:
+        # Desktop / Installed application: no client secret required (public client).
+        client_config = {
+            "installed": {
+                "client_id": client_id,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [config.redirect_uri],
+            }
+        }
     return Flow.from_client_config(
         client_config,
         scopes=list(config.scopes),
@@ -56,13 +78,27 @@ def build_flow(config: GoogleConnectorConfig) -> Any:
     )
 
 
-def get_authorization_url(config: GoogleConnectorConfig) -> tuple[str, str]:
-    """Return the consent-screen URL and CSRF ``state`` for the flow."""
+def get_authorization_url(config: GoogleConnectorConfig, *, pkce: bool = True) -> tuple[str, str]:
+    """Return the consent-screen URL and CSRF ``state`` for the flow.
+
+    When ``pkce`` is true (the default, used by the loopback flow which keeps the
+    flow in-process) a PKCE ``code_verifier`` is attached; the manual copy/paste
+    fallback disables PKCE because the verifier cannot survive the process boundary.
+    """
 
     flow = build_flow(config)
-    url, state = flow.authorization_url(
-        access_type="offline", include_granted_scopes="true", prompt="consent"
-    )
+    try:
+        url, state = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+            pkce="S256" if pkce else None,
+        )
+    except TypeError:
+        # Extremely old google-auth-oauthlib without the pkce kwarg: fall back.
+        url, state = flow.authorization_url(
+            access_type="offline", include_granted_scopes="true", prompt="consent"
+        )
     # Stash the flow's state for later exchange (rebuilt flow matches by state).
     _FLOW_STATE[state] = flow
     return url, state
@@ -172,3 +208,223 @@ def require_valid_credentials(config: GoogleConnectorConfig) -> Any:
             "No valid Google authorization found. Run: securedact-mcp google auth"
         )
     return creds
+
+
+# ---------------------------------------------------------------------------
+# Local-only loopback OAuth receiver (Desktop / Installed application flow)
+# ---------------------------------------------------------------------------
+#
+# The preferred production path uses a temporary HTTP listener bound to
+# 127.0.0.1 on a random available port. The browser redirects the authorization
+# code back to that listener, which validates the OAuth ``state`` (CSRF) and
+# exchanges the code in-process (so PKCE works). No authorization code, token, or
+# client secret is ever placed on argv, in a command file, in the environment, or
+# in logs.
+
+# Bind only to the loopback interface (never 0.0.0.0 / a routable address).
+LOOPBACK_HOST = "127.0.0.1"
+# Upper bound on how long the listener waits for the browser redirect before the
+# authorization fails safely.
+LOOPBACK_TIMEOUT_SECONDS = 300.0
+
+
+def pick_loopback_port() -> int:
+    """Reserve and return a free loopback port (ephemeral).
+
+    Binds to ``127.0.0.1:0`` so the OS assigns an unused port, then releases the
+    socket. Callers must bind the listener to the returned port immediately after,
+    which is what :class:`LoopbackOAuthServer` does internally (no callers bind
+    separately, so there is no persistent double-bind).
+    """
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((LOOPBACK_HOST, 0))
+        return int(sock.getsockname()[1])
+
+
+def loopback_redirect_uri(port: int) -> str:
+    """Return the loopback redirect URI for ``port`` (Google desktop-app form)."""
+
+    return f"http://{LOOPBACK_HOST}:{port}/"
+
+
+class LoopbackAuthError(Exception):
+    """Raised on a fatal loopback OAuth defect (not on a user-declined consent)."""
+
+
+class _LoopbackResult:
+    """Thread-safe outcome of the loopback callback."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self.code: str | None = None
+        self.error: str | None = None
+        self.state: str | None = None
+
+    def set(self, *, code: str | None, error: str | None, state: str | None) -> None:
+        self.code = code
+        self.error = error
+        self.state = state
+        self._event.set()
+
+    def wait(self, timeout: float) -> None:
+        """Block until the callback arrives or ``timeout`` elapses.
+
+        Raises :class:`LoopbackAuthError` on timeout so callers fail closed.
+        """
+
+        if not self._event.wait(timeout=timeout):
+            raise LoopbackAuthError("loopback OAuth callback timed out")
+
+
+class LoopbackOAuthServer:
+    """Temporary loopback listener that captures the OAuth redirect.
+
+    Binds **only** to ``127.0.0.1`` on a freshly-allocated port. Validates the
+    returned ``state`` against the expected CSRF value and stores the authorization
+    ``code`` (or the Google ``error``). Never logs the code/token. The listener is
+    shut down as soon as a callback is processed or on cancellation/timeout.
+    """
+
+    def __init__(self, *, expected_state: str, timeout: float = LOOPBACK_TIMEOUT_SECONDS) -> None:
+        self.expected_state = expected_state
+        self.timeout = timeout
+        self._result = _LoopbackResult()
+        self.port = pick_loopback_port()
+        self._httpd = ThreadingHTTPServer((LOOPBACK_HOST, self.port), self._make_handler())
+        self._thread: threading.Thread | None = None
+        # Whether serve_forever is actually running. ``shutdown()`` must only call
+        # ``httpd.shutdown()`` (which blocks until the serve loop exits) when the
+        # loop was started; otherwise it would hang forever.
+        self._serving = False
+
+    def _make_handler(self) -> type[BaseHTTPRequestHandler]:
+        server = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            # The redirect lands on "/" by construction.
+            def do_GET(self) -> None:
+                parsed = urllib.parse.urlparse(self.path)
+                params = urllib.parse.parse_qs(parsed.query)
+                code = params.get("code", [""])[0]
+                error = params.get("error", [""])[0]
+                state = params.get("state", [""])[0]
+
+                if parsed.path != "/":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                # CSRF / state validation: a mismatch fails closed (no exchange).
+                if state != server.expected_state:
+                    server._result.set(code=None, error="state_mismatch", state=state)
+                else:
+                    server._result.set(code=code, error=error, state=state)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body><h2>SecuRedact</h2>"
+                    b"<p>Google authorization complete. You may close this tab.</p>"
+                    b"</body></html>"
+                )
+                # Stop serving once a callback (valid or not) has been handled.
+                threading.Thread(target=server._httpd.shutdown, daemon=True).start()
+
+            # Never emit codes/tokens to stderr via the base class logger.
+            def log_message(self, *args: object) -> None:
+                return
+
+        return _Handler
+
+    @property
+    def redirect_uri(self) -> str:
+        return loopback_redirect_uri(self.port)
+
+    def start(self) -> None:
+        """Begin serving the loopback listener on a background thread."""
+
+        self._serving = True
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+
+    def wait_for_callback(self) -> _LoopbackResult:
+        """Block until the callback is handled or the timeout elapses.
+
+        Returns the result (which carries ``code`` or ``error``). On timeout the
+        listener is closed and a :class:`LoopbackAuthError` propagates so the caller
+        fails closed and reports a safe message.
+        """
+
+        try:
+            self._result.wait(self.timeout)
+        finally:
+            self.shutdown()
+        return self._result
+
+    def shutdown(self) -> None:
+        """Close the listener (idempotent)."""
+
+        # ``httpd.shutdown()`` blocks until the serve loop exits, so only call it
+        # when we actually started serving (otherwise it would hang forever).
+        if getattr(self, "_serving", False):
+            try:
+                self._httpd.shutdown()
+            except Exception:  # noqa: S110 - pragma: no cover - defensive
+                pass
+        try:
+            self._httpd.server_close()
+        except Exception:  # noqa: S110 - pragma: no cover - defensive
+            pass
+
+
+def run_local_oauth(
+    config: GoogleConnectorConfig,
+    *,
+    open_browser: bool = True,
+    timeout_seconds: float = LOOPBACK_TIMEOUT_SECONDS,
+    _exchange_fn: Callable[..., object] | None = None,
+    _browser_open: Callable[[str], None] | None = None,
+    _server_cls: type[LoopbackOAuthServer] | None = None,
+) -> bool:
+    """Perform the full local loopback OAuth flow and persist the token.
+
+    Picks a random loopback port, builds the (PKCE) consent URL, starts the
+    listener, opens the browser, waits for the redirect, validates ``state``, and
+    exchanges the code in-process. Returns ``True`` only when a token was stored.
+    Any failure (timeout, state mismatch, consent error, exchange error) returns
+    ``False`` after shutting down the listener -- no secret/code/token leaks.
+
+    Injectable boundaries (``_exchange_fn`` / ``_browser_open`` / ``_server_cls``)
+    make the flow unit-testable without a real browser or network.
+    """
+
+    server_cls = _server_cls or LoopbackOAuthServer
+    server = server_cls(expected_state="", timeout=timeout_seconds)
+    # Bind the flow to the exact loopback redirect URI the listener will receive.
+    loopback_config = dataclasses.replace(config, redirect_uri=server.redirect_uri)
+    url, state = get_authorization_url(loopback_config, pkce=True)
+    server.expected_state = state
+    server.start()
+
+    if _browser_open is not None:
+        _browser_open(url)
+    elif open_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: S110 - pragma: no cover - browser launch is best-effort
+            pass
+
+    try:
+        result = server.wait_for_callback()
+    except LoopbackAuthError:
+        return False
+    if result.error:
+        return False
+    if not result.code:
+        return False
+    exchange = _exchange_fn or exchange_code
+    try:
+        exchange(loopback_config, result.code, state=state)
+    except Exception:
+        return False
+    return True

@@ -10,6 +10,241 @@ public server release.
 
 ### Added
 
+- **First-class Google Workspace onboarding for the managed agent.** `securedact-mcp
+  setup` now provisions the Google connector dependencies into the machine-owned
+  runtime (installing `securedact-mcp[google]==<running version>` plus a fail-closed
+  post-install import check), authorizes Google **locally on the machine** against the
+  machine data root (`C:\ProgramData\Securedact`), and creates the machine-local
+  connector binding through the existing shipped binding mechanism. The OAuth token is
+  written only to the machine vault; it is never sent to the control plane and never
+  placed on the command line, in the environment, or in logs. A valid machine token is
+  reused idempotently; a user-profile token is never silently migrated. Google is only
+  required when it is actually configured, so a fresh install without Google does not
+  pull the Google extra. `securedact-mcp agent service upgrade --google` re-provisions
+  the Google extra while preserving registration, token, and bindings.
+
+- **Machine-runtime Google OAuth authorization and SecuRedact-managed OAuth app.**
+  Google authorization now executes *inside* the machine-owned runtime (via the
+  `runtime_bootstrap google-auth --loopback` subcommand), so a missing
+  `google_auth_oauthlib` in the setup CLI's interpreter can no longer break onboarding
+  and the same Google code the scheduled agent uses is what authorizes. The default
+  production path uses a **SecuRedact-managed** Google OAuth application
+  (`SECUREDACT_GOOGLE_MANAGED_CLIENT_ID`); normal customers never create their own
+  Google Cloud project. Bring-your-own (BYO) Google Cloud OAuth is now an explicit
+  advanced/enterprise option (`--google-byo` / `SECUREDACT_GOOGLE_BYO`), not the
+  default onboarding experience. A missing runtime dependency, or a managed-app
+  authorization that does not complete, fails closed (no machine binding, agent not
+  reported ready) rather than falling back to a manual copy/paste flow or prompting
+  the customer for OAuth credentials.
+
+### Fixed
+
+- **Google OAuth no longer fails with `No module named 'google_auth_oauthlib'`
+  on a clean laptop.** The deps-readiness probe validated the machine-owned
+  runtime, but the OAuth step executed in the setup CLI's interpreter (which may
+  lack the `google` extra), so a missing `google_auth_oauthlib` surfaced as a
+  `Could not start Google authorization` error and then prompted the customer to
+  paste an OAuth client secret. Google authorization now runs *inside* the
+  machine-owned runtime (which always carries the Google extra), and a missing
+  runtime dependency fails closed instead of asking for credentials.
+
+- **Managed-agent UAC elevation hand-off now continues setup in the same RC
+  environment.** The elevated re-launch uses `sys.executable` plus the
+  `-m securedact_mcp.cli` module form with the working directory preserved, so it
+  can never resolve a globally installed `securedact-mcp` on PATH. The re-launched
+  child resumes the managed-agent onboarding exactly once (via the
+  `SECUREDACT_AGENT_ELEVATED` resume marker) and treats a declined/denied UAC
+  prompt as a safe stop rather than a fake-success hand-off. No registration token
+  or credential is ever placed in argv, the environment, logs, or a temporary
+  command file.
+
+- **Fixed the elevated child silently exiting before resuming setup.** `cli.py`
+  lacked a `if __name__ == "__main__": raise SystemExit(main())` guard, so
+  `python -m securedact_mcp.cli setup --agent --agent-elevated` (the exact command
+  the UAC hand-off launches) merely imported the module and returned exit code 0.
+  Windows created the elevated child successfully, but it died instantly and no
+  setup continuation ever ran. Added the guard so the child now reaches the Managed
+  Agent flow. `_shell_execute_runas` also logs sanitized diagnostics (executable
+  basename, argument count, cwd, exit/error code only) on hand-off failure for
+  safe observability without exposing any secret or environment content.
+
+- **Managed-agent registration now writes to the machine root, not the user
+  profile.** `install_windows_service` registers directly under the authoritative
+  machine data root (`C:\ProgramData\Securedact`), so the SYSTEM-run scheduled task
+  finds its registration and heart-beats Online. An existing user-profile
+  `agent.json` is never treated as a machine registration, and an existing valid
+  machine registration is reused idempotently without consuming a new token.
+
+- **Package import no longer eagerly pulls in `mcp`.** `securedact_mcp` previously
+  imported `create_server` from `.server` at package-import time, which transitively
+  imported `mcp`. On CPython 3.12 that import re-execs the process via
+  `sys._base_executable`, so the managed-agent CLI and the Task Scheduler launcher
+  (`securedact_agent_loop.py`, driven by `python -m securedact_mcp.agent.cli run`)
+  started under the base interpreter instead of the machine-owned runtime. `create_server`
+  is now exposed lazily through a module `__getattr__`; importing `securedact_mcp` or
+  `securedact_mcp.agent.cli` leaves `mcp` out of `sys.modules`, while `create_server()`
+  still works when the MCP server is actually started.
+
+- **DEV baseline no longer re-applies the LocalSystem identity.** In
+  `SECUREDACT_AGENT_SERVICE_DEV_BASELINE=1` mode `install_windows_service`
+  keeps the LocalSystem identity that `win32serviceutil.InstallService` already
+  creates and skips `configure_account()` / `ChangeServiceConfig` entirely, so the
+  real-Windows WinError 1057 ("The account name is invalid or does not exist, or
+  the password is invalid...") from a LocalSystem → LocalSystem reconfiguration
+  no longer blocks the baseline. Production is unchanged: it still performs the
+  LocalSystem → `NT SERVICE\SecuredactAgent` transition, verifies the vSA SID,
+  and applies the ACL/integrity gates. Baseline failures can no longer report
+  "failed to apply least-privilege service identity".
+
+- **DEV baseline service now reaches `SERVICE_RUNNING` (no WinError 1053).** The
+  SCM-hosted `pythonservice.exe` process has a `sys.path` that does **not** include
+  the installing Python's `site-packages` or the project `src`, so it could not
+  `import securedact_mcp` and the service never entered `SvcDoRun` — SCM timed out
+  with WinError 1053 ("did not respond ... in a timely fashion"). The service
+  environment now exports `PYTHONPATH` (computed from the installing interpreter:
+  the `securedact_mcp` package root plus every `site-packages` on `sys.path`), which
+  CPython reads at startup, so the SCM host can import the agent. `SvcDoRun` reports
+  `SERVICE_RUNNING` *before* any agent/network/model work, so startup can never block
+  the SCM timeout. This is minimal startup-path wiring only — no ACL/vSA hardening and
+  no identity change (baseline stays LocalSystem).
+
+- **Temporary DEV-baseline startup diagnostics.** When
+  `SECUREDACT_AGENT_SERVICE_DEV_BASELINE=1`, `service_windows` writes scrubbed,
+  secret-free startup diagnostics (process start, imported module/class,
+  `sys.executable`, sanitized `sys.path`, `cwd`, `SvCDoRun` entry, `SERVICE_RUNNING`,
+  agent-loop start, and exception type/safe message) to
+  `C:\ProgramData\Securedact\logs\service-bootstrap.log` (falling back to the agent
+  data dir, then `TEMP`, so they are never silently lost). No tokens, credentials,
+  OAuth material, lease secrets, document content, or secret env values are ever
+  written. This is a temporary debugging aid to be removed before production.
+
+- **Two-phase SCM/ACL lifecycle reconciled; install no longer requires the vSA SID
+  before the service exists.** Phase 1 (pre-SCM) runs the strict security gate and
+  bootstraps the data dir *without* resolving `NT SERVICE\SecuredactAgent` (which is
+  `ERROR_NONE_MAPPED` / 1332 until the SCM service is created), so `validate_install_security`
+  and `_assert_not_user_writable` are called without `service_account` there. Phase 1 also
+  deterministically `icacls /reset`s the data dir first, stripping any stale explicit ACE
+  (including a leftover `S-1-5-80-…` vSA ACE from a prior, since-removed install) before
+  re-granting only SYSTEM/Administrators (F) + installing user (RX). Only Phase 3 — after the
+  SCM service is created, its logon identity transitioned to the vSA, and the exact SID
+  resolved — applies the vSA ACLs and re-runs `validate_install_security(service_account=…)`,
+  which now trusts the vSA by its resolved canonical SID. No `S-1-5-80-*` prefix is trusted
+  generically and the fail-closed gate is preserved.
+
+- **Phase-3 `writable_data_dir` false positive on the hardened data dir fixed (vSA SID
+  resolved deterministically).** The service-aware final gate trusted the vSA only via
+  `LookupAccountName`, which can be flaky/unavailable on some hosts even after SCM
+  creation, so the on-disk vSA ACE (`S-1-5-80-…`) was sometimes still flagged as an
+  untrusted writer. The configured service identity is now also resolved to its exact
+  SID **deterministically** from the (uppercased) service name via the virtual-service-
+  account SID algorithm (SHA-1 of the UTF-16LE name → `S-1-5-80-<5 subauth>`), which is
+  identical to the SID Windows assigns to the on-disk ACE and needs no `LookupAccountName`
+  round-trip. `trusted_write_sids` trusts the union of the LookupAccountName result and
+  the deterministic SID (both the exact identity, never an `S-1-5-80-*` prefix), so the
+  Phase-3 `validate_install_security(service_account=…)` / `_assert_not_user_writable`
+  now clear the data dir on real Windows. Diagnostics now tag every issue with
+  `phase=phase1_code_path_integrity` / `phase3_final_integrity` and the offending writer
+  SID (`untrusted=…`), and a real-Windows-gated test exercises the actual
+  `enumerate_aces_windows` provider against a temp dir whose DACL carries the vSA's real
+  SID. Rollback, vSA identity, token ordering, and least-privilege ACLs are preserved.
+
+- **Install security gate false-flagged the vSA (`NT SERVICE\SecuredactAgent`) as an
+  untrusted writer on the hardened ProgramData data dir.** The trusted-writer set was
+  pinned to `S-1-5-18` (SYSTEM) and `S-1-5-32-544` (Administrators) only, so the vSA's
+  legitimately-granted Full control (applied by `build_service_account_principals`) was
+  treated as a world-write risk, producing a spurious `writable_data_dir` failure. The
+  configured service identity is now resolved to its exact SID via `LookupAccountName`
+  and trusted by that canonical SID — friendly-name and raw-SID ACEs of the same identity
+  collapse to one trusted principal. No SID *prefix* (e.g. any `S-1-5-80-*`) is trusted
+  generically, so an unrelated service SID with Full control is still rejected. The
+  strict code-path gate (interpreter/package/site-packages) remains SYSTEM/Administrators
+  only unless the caller explicitly names `service_account`. Added regression tests for
+  the vSA in both representations, an unrelated vSA SID, the real ACL, and Users/Everyone
+  and installing-user-full failure modes.
+
+- **Machine runtime missing `securedact_mcp.agent` (`ModuleNotFoundError` on
+  `python -m securedact_mcp.agent.runtime_bootstrap`).** The secure machine
+  runtime was provisioned from the published `securedact-mcp==<running_version>`
+  distribution, but the published wheel predates / diverges from the managed-agent
+  code actually running the setup wizard, so it lacked the `agent` package. Added
+  a fail-closed runtime-source strategy: released mode pins the **exact** published
+  distribution; dev/local-validation mode (`SECUREDACT_RUNTIME_DEV_WHEEL=1`, opt-in)
+  builds and installs a **controlled local wheel** from the current checkout.
+  `provision_machine_runtime` now verifies the installed runtime can actually import
+  `securedact_mcp.agent.runtime_bootstrap` and fails closed (never silently leaving a
+  stale runtime) if it cannot. Local wheels are validated to be a local `*.whl` file
+  and to contain the agent bootstrap, blocking arbitrary URL/source-path injection.
+
+- **Dev/local-validation runtime accepted a stale same-version checkout
+  (`SECUREDACT_RUNTIME_DEV_WHEEL=1` fast path).** `provision_machine_runtime(dev_local=True)`
+  treated any existing runtime whose `securedact_mcp.agent.runtime_bootstrap` imported as
+  fresh. Two checkout revisions can both report `securedact-mcp==0.4.2`, so a dev runtime
+  built from revision A silently survived a switch to revision B (e.g. a changed
+  `service_windows.py`). The bootstrap import is no longer a freshness signal in dev mode:
+  a trusted content digest of the current checkout is stored in the runtime and compared
+  on every rerun; a mismatch deterministically rebuilds the controlled local wheel and
+  force-reinstalls it (replacing the stale same-version dist-info). Released mode is
+  unchanged (still idempotent, no `--force-reinstall`), and `--force-reinstall` stays
+  scoped to the validated local wheel. All ACL/service/token security invariants are preserved.
+
+- **Real-Windows managed-agent service install failed on `SERVICE_CONFIG_FAILURE_ACTIONS`.**
+  `WinSCMController._set_failure_actions()` passed `win32service.ChangeServiceConfig2`
+  a bare `list` of `(delay_ms, action_type)` tuples (swapped order) instead of the
+  `dict` pywin32 requires: `{"ResetPeriod": int, "RebootMsg": str, "Command": str,
+  "Actions": [(SC_ACTION_RESTART, delay_ms), ...]}`. Now built via
+  `_build_failure_actions()` — a dictionary, correct key casing/types, and
+  `(win32service.SC_ACTION_RESTART, 1000)` 2-tuples for 3 restart attempts with a
+  1s delay and a 1-day reset period, no reboot and no recovery command. Fail-closed
+  rollback on failure-action config failure is preserved (partial LocalSystem service
+  removed, token unconsumed); the service still does not start until vSA identity, SID
+   resolution, final ACLs, and security validation succeed.
+
+- **Real-Windows `ChangeServiceConfig` LocalSystem -> `NT SERVICE\SecuredactAgent`
+  failed with WinError 1057 (`ERROR_INVALID_PASSWORD`).** `WinSCMController._set_service_account()`
+  passed an empty-string password for the virtual service account. Per Microsoft SCM
+  semantics, a virtual service account (`NT SERVICE\<ServiceName>`) requires
+  `lpPassword == NULL` (pywin32 `None`); only built-in accounts (LocalSystem/LocalService/
+  NetworkService) use an empty string. Passing `""` for a vSA is rejected with 1057. The
+  password is now selected by `_service_account_password()` (`None` for vSA/managed
+  accounts, `""` for built-ins). The vSA remains the least-privilege logon identity (it is
+  the per-service SID `NT SERVICE\SecuredactAgent` itself, so no `SERVICE_CONFIG_SERVICE_SID_INFO`
+  change is needed to use that SID in the runtime/data ACLs). No fallback to LocalSystem;
+  ACLs/service/token fail-closed ordering and rollback on any 1057/other failure are preserved.
+
+
+### Fixed
+
+- **Real-Windows empty-DACL runtime defect (`WinError 5` on `CreateProcess`).**
+  A single `icacls <tree> /inheritance:r /T /grant:r ...(OI)(CI)...` left existing
+  *leaf files* (e.g. `runtime\Scripts\python.exe`) with an EMPTY, deny-all DACL,
+  because Windows drops an ACE that carries container/object-inherit flags on a
+  non-container object. This broke the bootstrap launch and failed closed. The
+  runtime and data-dir hardening now use a deterministic **two-pass** scheme:
+  pass 1 (`/inheritance:r /T /grant:r ...(OI)(CI)...`) sets container-propagation
+  ACEs; pass 2 (`/T /grant ...`, flag-less, append) gives every existing file a
+  directly-effective, executable ACE while preserving the `(OI)(CI)` propagation
+  ACE on directories. Added `deploy.verify_runtime_tree_acl`, a fail-closed
+  post-hardening check of the *real* effective ACLs (catches an empty-DACL file
+  and a too-permissive data-dir parent that still carries inherited `Users` write
+  rights) run before any registration token is consumed or the service starts.
+  `deploy.provision_machine_runtime`, `deploy.upgrade_runtime`, and the
+  `install_windows_service` Phase-3 flow now verify the tree end-to-end.
+- **Real-Windows `icacls` exit 1332 during `securedact-mcp setup --agent`.** The
+  installer hardened the runtime/data ACL with the virtual-service-account ACE
+  (`NT SERVICE\SecuredactAgent`) *before* the SCM service existed, so the
+  per-service SID was unresolvable (`ERROR_NONE_MAPPED` / icacls 1332). Reworked
+  `install_windows_service` into a secure two-phase sequence: Phase 1 hardens the
+  runtime/data dir with only SYSTEM/Administrators/installing-user (no vSA);
+  Phase 2 installs the service (not started) and verifies the vSA now resolves;
+  Phase 3 applies the vSA ACE to the runtime (RX) and data dir (full on its own
+  store) and re-runs full validation; Phase 4 registers the one-time token and
+  starts the service. A failed install after SCM creation rolls back (stops and
+  removes) the incomplete service without weakening ACLs or touching credentials.
+  `deploy.provision_machine_runtime` now hardens the runtime without the vSA
+  initially (`include_service_acl`) and adds it only once the service exists.
+
+### Added
+
 - Managed-agent first real production Google Workspace end-to-end local scan
   flow. A claimed `google_workspace` job is executed entirely on the local
   agent: it resolves the local Google connector binding (integration id ->
@@ -19,6 +254,13 @@ public server release.
   control plane. Verified with a fake Google transport + fake control plane and
   regression tests for PII-exfiltration and OAuth-token-exfiltration
   (`tests/unit/test_managed_agent_google_e2e.py`).
+- Secure Windows deployment path for the Managed Agent: `securedact-mcp setup`
+  provisions a dedicated, admin/SYSTEM-owned machine runtime under
+  `C:\ProgramData\Securedact\runtime` and installs/starts the service from it, so
+  the service never executes user-writable `pipx`/`uv tool` Python. Added
+  `securedact-mcp setup --agent` (idempotent rerun) and
+  `securedact-mcp agent service upgrade` (state-preserving, admin-initiated). The
+  registration token is delivered over stdin, never echoed or persisted.
 - Folder/drive aggregate scans now surface per-category `category_counts` in the
   safe result; `resources_scanned` reflects the real number of Drive items
   inspected. The injected-transport seam in `GoogleConnectorClient` enables
@@ -27,7 +269,33 @@ public server release.
   any leaked PII value, OAuth token, or content key before submission. A missing
   optional Google connector now maps to the safe `connector_unavailable` code
   instead of leaking `ModuleNotFoundError`.
+- Managed-agent persistent **Windows background service** (AGENT-018). The agent
+  can run as a native Windows Service (`SecuredactAgent`) via pywin32: it starts
+  automatically on boot, runs with no console window, auto-restarts on failure,
+  and stops gracefully. `securedact-mcp agent service install|start|stop|status|
+  uninstall|logs` manage it; `agent register --token ... --install-service`
+  registers and installs in one step. It runs under a **least-privilege virtual
+  service account** (`NT SERVICE\SecuredactAgent`) by default, with all state under
+  a machine-wide, ACL-hardened (fail-closed) `C:\ProgramData\Securedact` directory
+  and a single-instance lock that prevents duplicate agent loops. An install-time
+  integrity gate refuses to install when the code paths it would execute as a
+  privileged identity are writable by a non-admin principal (the `pipx`/`uv tool`
+  user-writable venv class).
 
+
+### Security
+
+- Windows managed-agent service security release gate addressed: default identity is
+  now a virtual service account (least privilege); the installing user is granted
+  READ ONLY (not write) on `ProgramData\Securedact`, preventing credential-vault /
+  Fernet-key / OAuth-vault / binding replacement and escalation; ProgramData ACL
+  hardening fails closed; an install-time code-path integrity preflight blocks
+  user-writable interpreter/package/site-packages/pywin32 paths; the service
+  environment sets `PYTHONNOUSERSITE=1` to block user-site/DLL hijacking; the
+  control-plane job schema fails closed on unknown platform/target-type; and the
+  log scrubber now redacts Google OAuth tokens (`ya29.`/`1//`) and token
+  assignments. See `docs/managed-agent.md` and
+  `tests/unit/test_agent_service_security.py`.
 ### Added
 
 - HIPAA Safe Harbor independent adversarial validation: a 202-case dataset

@@ -119,6 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Google Workspace integration ID from the SecuRedact dashboard to "
         "bind locally (skips the interactive prompt)",
     )
+    setup.add_argument(
+        "--google-byo",
+        action="store_true",
+        help="(advanced/enterprise) use YOUR OWN Google Cloud OAuth app instead of "
+        "the SecuRedact-managed app. Normal customers should not need this.",
+    )
 
     models = commands.add_parser("models", help="inspect and maintain local contextual models")
     model_commands = models.add_subparsers(dest="model_command", required=True)
@@ -524,6 +530,7 @@ def main(
             agent_elevated=bool(getattr(arguments, "agent_elevated", False)),
             google=getattr(arguments, "google", None),
             google_integration_id=getattr(arguments, "google_integration_id", None),
+            google_byo=getattr(arguments, "google_byo", False),
         )
 
     diagnose_runtime = arguments.command == "diagnostics"

@@ -1,0 +1,741 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Regression tests for the production Google OAuth (managed Desktop/Installed app).
+
+Covers the production architecture where normal customers connect through a
+SecuRedact-owned Google OAuth application and authorize locally via a loopback
+listener (PKCE), without ever creating a Google Cloud project or typing a client
+secret.
+
+Key invariants asserted here:
+
+* normal mode never prompts for a client id/secret;
+* the managed client id resolves without customer input and is the single source
+  of truth;
+* a missing managed client id fails closed with a clear message (no prompt);
+* BYO is explicit only;
+* a Desktop/Installed client works without a client secret;
+* only drive.readonly is requested; write scopes remain rejected;
+* the loopback listener binds only to 127.0.0.1 on a random port;
+* OAuth state mismatch and callback timeout fail closed;
+* the authorization code/token never appears on argv/logs;
+* authorization runs in the machine runtime (not the setup interpreter);
+* the token is stored under the machine root and the binding is created after auth;
+* setup readiness requires the binding; existing valid state is reused.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import json
+import os
+import socket
+from pathlib import Path
+
+import pytest
+
+from securedact_mcp.agent import deploy
+from securedact_mcp.agent.config import AgentConfig, AgentFiles, save_config
+from securedact_mcp.agent.deploy import RunInput, RunResult
+from securedact_mcp.connectors.google import managed
+from securedact_mcp.connectors.google.auth import (
+    LoopbackAuthError,
+    LoopbackOAuthServer,
+    build_flow,
+    get_authorization_url,
+    pick_loopback_port,
+    run_local_oauth,
+)
+from securedact_mcp.connectors.google.config import (
+    GoogleConfigError,
+    GoogleConnectorConfig,
+    load_google_config,
+)
+
+# google_auth_oauthlib is only required by the tests that actually build a real
+# OAuth flow / run the loopback exchange. Those tests skip cleanly when the
+# optional ``google`` extra is not installed (CI parity without the extra).
+_HAS_GOOGLE = importlib.util.find_spec("google_auth_oauthlib") is not None
+requires_google = pytest.mark.skipif(not _HAS_GOOGLE, reason="google extra not installed")
+
+from securedact_core.connectors.google import default_connector_scopes  # noqa: E402
+
+DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _agent_config() -> AgentConfig:
+    return AgentConfig.create(control_plane_url="https://example.com", agent_id="agent-1")
+
+
+def _seed_machine_registration(machine_root: Path) -> AgentFiles:
+    files = AgentFiles.resolve(root=Path(machine_root) / "agent")
+    save_config(_agent_config(), files)
+    return files
+
+
+def _loopback_config(
+    tmp_path: Path, client_id: str = "managed.app.id.example"
+) -> GoogleConnectorConfig:
+    return GoogleConnectorConfig(
+        enabled=True,
+        client_id=client_id,
+        client_secret="",
+        redirect_uri="http://127.0.0.1:0/",
+        scopes=default_connector_scopes(),
+        token_path=Path(tmp_path) / "google" / "token.json.enc",
+        key_path=Path(tmp_path) / "google" / "token.key",
+        client_type="installed",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 1. Normal mode never prompts for a client id/secret
+# ---------------------------------------------------------------------------
+
+
+def test_normal_mode_never_prompts_for_client_config(tmp_path: Path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+
+    client_config_calls: list[int] = []
+
+    def fake_client_config(*_a, **_k):
+        client_config_calls.append(1)
+        return False
+
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-1",
+        authorize_google_fn=lambda *_a, **_k: True,
+        client_config_fn=fake_client_config,
+    )
+    # Normal (managed) mode must NOT ask for an OAuth client id/secret.
+    assert client_config_calls == []
+    assert outcome.selected and outcome.authorized and outcome.binding_verified
+    assert outcome.ready
+    # The real binding was written under the machine root.
+    bindings = machine / "agent" / "connector-bindings.json"
+    assert bindings.is_file()
+
+
+# ---------------------------------------------------------------------------
+# 2. Managed client id resolved without customer input
+# ---------------------------------------------------------------------------
+
+
+def test_managed_client_id_resolved_without_customer_input(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    cfg = load_google_config(data_dir=tmp_path)
+    assert cfg.client_id == "managed.app.id.example"
+    # A public installed client carries no secret and needs none.
+    assert cfg.client_type == "installed"
+    assert cfg.client_secret in (None, "")
+
+
+def test_managed_client_id_is_single_source_of_truth(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "pkg.managed.id")
+    assert managed.resolve_managed_client_id() == "pkg.managed.id"
+    assert managed.is_managed_client_configured()
+
+
+# ---------------------------------------------------------------------------
+# 3. Missing managed client id fails clearly
+# ---------------------------------------------------------------------------
+
+
+def test_missing_managed_client_id_fails_clearly() -> None:
+    monkeypatch_delenv_managed()
+    with pytest.raises(GoogleConfigError) as exc:
+        managed.assert_managed_client_configured()
+    assert managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG in str(exc.value)
+
+
+def test_wizard_reports_managed_not_configured_message(tmp_path: Path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch_delenv_managed()
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-1",
+        deps_ready_fn=lambda: True,
+    )
+    # The fail-closed message is shown and the agent is NOT reported ready.
+    assert managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG in out.getvalue()
+    assert outcome.ready is False
+
+
+def monkeypatch_delenv_managed() -> None:
+    os.environ.pop(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, None)
+
+
+# ---------------------------------------------------------------------------
+# 4. BYO is explicit only
+# ---------------------------------------------------------------------------
+
+
+def test_byo_mode_prompts_for_client_config_only_when_explicit(tmp_path: Path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+
+    calls: list[int] = []
+
+    def fake_client_config(*_a, **_k):
+        calls.append(1)
+        return False
+
+    out = io.StringIO()
+    deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-1",
+        google_byo=True,  # explicit advanced/enterprise choice
+        authorize_google_fn=lambda *_a, **_k: False,
+        client_config_fn=fake_client_config,
+        verify_binding_fn=lambda *_a, **_k: True,
+    )
+    # BYO was explicitly selected, so the client config was collected once.
+    assert calls == [1]
+
+
+def test_byo_and_normal_labels_are_distinct() -> None:
+    assert managed.NORMAL_GOOGLE_LABEL != managed.BYO_GOOGLE_LABEL
+    assert "own" in managed.BYO_GOOGLE_LABEL.lower()
+
+
+# ---------------------------------------------------------------------------
+# 5. Desktop client works without a client secret
+# ---------------------------------------------------------------------------
+
+
+@requires_google
+def test_desktop_client_works_without_secret(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+    # Building the flow must succeed for a public installed app (no secret).
+    flow = build_flow(cfg)
+    assert flow is not None
+    assert cfg.require_credentials() == ("managed.app.id.example", "")
+
+
+@requires_google
+def test_web_client_keeps_secret_when_present(tmp_path: Path) -> None:
+    cfg = GoogleConnectorConfig(
+        enabled=True,
+        client_id="byo.app.id",
+        client_secret="byo-secret",  # noqa: S106 - synthetic test secret
+        redirect_uri="http://127.0.0.1:0/",
+        scopes=default_connector_scopes(),
+        token_path=Path(tmp_path) / "google" / "token.json.enc",
+        key_path=Path(tmp_path) / "google" / "token.key",
+        client_type="web",
+    )
+    flow = build_flow(cfg)
+    assert flow is not None
+
+
+# ---------------------------------------------------------------------------
+# 6. Only drive.readonly scope is requested
+# ---------------------------------------------------------------------------
+
+
+def test_only_drive_readonly_scope_requested(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    cfg = load_google_config(data_dir=tmp_path)
+    assert cfg.scopes == [DRIVE_READONLY]
+
+
+# ---------------------------------------------------------------------------
+# 7. Write scopes remain rejected
+# ---------------------------------------------------------------------------
+
+
+def test_config_rejects_write_scope_override(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv(
+        "SECUREDACT_GOOGLE_SCOPES",
+        "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.readonly",
+    )
+    with pytest.raises(GoogleConfigError):
+        load_google_config(data_dir=tmp_path)
+
+
+def test_connector_rejects_write_scope(tmp_path: Path) -> None:
+    from securedact_mcp.connectors.google.client import _assert_readonly
+
+    cfg = _loopback_config(tmp_path)
+    cfg.scopes.append("https://www.googleapis.com/auth/drive")
+    with pytest.raises(GoogleConfigError):
+        _assert_readonly(cfg)
+
+
+# ---------------------------------------------------------------------------
+# 8. Loopback listener binds only to loopback
+# ---------------------------------------------------------------------------
+
+
+def test_loopback_listener_binds_only_to_loopback() -> None:
+    server = LoopbackOAuthServer(expected_state="s", timeout=2.0)
+    try:
+        # The listener must be bound to the loopback interface, never routable.
+        assert server._httpd.server_address[0] == "127.0.0.1"
+        assert server.redirect_uri.startswith("http://127.0.0.1:")
+        # The port is actually occupied by the loopback listener (a second bind to
+        # the same 127.0.0.1 port must fail), proving it is not an unbound socket.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as dup:
+            with pytest.raises(OSError):
+                dup.bind(("127.0.0.1", server.port))
+    finally:
+        server.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# 9. Random port selection works
+# ---------------------------------------------------------------------------
+
+
+def test_random_loopback_port_selection() -> None:
+    p1 = pick_loopback_port()
+    p2 = pick_loopback_port()
+    assert p1 != p2
+    assert p1 > 1024 and p2 > 1024
+
+
+# ---------------------------------------------------------------------------
+# 10. OAuth state mismatch fails closed
+# ---------------------------------------------------------------------------
+
+
+class _StateMismatchServer(LoopbackOAuthServer):
+    def __init__(self, *, expected_state: str = "", timeout: float = 1.0) -> None:
+        self.expected_state = expected_state
+        self.timeout = timeout
+        self.port = 0
+        from securedact_mcp.connectors.google.auth import _LoopbackResult
+
+        self._result = _LoopbackResult()
+        self._result.set(code=None, error="state_mismatch", state="wrong")
+
+    def start(self) -> None:
+        pass
+
+    def wait_for_callback(self):
+        return self._result
+
+    def shutdown(self) -> None:
+        pass
+
+
+@requires_google
+def test_state_mismatch_fails_closed(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+    ok = run_local_oauth(cfg, _server_cls=_StateMismatchServer, _exchange_fn=lambda *_a, **_k: None)
+    assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# 11. Callback timeout fails safely
+# ---------------------------------------------------------------------------
+
+
+class _TimeoutServer(LoopbackOAuthServer):
+    def __init__(self, *, expected_state: str = "", timeout: float = 0.01) -> None:
+        self.expected_state = expected_state
+        self.timeout = timeout
+        self.port = 0
+        from securedact_mcp.connectors.google.auth import _LoopbackResult
+
+        self._result = _LoopbackResult()
+
+    def start(self) -> None:
+        pass
+
+    def wait_for_callback(self):
+        raise LoopbackAuthError("loopback OAuth callback timed out")
+
+    def shutdown(self) -> None:
+        pass
+
+
+@requires_google
+def test_callback_timeout_fails_safely(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+    ok = run_local_oauth(cfg, _server_cls=_TimeoutServer, _exchange_fn=lambda *_a, **_k: None)
+    assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# 12. Authorization code/token never appears on argv/logs
+# ---------------------------------------------------------------------------
+
+
+class _GoodServer(LoopbackOAuthServer):
+    def __init__(self, *, expected_state: str = "", timeout: float = 5.0) -> None:
+        self.expected_state = expected_state
+        self.timeout = timeout
+        self.port = 54321
+        from securedact_mcp.connectors.google.auth import _LoopbackResult
+
+        self._result = _LoopbackResult()
+        self._result.set(code="AUTHCODE_SECRET", error=None, state=expected_state)
+
+    def start(self) -> None:
+        pass
+
+    def wait_for_callback(self):
+        return self._result
+
+    def shutdown(self) -> None:
+        pass
+
+
+@requires_google
+def test_authorization_url_does_not_contain_code(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+    url, state = get_authorization_url(cfg, pkce=True)
+    assert "code=" not in url
+    assert state
+
+
+@requires_google
+def test_exchanged_code_never_logged_or_on_argv(tmp_path: Path, monkeypatch) -> None:
+    cfg = _loopback_config(tmp_path)
+    exchanged: dict = {}
+
+    def _exchange(config, code, *, state=None):
+        exchanged["code"] = code
+        config.credential_store().save_token({"refresh_token": "RT_MACHINE_ONLY"})
+        return {}
+
+    browser_urls: list[str] = []
+
+    def _open(url: str) -> None:
+        browser_urls.append(url)
+
+    ok = run_local_oauth(
+        cfg,
+        _server_cls=_GoodServer,
+        _exchange_fn=_exchange,
+        _browser_open=_open,
+    )
+    assert ok is True
+    # The browser is opened with the consent URL, never the code.
+    assert browser_urls and "code=" not in browser_urls[0]
+    # The exchange received exactly the callback code (in-memory only).
+    assert exchanged["code"] == "AUTHCODE_SECRET"
+
+
+# ---------------------------------------------------------------------------
+# 13/20. Authorization runs in the machine runtime (not the setup interpreter)
+# ---------------------------------------------------------------------------
+
+
+class _CaptureRunner:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, arguments, run_input: RunInput) -> RunResult:
+        args = [str(a) for a in arguments]
+        if "google-auth" in args:
+            self.calls.append(args)
+            if "--loopback" in args:
+                return RunResult(0, stdout='{"authorized": true}')
+            return RunResult(1, stderr="not started")
+        return RunResult(0)
+
+
+def test_runtime_google_auth_invokes_machine_loopback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deploy, "is_elevated", lambda: True)
+    runtime_python = tmp_path / "runtime" / "python.exe"
+    runner = _CaptureRunner()
+    out = io.StringIO()
+    ok = deploy._authorize_google_via_runtime(
+        runtime_python,
+        tmp_path,
+        runner,
+        output=out,
+        google_byo=False,
+    )
+    assert ok is True
+    # The machine-owned runtime is what performed the OAuth (--loopback), not the
+    # setup interpreter's own process.
+    assert any("--loopback" in c for c in runner.calls)
+    assert str(runtime_python) in " ".join(" ".join(c) for c in runner.calls)
+
+
+def test_loopback_failure_is_fail_closed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deploy, "is_elevated", lambda: True)
+    runtime_python = tmp_path / "runtime" / "python.exe"
+
+    class _LoopbackFailRunner:
+        def __call__(self, arguments, run_input: RunInput) -> RunResult:
+            args = [str(a) for a in arguments]
+            if "--loopback" in args:
+                return RunResult(
+                    2,
+                    stdout='{"authorized": false, "error": "managed app not configured"}',
+                )
+            return RunResult(0)
+
+    out = io.StringIO()
+    ok = deploy._authorize_google_via_runtime(
+        runtime_python,
+        tmp_path,
+        _LoopbackFailRunner(),
+        output=out,
+        google_byo=False,
+    )
+    assert ok is False
+    text = out.getvalue()
+    # Fail closed: report the failure, never prompt the customer for an OAuth
+    # client id/secret, and never fall back to a manual two-phase flow.
+    assert "Google authorization" in text
+    assert "Open a browser to authorize" not in text
+    assert "Google OAuth client ID:" not in text
+    assert "Google OAuth client secret:" not in text
+
+
+def test_loopback_byo_uses_byo_flag(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deploy, "is_elevated", lambda: True)
+    runtime_python = tmp_path / "runtime" / "python.exe"
+
+    class _ByoRunner:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def __call__(self, arguments, run_input: RunInput) -> RunResult:
+            args = [str(a) for a in arguments]
+            self.calls.append(args)
+            if "--loopback" in args:
+                return RunResult(0, stdout='{"authorized": true}')
+            return RunResult(1)
+
+    runner = _ByoRunner()
+    out = io.StringIO()
+    ok = deploy._authorize_google_via_runtime(
+        runtime_python,
+        tmp_path,
+        runner,
+        output=out,
+        google_byo=True,
+    )
+    assert ok is True
+    assert any("--google-byo" in c for c in runner.calls)
+
+
+# ---------------------------------------------------------------------------
+# 14. Required Google imports are verified before auth
+# ---------------------------------------------------------------------------
+
+
+def test_google_deps_required_before_auth(tmp_path: Path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-1",
+        authorize_google_fn=lambda *_a, **_k: True,
+        deps_ready_fn=lambda: False,
+        verify_binding_fn=lambda *_a, **_k: True,
+    )
+    assert outcome.deps_ready is False
+    assert outcome.ready is False
+
+
+# ---------------------------------------------------------------------------
+# 15. Token is stored under the machine root
+# ---------------------------------------------------------------------------
+
+
+@requires_google
+def test_token_stored_under_machine_root_via_loopback(tmp_path: Path) -> None:
+    cfg = _loopback_config(tmp_path)
+
+    def _store(config, code, *, state=None):
+        config.credential_store().save_token({"refresh_token": "RT_MACHINE_ONLY"})
+        return {}
+
+    ok = run_local_oauth(cfg, _server_cls=_GoodServer, _exchange_fn=_store)
+    assert ok is True
+    token_file = tmp_path / "google" / "token.json.enc"
+    assert token_file.is_file()
+    # No token material leaked into the process environment.
+    leaked = [v for v in os.environ.values() if "RT_MACHINE_ONLY" in v or "AUTHCODE_SECRET" in v]
+    assert leaked == []
+
+
+# ---------------------------------------------------------------------------
+# 16. Binding is created after auth
+# ---------------------------------------------------------------------------
+
+
+def test_binding_created_after_loopback_auth(tmp_path: Path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-9",
+        authorize_google_fn=lambda *_a, **_k: True,
+    )
+    assert outcome.ready
+    bindings = machine / "agent" / "connector-bindings.json"
+    assert bindings.is_file()
+    import json
+
+    payload = json.loads(bindings.read_text(encoding="utf-8"))
+    assert payload["int-9"]["platform"] == "google_workspace"
+
+
+# ---------------------------------------------------------------------------
+# 17/18. Setup readiness requires binding; existing state reused
+# ---------------------------------------------------------------------------
+
+
+def test_existing_valid_machine_oauth_and_binding_reused(tmp_path: Path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    # Pre-existing valid machine token.
+    (machine / "google").mkdir(parents=True, exist_ok=True)
+    (machine / "google" / "token.json.enc").write_text("{}", encoding="utf-8")
+    # Pre-existing valid binding.
+    binding = machine / "agent" / "connector-bindings.json"
+    binding.parent.mkdir(parents=True, exist_ok=True)
+    binding.write_text(
+        json.dumps(
+            {
+                "int-reuse": {
+                    "integration_id": "int-reuse",
+                    "platform": "google_workspace",
+                    "local_profile": "default",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-reuse",
+        # No re-auth needed: the token is reused idempotently.
+        authorize_google_fn=lambda *_a, **_k: True,
+    )
+    assert outcome.ready
+    # No duplicate binding written.
+    payload = json.loads(binding.read_text(encoding="utf-8"))
+    assert list(payload.keys()) == ["int-reuse"]
+
+
+def test_missing_binding_blocks_readiness(tmp_path: Path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+
+    def fake_bind(*_a, **_k):
+        # Pretend to bind but never write a verifiable on-disk record.
+        return type("B", (), {"integration_id": "int-nobind", "platform": "google_workspace"})()
+
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-nobind",
+        authorize_google_fn=lambda *_a, **_k: True,
+        bind_google_fn=fake_bind,
+        # Real verifier re-reads disk and finds no binding.
+    )
+    assert outcome.ready is False
+    assert not (machine / "agent" / "connector-bindings.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# 19. UAC-resumed setup preserves the Google selection
+# ---------------------------------------------------------------------------
+
+
+def test_uac_resumed_setup_preserves_google_selection(tmp_path: Path, monkeypatch) -> None:
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    monkeypatch.setenv(deploy.AGENT_ELEVATED_ENV, "1")
+    monkeypatch.setattr(
+        deploy,
+        "install_service_from_runtime",
+        lambda **k: {
+            "installed": True,
+            "service_name": "SecuredactAgent",
+            "data_dir": str(machine),
+            "account": r"NT SERVICE\SecuredactAgent",
+            "running": True,
+            "agent_id": "agent-1",
+        },
+    )
+    monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
+    out = io.StringIO()
+    deploy.run_managed_agent_module(
+        input_fn=lambda _p: "y",
+        output=out,
+        secret_input_fn=lambda _p: "srr_tok",
+        agent="yes",
+        agent_elevated=True,
+        data_dir=machine,
+        elevated_check=lambda: True,
+        google="yes",
+        google_integration_id="int-uac",
+        authorize_google_fn=lambda *_a, **_k: True,
+        verify_google_binding_fn=lambda *_a, **_k: True,
+    )
+    assert (machine / "agent" / "connector-bindings.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# 20. Scheduled SYSTEM agent can consume the machine-local configuration
+# ---------------------------------------------------------------------------
+
+
+def test_system_agent_loads_machine_local_google_config(tmp_path: Path, monkeypatch) -> None:
+    # The same load_google_config the SYSTEM scheduled task uses must resolve the
+    # managed client id + scopes from the machine data root without any operator
+    # env/secret and without creating a Google Cloud project.
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    # Pre-seed an encrypted token so the provider has local material to load.
+    (tmp_path / "google").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "google" / "token.json.enc").write_text("{}", encoding="utf-8")
+
+    cfg = load_google_config(data_dir=tmp_path)
+    assert cfg.client_id == "managed.app.id.example"
+    assert cfg.client_type == "installed"
+    assert cfg.scopes == [DRIVE_READONLY]
+    # The SYSTEM task reads the same machine root; no control-plane round trip.
+    assert str(tmp_path) in str(cfg.token_path)

@@ -48,6 +48,15 @@ GOOGLE_CLIENT_ID_ENV = "SECUREDACT_GOOGLE_CLIENT_ID"
 GOOGLE_CLIENT_SECRET_ENV = "SECUREDACT_GOOGLE_CLIENT_SECRET"  # noqa: S105 - env name, not a secret
 GOOGLE_INTEGRATION_ID_ENV = "SECUREDACT_GOOGLE_INTEGRATION_ID"
 
+# Bring the SecuRedact-managed (owned) Google OAuth application identifiers into
+# scope. When these are configured, normal customers connect through SecuRedact's
+# own app and never need to create their own Google Cloud project / OAuth client.
+from ..connectors.google.config import (  # noqa: E402
+    GOOGLE_MANAGED_CLIENT_ID_ENV,
+)
+
+GOOGLE_BYO_ENV = "SECUREDACT_GOOGLE_BYO"
+
 # A dashboard integration id is a non-secret opaque identifier. It is validated
 # before it is ever stored, or forwarded on the elevated continuation's argv, so a
 # malformed / injected value can never reach a command line or the binding store.
@@ -159,7 +168,11 @@ def inspect_google_machine(
     client_configured = bool(
         environ.get(GOOGLE_CLIENT_ID_ENV) and environ.get(GOOGLE_CLIENT_SECRET_ENV)
     )
-    if not client_configured:
+    # A SecuRedact-managed (owned) OAuth app id is also a valid client config: it
+    # is the default production path, so its presence means Google can authorize
+    # without the customer creating their own Google Cloud project.
+    managed_configured = bool(environ.get(GOOGLE_MANAGED_CLIENT_ID_ENV))
+    if not client_configured and not managed_configured:
         try:
             from ..connectors.google.storage import GoogleClientConfigStore
 
@@ -167,6 +180,8 @@ def inspect_google_machine(
             client_configured = bool(stored_id and stored_secret)
         except Exception:
             client_configured = False
+    # A managed app id alone is sufficient client configuration.
+    client_configured = client_configured or managed_configured
 
     token_present = (root / "google" / "token.json.enc").is_file()
 
@@ -532,6 +547,54 @@ def bind_google_machine(
         profile=profile,
         files=files,
     )
+
+
+def begin_google_authorization(data_dir: Path | str) -> tuple[str, str]:
+    """Start a machine-local Google OAuth flow; return ``(url, state)``.
+
+    Runs inside the *machine-owned runtime* (which carries the Google extra), so
+    it never depends on the setup CLI's interpreter having ``google_auth_oauthlib``.
+    """
+
+    from ..connectors.google import auth as default_auth
+    from ..connectors.google import config as default_config
+
+    config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
+    return default_auth.get_authorization_url(config)
+
+
+def complete_google_authorization(
+    data_dir: Path | str, code: str, state: str | None = None
+) -> bool:
+    """Exchange an authorization code for a machine-local token; return success.
+
+    Runs inside the *machine-owned runtime*. The token is persisted encrypted under
+    the machine data root; no OAuth material is returned to the caller.
+    """
+
+    from ..connectors.google import auth as default_auth
+    from ..connectors.google import config as default_config
+
+    config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
+    default_auth.exchange_code(config, code, state=state)
+    return True
+
+
+def run_google_loopback_authorization(data_dir: Path | str) -> bool:
+    """Run the full local loopback OAuth flow inside the machine-owned runtime.
+
+    Picks a random loopback port, opens the browser, receives the redirect
+    locally, validates the OAuth ``state``, and exchanges the code in-process (so
+    PKCE works). The token is persisted encrypted under the machine data root. No
+    authorization code/token/client secret is ever placed on argv, in a command
+    file, in the environment, or in logs. Returns ``True`` only when authorized.
+    """
+
+    from ..connectors.google import auth as default_auth
+    from ..connectors.google import config as default_config
+
+    config = default_config.load_google_config(require_enabled=False, data_dir=Path(data_dir))
+    return bool(default_auth.run_local_oauth(config))
 
 
 def _setx_exe() -> str:

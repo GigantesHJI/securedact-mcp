@@ -143,3 +143,20 @@ def test_normalized_view_does_not_absorb_subsequent_structured_fields() -> None:
 
     assert address.text == "Keizersgracht 123, 1015 CJ Amsterdam, Netherlands"
     assert email.text == "user%40example.test"
+
+
+def test_date_regex_does_not_split_iso_datetime_prefix() -> None:
+    text = "2026-04-12T09:30:00Z INFO redirect=http://crm.internal/portal/?email=log.synthetic%40example.test&case_id=CASE-NL-8841 status=302"
+    findings = RegexDetector().detect(text)
+    date_findings = [item for item in findings if item.entity_type == EntityType.DATE]
+    assert not date_findings, "DATE must not match the bare date prefix of an ISO 8601 datetime"
+
+
+def test_standalone_date_still_matches_after_iso_guard() -> None:
+    text = "2026-04-12 is the start date"
+    findings = RegexDetector().detect(text)
+    date_findings = [item for item in findings if item.entity_type == EntityType.DATE]
+    assert len(date_findings) == 1
+    assert date_findings[0].text == "2026-04-12"
+    assert date_findings[0].start == 0
+    assert date_findings[0].end == 10

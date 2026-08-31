@@ -160,3 +160,26 @@ def test_standalone_date_still_matches_after_iso_guard() -> None:
     assert date_findings[0].text == "2026-04-12"
     assert date_findings[0].start == 0
     assert date_findings[0].end == 10
+
+
+def test_labelled_date_is_detected() -> None:
+    text = "Date of birth: 2026-08-06"
+    findings = RegexDetector().detect(text)
+    date_findings = [item for item in findings if item.entity_type == EntityType.DATE]
+    assert len(date_findings) == 1
+    assert date_findings[0].text == "2026-08-06"
+
+
+def test_prose_date_is_detected() -> None:
+    text = "The patient was admitted on 2026-08-06."
+    findings = RegexDetector().detect(text)
+    date_findings = [item for item in findings if item.entity_type == EntityType.DATE]
+    assert len(date_findings) == 1
+    assert date_findings[0].text == "2026-08-06"
+
+
+def test_machine_log_date_is_not_detected() -> None:
+    text = "2026-08-06 user=alex.log@example.test status=ok"
+    findings = RegexDetector().detect(text)
+    date_findings = [item for item in findings if item.entity_type == EntityType.DATE]
+    assert not date_findings, "DATE must not match machine/log timestamp context"

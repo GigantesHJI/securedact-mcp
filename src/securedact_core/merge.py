@@ -25,6 +25,7 @@ TYPE_PRIORITY = {
     EntityType.API_TOKEN: 90,
     EntityType.ACCESS_TOKEN: 90,
     EntityType.SESSION_TOKEN: 90,
+    EntityType.EMAIL: 100,
     EntityType.PASSPORT_NUMBER: 85,
     EntityType.DRIVING_LICENCE_NUMBER: 85,
     EntityType.CUSTOMER_NUMBER: 85,

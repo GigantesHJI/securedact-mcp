@@ -95,6 +95,7 @@ class RegexRule:
     entity_type: EntityType
     pattern: re.Pattern[str]
     validator: Validator = lambda _value: True
+    context_validator: Callable[[str, re.Match[str]], bool] | None = None
     confidence: float = 1.0
     precedence: int = 50
 
@@ -304,6 +305,32 @@ def age_over_89(value: str) -> bool:
         return False
     age = int(digits)
     return 90 <= age <= 119
+
+
+def _is_machine_timestamp_context(text: str, match: re.Match[str]) -> bool:
+    """Return True if the date match appears in a machine/log timestamp context.
+
+    Machine timestamps are typically at the start of a line and followed by
+    structured machine-readable data such as log levels (INFO, ERROR, etc.),
+    key=value pairs (user=, status=), or email addresses. These should not
+    be treated as sensitive DATE findings under HIPAA Safe Harbor.
+
+    Human dates (standalone, labelled, or in prose) are not affected because
+    they are followed by punctuation, prose words, or end of string.
+    """
+    after = text[match.end() :]
+    # Check for log level keywords immediately after the date
+    if re.match(
+        r"^\s+(?:INFO|ERROR|WARN|WARNING|DEBUG|TRACE|CRITICAL|FATAL|NOTICE)\b", after, re.IGNORECASE
+    ):
+        return True
+    # Check for key=value patterns (user=, status=, level=, etc.)
+    if re.match(r"^\s+\w+=", after):
+        return True
+    # Check for email-like pattern immediately after
+    if re.match(r"^\s+\S+@\S+\.\S+", after):
+        return True
+    return False
 
 
 # Practical ASCII mailbox subset used for privacy detection. It deliberately
@@ -801,6 +828,7 @@ RULES = (
         re.compile(DATE_VALUE, re.IGNORECASE),
         confidence=0.90,
         precedence=55,
+        context_validator=lambda text, match: not _is_machine_timestamp_context(text, match),
     ),
     RegexRule(
         "time",
@@ -975,6 +1003,8 @@ class RegexDetector:
                 value = self._trim_iban(value)
                 end = start + len(value)
             if not rule.validator(value):
+                continue
+            if rule.context_validator is not None and not rule.context_validator(text, match):
                 continue
             results.append(
                 Detection(

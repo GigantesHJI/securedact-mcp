@@ -446,7 +446,7 @@ def validate_repository(root: Path, *, require_implementation: bool = False) -> 
 
         registered_tools = set(
             re.findall(
-                r"@server\.tool\(\)\s+def\s+([a-z0-9_]+)",
+                r"@server\.tool\((?:.|\n)*?\)\s+def\s+([a-z0-9_]+)",
                 server_path.read_text(encoding="utf-8"),
             )
         )

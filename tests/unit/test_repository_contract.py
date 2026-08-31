@@ -176,3 +176,22 @@ def test_registry_ownership_marker_drift_is_rejected(tmp_path: Path) -> None:
     errors = validate_registry_metadata(tmp_path)
 
     assert any("ownership marker" in error for error in errors)
+
+
+def test_tool_discovery_regex_matches_both_empty_and_annotated_decorators() -> None:
+    import re
+
+    source = """
+@server.tool()
+def tool_one(text: str) -> str:
+    return text
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def tool_two(text: str) -> str:
+    return text
+"""
+    matches = re.findall(
+        r"@server\.tool\((?:.|\n)*?\)\s+def\s+([a-z0-9_]+)",
+        source,
+    )
+    assert sorted(matches) == ["tool_one", "tool_two"]

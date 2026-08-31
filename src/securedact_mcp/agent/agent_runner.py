@@ -255,6 +255,7 @@ def _heartbeat(
     # its own timestamp so transient faults stay visible until the next handled
     # job clears them.
     state_store.update(last_heartbeat_at=clock())
+    logger.info("heartbeat ok agent_id=%s", scrub(config.agent_id))
 
 
 def _job_heartbeat(
@@ -352,6 +353,12 @@ def _finalize_job(
         state_store.update(current_job_id=None, last_error=scrub(str(exc)))
         return
     state_store.update(current_job_id=None, last_successful_result_at=clock(), last_error=None)
+    if exe_result.status == "failed":
+        logger.info(
+            "job failed job_id=%s safe_error_code=%s", claim.job_id, exe_result.safe_error_code
+        )
+    else:
+        logger.info("job completed job_id=%s", claim.job_id)
 
 
 def _run_one_job(
@@ -373,6 +380,7 @@ def _run_one_job(
         return
 
     state_store.update(current_job_id=claim.job_id)
+    logger.info("job claimed job_id=%s", claim.job_id)
     try:
         policy = resolve_policy(claim.policy)
     except PolicyValidationError as exc:
@@ -481,6 +489,12 @@ def run_agent_loop(
         logger.warning("entitlement activation deferred (offline grace): %s", scrub(str(exc)))
 
     iterations = 0
+    logger.info(
+        "agent loop starting agent_id=%s version=%s idle_sleep=%s",
+        scrub(config.agent_id),
+        config.agent_version,
+        idle_sleep,
+    )
     while True:
         if stop is not None and stop():
             break

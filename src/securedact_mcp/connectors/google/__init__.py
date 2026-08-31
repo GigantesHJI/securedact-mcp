@@ -9,14 +9,23 @@ optional ``google`` extra.
 from __future__ import annotations
 
 from .client import GoogleConnectorClient, build_client
-from .config import GoogleConfigError, GoogleConnectorConfig, load_google_config
-from .storage import GoogleCredentialStore
+from .config import (
+    GoogleConfigError,
+    GoogleConnectorConfig,
+    load_google_client_config,
+    load_google_config,
+    save_google_client_config,
+)
+from .storage import GoogleClientConfigStore, GoogleCredentialStore
 
 __all__ = [
+    "GoogleClientConfigStore",
     "GoogleConfigError",
     "GoogleConnectorClient",
     "GoogleConnectorConfig",
     "GoogleCredentialStore",
     "build_client",
+    "load_google_client_config",
     "load_google_config",
+    "save_google_client_config",
 ]

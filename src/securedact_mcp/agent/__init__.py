@@ -20,7 +20,6 @@ from .agent_runner import (
     rotate_credential,
     run_agent_loop,
 )
-from .cli import build_agent_parser, run_agent
 from .config import AgentConfig, AgentFiles, load_config, save_config
 from .errors import (
     AgentCredentialError,
@@ -58,13 +57,11 @@ __all__ = [
     "PolicyValidationError",
     "TransportError",
     "bind_connector",
-    "build_agent_parser",
     "list_connectors",
     "load_config",
     "refresh_entitlement",
     "register_agent",
     "rotate_credential",
-    "run_agent",
     "run_agent_loop",
     "save_config",
 ]

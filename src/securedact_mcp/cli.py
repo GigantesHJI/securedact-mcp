@@ -91,6 +91,41 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report readiness without assuming model terms or provider trust",
     )
+    setup.add_argument(
+        "--agent",
+        action="store_true",
+        help="run only the Managed Agent module (idempotent rerun, e.g. after setup)",
+    )
+    setup.add_argument(
+        "--agent-elevated",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    setup.add_argument(
+        "--no-agent",
+        action="store_true",
+        help="skip the Managed Agent background-service module during setup",
+    )
+    setup.add_argument(
+        "--google",
+        choices=("yes", "no"),
+        default=None,
+        help="enable/disable Google Workspace onboarding during setup (default: "
+        "detect existing machine configuration, otherwise ask during the wizard)",
+    )
+    setup.add_argument(
+        "--google-integration-id",
+        default=None,
+        help="(advanced/manual) bind a specific SecuRedact Google Workspace "
+        "integration by its internal ID instead of automatic resolution. Normal "
+        "customers should not need this.",
+    )
+    setup.add_argument(
+        "--google-byo",
+        action="store_true",
+        help="(advanced/enterprise) use YOUR OWN Google Cloud OAuth app instead of "
+        "the SecuRedact-managed app. Normal customers should not need this.",
+    )
 
     models = commands.add_parser("models", help="inspect and maintain local contextual models")
     model_commands = models.add_subparsers(dest="model_command", required=True)
@@ -478,6 +513,10 @@ def main(
     if arguments.command == "setup":
         from .onboarding import run_setup
 
+        agent_mode = "no" if getattr(arguments, "no_agent", False) else None
+        agent_only = bool(getattr(arguments, "agent", False))
+        if agent_only and agent_mode is None:
+            agent_mode = "yes"
         return run_setup(
             host=arguments.host,
             language=arguments.language,
@@ -487,6 +526,12 @@ def main(
             verify_models=_models_verify,
             input_fn=input_fn,
             output=output,
+            agent=agent_mode,
+            agent_only=agent_only,
+            agent_elevated=bool(getattr(arguments, "agent_elevated", False)),
+            google=getattr(arguments, "google", None),
+            google_integration_id=getattr(arguments, "google_integration_id", None),
+            google_byo=getattr(arguments, "google_byo", False),
         )
 
     diagnose_runtime = arguments.command == "diagnostics"
@@ -572,3 +617,7 @@ def main(
             store=store,
         )
     raise AssertionError("unhandled command")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

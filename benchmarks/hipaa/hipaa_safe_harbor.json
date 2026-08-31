@@ -1,0 +1,212 @@
+{
+  "corpus_version": 1,
+  "split": "hipaa_safe_harbor",
+  "description": "Deterministic HIPAA Safe Harbor text benchmark. Separate from the GDPR benchmark. Each sample lists entity types expected to be present (or absent) under the hipaa_safe_harbor profile. Coordinates are synthetic.",
+  "samples": [
+    {
+      "id": "hipaa-pos-A-001",
+      "language": "en",
+      "domain": "clinical_note",
+      "text": "Name: John A. Smith\nMRN: MRN-558201",
+      "expect_present": ["person", "medical_record_number"]
+    },
+    {
+      "id": "hipaa-pos-B-001",
+      "language": "en",
+      "domain": "address",
+      "text": "Mailing address: 14 Birchwood Lane, Springfield, IL 62704, United States.",
+      "expect_present": ["us_zip", "address"]
+    },
+    {
+      "id": "hipaa-pos-B-002",
+      "language": "en",
+      "domain": "address",
+      "text": "ZIP code: 90210-1234",
+      "expect_present": ["us_zip"]
+    },
+    {
+      "id": "hipaa-pos-C-001",
+      "language": "en",
+      "domain": "clinical_note",
+      "text": "The patient is a 92-year-old admitted on 03/14/2021 and discharged 03/20/2021.",
+      "expect_present": ["age", "date"]
+    },
+    {
+      "id": "hipaa-pos-D-001",
+      "language": "en",
+      "domain": "contact",
+      "text": "Call the clinic at +1 (415) 555-2671 during office hours.",
+      "expect_present": ["phone"]
+    },
+    {
+      "id": "hipaa-pos-E-001",
+      "language": "en",
+      "domain": "contact",
+      "text": "Fax: +1 415-555-8890 or send via secure portal.",
+      "expect_present": ["fax"]
+    },
+    {
+      "id": "hipaa-pos-F-001",
+      "language": "en",
+      "domain": "contact",
+      "text": "Reach the coordinator at maria.gonzalez@example.test for scheduling.",
+      "expect_present": ["email"]
+    },
+    {
+      "id": "hipaa-pos-G-001",
+      "language": "en",
+      "domain": "intake",
+      "text": "SSN: 123-45-6789. Please verify before enrollment.",
+      "expect_present": ["ssn"]
+    },
+    {
+      "id": "hipaa-pos-G-002",
+      "language": "en",
+      "domain": "intake",
+      "text": "Social Security Number: 789 65 4321 on file.",
+      "expect_present": ["ssn"]
+    },
+    {
+      "id": "hipaa-pos-H-001",
+      "language": "en",
+      "domain": "record",
+      "text": "Medical record number: MED-772019 referenced in chart.",
+      "expect_present": ["medical_record_number"]
+    },
+    {
+      "id": "hipaa-pos-I-001",
+      "language": "en",
+      "domain": "insurance",
+      "text": "Member ID: MBR-448821039 and Subscriber ID: SUB-90012773 are on the card.",
+      "expect_present": ["health_plan_beneficiary"]
+    },
+    {
+      "id": "hipaa-pos-J-001",
+      "language": "en",
+      "domain": "financial",
+      "text": "Account No: ACC-773102884 billed this month.",
+      "expect_present": ["account_number"]
+    },
+    {
+      "id": "hipaa-pos-K-001",
+      "language": "en",
+      "domain": "license",
+      "text": "Driver license: DL-A9920314 presented at registration.",
+      "expect_present": ["driving_licence_number"]
+    },
+    {
+      "id": "hipaa-pos-L-001",
+      "language": "en",
+      "domain": "vehicle",
+      "text": "VIN: 1M8GDM9AXKP042788 recorded for the involved vehicle.",
+      "expect_present": ["vehicle_identifier"]
+    },
+    {
+      "id": "hipaa-pos-L-002",
+      "language": "en",
+      "domain": "vehicle",
+      "text": "License plate: 8KGD204 observed at scene.",
+      "expect_present": ["vehicle_identifier"]
+    },
+    {
+      "id": "hipaa-pos-M-001",
+      "language": "en",
+      "domain": "device",
+      "text": "Device identifier: DEV-55120983 implanted 2020.",
+      "expect_present": ["device_identifier"]
+    },
+    {
+      "id": "hipaa-pos-N-001",
+      "language": "en",
+      "domain": "web",
+      "text": "Patient summary at https://summary.example.test/patient shared externally.",
+      "expect_present": ["url"]
+    },
+    {
+      "id": "hipaa-pos-O-001",
+      "language": "en",
+      "domain": "network",
+      "text": "Remote session from 203.0.113.45 and 2001:db8::1 logged.",
+      "expect_present": ["ipv4", "ipv6"]
+    },
+    {
+      "id": "hipaa-pos-P-001",
+      "language": "en",
+      "domain": "biometric",
+      "text": "Fingerprint template BIO-FP-5521 stored in the access system.",
+      "expect_present": ["biometric_data"]
+    },
+    {
+      "id": "hipaa-pos-R-001",
+      "language": "en",
+      "domain": "record",
+      "text": "Patient number: PAT-772019 and Case number: CASE-551209 cross-referenced.",
+      "expect_present": ["patient_number", "case_number"]
+    },
+    {
+      "id": "hipaa-neg-G-001",
+      "language": "en",
+      "domain": "hard_negative",
+      "text": "SSN 000-12-3456 is invalid and 666-12-3456 is unassigned; serial 123-00-4567 bad.",
+      "expect_absent": ["ssn"]
+    },
+    {
+      "id": "hipaa-neg-9digit-001",
+      "language": "en",
+      "domain": "hard_negative",
+      "text": "The reference number 987654321 is a random nine-digit value, not an SSN.",
+      "expect_absent": ["ssn"]
+    },
+    {
+      "id": "hipaa-neg-5digit-001",
+      "language": "en",
+      "domain": "hard_negative",
+      "text": "The quantity 48217 was ordered and the code 12345 appears in the log.",
+      "expect_absent": ["us_zip"]
+    },
+    {
+      "id": "hipaa-neg-vin-001",
+      "language": "en",
+      "domain": "hard_negative",
+      "text": "The batch token 1Z8GDM9AXKP04278Q is 17 chars with excluded letters, not a VIN.",
+      "expect_absent": ["vehicle_identifier"]
+    },
+    {
+      "id": "hipaa-neg-eu-001",
+      "language": "en",
+      "domain": "hard_negative",
+      "text": "Dutch BSN 123456782 and postcode 1015 CJ and IBAN NL91 ABNA 0417 1643 00 are EU, not US.",
+      "expect_absent": ["ssn", "us_zip"]
+    },
+    {
+      "id": "hipaa-neg-age-001",
+      "language": "en",
+      "domain": "hard_negative",
+      "text": "The storage age is 45 days and the sample age 9 weeks; no individual over 89.",
+      "expect_absent": ["age"]
+    },
+    {
+      "id": "hipaa-img-Q-001",
+      "language": "en",
+      "domain": "image_limitation",
+      "text": "Attached full-face photograph of the patient and a scanned driver license image.",
+      "expect_absent": ["ssn", "us_zip", "vehicle_identifier"],
+      "unsupported_category": "Q"
+    },
+    {
+      "id": "hipaa-mix-001",
+      "language": "en",
+      "domain": "discharge",
+      "text": "Discharge summary, patient name: Jane Doe, Date of birth: 09/30/1965. SSN 234-56-7890. Phone +1 312-555-0190. Email jane.doe@example.test. Insured Member ID: MBR-119203845. VIN: 2T1BURHE8JC123456.",
+      "expect_present": [
+        "person",
+        "date_of_birth",
+        "ssn",
+        "phone",
+        "email",
+        "health_plan_beneficiary",
+        "vehicle_identifier"
+      ]
+    }
+  ]
+}

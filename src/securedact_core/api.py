@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -38,6 +38,10 @@ from .safe_read import (
     read_file_safely,
 )
 from .taxonomy import SPECIAL_CATEGORY_TYPES
+
+if TYPE_CHECKING:
+    from .hipaa import HipaaSafeHarborResult
+
 
 PUBLIC_SCHEMA_VERSION: Literal["1"] = "1"
 DEFAULT_MAX_TEXT_CHARS = MAX_INSPECTION_TEXT_CHARS
@@ -561,6 +565,35 @@ class SecuredactEngine:
         except Exception:
             # Audit failure must never weaken enforcement.
             return
+
+    def hipaa_safe_harbor(
+        self,
+        text: str,
+        *,
+        contextual_ner: bool = False,
+        flair_detector: Any = None,
+        flair_threshold: float | None = None,
+    ) -> HipaaSafeHarborResult:
+        """Run HIPAA Safe Harbor mechanical de-identification on ``text``.
+
+        By default this uses the deterministic + rule-based stack only (no Flair). Pass
+        ``contextual_ner=True`` to additionally apply the validated Flair PERSON-only
+        gate for HIPAA Category A (Names). Contextual NER is optional, locally loaded,
+        and cannot contribute geography or structured identifiers. Inject ``flair_detector``
+        to supply a backend (testing/integration); otherwise the local checkpoint is
+        resolved lazily.
+        """
+
+        from .hipaa import run_hipaa_safe_harbor
+
+        return run_hipaa_safe_harbor(
+            self.privacy_engine,
+            text,
+            "hipaa_safe_harbor",
+            contextual_ner=contextual_ner,
+            flair_detector=flair_detector,
+            flair_threshold=flair_threshold,
+        )
 
     def close(self) -> None:
         self.restoration_vault.clear()

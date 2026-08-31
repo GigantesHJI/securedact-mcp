@@ -50,6 +50,22 @@ SecuRedact helps reduce exposure of sensitive data; it is not a guarantee of
 compliance or a claim that every leak is prevented. See
 [Limitations](#security-and-limitations).
 
+## HIPAA Safe Harbor (0.5.0)
+
+SecuRedact 0.5.0 adds a HIPAA Safe Harbor mechanical-de-identification aid for
+`45 CFR 164.514(b)(2)` text processing. It builds on the existing deterministic
+detection stack and adds an 18-category Safe Harbor mapping, US-specific identifiers
+(SSN with area/group/serial validation, US ZIP/ZIP+4, health-plan beneficiary,
+account numbers, ages over 89, VIN-format vehicle identifiers, fax), and an optional
+validated Flair PERSON-only gate for Category A (Names).
+
+Use `engine.hipaa_safe_harbor(text)` or the `HIPAA_SAFE_HARBOR_POLICY` policy. This is
+a mechanical aid, **not** a compliance certification: it cannot satisfy the
+actual-knowledge prong (`164.514(b)(2)(ii)`) or replace Expert Determination
+(`164.514(b)(1)`). See
+[docs/hipaa-safe-harbor-profile.md](docs/hipaa-safe-harbor-profile.md) and
+[docs/hipaa-safe-harbor-gap-analysis.md](docs/hipaa-safe-harbor-gap-analysis.md).
+
 ## Quick start
 
 Install from PyPI and run the guided setup (Windows):

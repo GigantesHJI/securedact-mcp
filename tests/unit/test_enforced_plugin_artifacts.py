@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 GEMINI_EXTENSION_NAME = "securedact-enforced"
-GEMINI_EXTENSION_VERSION = "0.4.2"
+GEMINI_EXTENSION_VERSION = "0.5.0"
 GEMINI_HOOK_EVENTS = {
     "SessionStart",
     "SessionEnd",

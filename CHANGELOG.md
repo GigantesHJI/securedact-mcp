@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version 0.1.0 was an unpublished release attempt. Version 0.1.1 is the first
 public server release.
 
+## [0.5.0] - 2026-08-31
+
+This release combines the finalized managed-agent work (Google Workspace onboarding,
+managed-agent runtime lifecycle, Windows UAC / loopback OAuth) with the new HIPAA
+Safe Harbor feature.
+
+### Added
+
+- **HIPAA Safe Harbor mechanical de-identification.** `securedact_core.hipaa` provides an
+  18-category Safe Harbor mapping (`run_hipaa_safe_harbor`) and a structured
+  `HipaaSafeHarborResult`. `SecuredactEngine.hipaa_safe_harbor(text, ...)` exposes it,
+  with an optional validated Flair PERSON-only gate for Category A (Names).
+- **HIPAA Safe Harbor policy.** `HIPAA_SAFE_HARBOR_POLICY` (`securedact_core.policies`)
+  removes enumerated textual identifiers where detection exists.
+- **US-specific deterministic identifiers.** New entity types `SSN`, `FAX`,
+  `ACCOUNT_NUMBER`, `HEALTH_PLAN_BENEFICIARY`, `VEHICLE_IDENTIFIER`, `US_ZIP`, `AGE`
+  with deterministic detectors (SSN area/group/serial validation, US ZIP/ZIP+4 with
+  USPS state qualification, VIN-format vehicle identifiers, ages over 89).
+- **HIPAA benchmark & evaluation tooling** under `benchmarks/hipaa/` and
+  `scripts/experimental/` (deterministic adversarial corpus; reproducible
+  P=1.000 / R=0.909 / F1=0.952 against the released adversarial set).
+- **HIPAA tests** `tests/unit/test_hipaa_safe_harbor.py`,
+  `tests/unit/test_hipaa_flair_ensemble.py`,
+  `tests/unit/test_hipaa_adversarial_regressions.py`.
+
+### Changed
+
+- HIPAA Safe Harbor is documented as a mechanical aid and **not** a compliance
+  certification (it cannot satisfy the actual-knowledge prong or replace Expert
+  Determination). See `docs/hipaa-safe-harbor-profile.md` and
+  `docs/hipaa-safe-harbor-gap-analysis.md`.
+
 ## [Unreleased]
 
 ### Added

@@ -84,6 +84,9 @@ CATEGORY_DEFINITIONS: dict[EntityType, EntityDefinition] = {
     EntityType.PHONE: _definition(
         EntityType.PHONE, "Telephone numbers", CategoryGroup.CONTACT, _D, deterministic=True
     ),
+    EntityType.FAX: _definition(
+        EntityType.FAX, "Fax numbers", CategoryGroup.CONTACT, _D, deterministic=True
+    ),
     EntityType.LOCATION: _definition(
         EntityType.LOCATION, "Locations", CategoryGroup.LOCATION, _R, contextual=True, review=True
     ),
@@ -108,6 +111,18 @@ CATEGORY_DEFINITIONS: dict[EntityType, EntityDefinition] = {
     EntityType.POSTCODE: _definition(
         EntityType.POSTCODE, "Postcodes", CategoryGroup.LOCATION, _D, deterministic=True
     ),
+    EntityType.US_ZIP: _definition(
+        EntityType.US_ZIP,
+        "US ZIP codes",
+        CategoryGroup.LOCATION,
+        _D,
+        Severity.HIGH,
+        deterministic=True,
+        description=(
+            "Detects US ZIP/ZIP+4 in labelled or state-qualified contexts. Full ZIP is "
+            "redacted; conditional ZIP3 retention is not applied (no versioned population dataset)."
+        ),
+    ),
     EntityType.COUNTRY: _definition(
         EntityType.COUNTRY, "Countries", CategoryGroup.LOCATION, _R, contextual=True, review=True
     ),
@@ -121,6 +136,19 @@ CATEGORY_DEFINITIONS: dict[EntityType, EntityDefinition] = {
         _D,
         deterministic=True,
         contextual=True,
+    ),
+    EntityType.AGE: _definition(
+        EntityType.AGE,
+        "Ages (Safe Harbor > 89)",
+        CategoryGroup.DATES,
+        _R,
+        Severity.MEDIUM,
+        deterministic=True,
+        review=True,
+        description=(
+            "Surfaces explicit individual ages over 89 for Safe Harbor review. Default action "
+            "is review, not automatic removal, because generic age text is ambiguous."
+        ),
     ),
     EntityType.TIME: _definition(
         EntityType.TIME,
@@ -171,6 +199,15 @@ CATEGORY_DEFINITIONS: dict[EntityType, EntityDefinition] = {
         Severity.CRITICAL,
         deterministic=True,
     ),
+    EntityType.SSN: _definition(
+        EntityType.SSN,
+        "US Social Security numbers",
+        CategoryGroup.GOVERNMENT,
+        _D,
+        Severity.CRITICAL,
+        deterministic=True,
+        description="Detects US SSNs (AAA-GG-SSSS with area/group/serial validation).",
+    ),
     EntityType.CUSTOMER_NUMBER: _definition(
         EntityType.CUSTOMER_NUMBER,
         "Customer numbers",
@@ -212,6 +249,26 @@ CATEGORY_DEFINITIONS: dict[EntityType, EntityDefinition] = {
         CategoryGroup.FINANCIAL,
         _D,
         deterministic=True,
+    ),
+    EntityType.ACCOUNT_NUMBER: _definition(
+        EntityType.ACCOUNT_NUMBER,
+        "Account numbers",
+        CategoryGroup.FINANCIAL,
+        _D,
+        Severity.HIGH,
+        deterministic=True,
+        description="Detects labelled account numbers (e.g. 'Account No.').",
+    ),
+    EntityType.HEALTH_PLAN_BENEFICIARY: _definition(
+        EntityType.HEALTH_PLAN_BENEFICIARY,
+        "Health plan beneficiary identifiers",
+        CategoryGroup.MEDICAL,
+        _D,
+        Severity.CRITICAL,
+        deterministic=True,
+        description=(
+            "Detects payer-assigned member/subscriber/beneficiary identifiers from labels or prefixes."
+        ),
     ),
     EntityType.IBAN: _definition(
         EntityType.IBAN, "IBANs", CategoryGroup.FINANCIAL, _D, Severity.CRITICAL, deterministic=True
@@ -322,6 +379,15 @@ CATEGORY_DEFINITIONS: dict[EntityType, EntityDefinition] = {
         CategoryGroup.TECHNICAL,
         _D,
         deterministic=True,
+    ),
+    EntityType.VEHICLE_IDENTIFIER: _definition(
+        EntityType.VEHICLE_IDENTIFIER,
+        "Vehicle identifiers and serial numbers",
+        CategoryGroup.TECHNICAL,
+        _D,
+        Severity.HIGH,
+        deterministic=True,
+        description="Detects 17-character VIN-format identifiers (no check-digit validation) and labelled license-plate/vehicle values.",
     ),
     EntityType.URL: _definition(
         EntityType.URL,

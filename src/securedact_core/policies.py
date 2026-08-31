@@ -87,6 +87,12 @@ def _automatic_pseudonymization_rules() -> dict[EntityType, AutomaticPseudonymiz
             EntityType.DEVICE_IDENTIFIER,
             EntityType.SENSITIVE_URL_PARAMETER,
             EntityType.INTERNAL_URL,
+            EntityType.SSN,
+            EntityType.FAX,
+            EntityType.ACCOUNT_NUMBER,
+            EntityType.HEALTH_PLAN_BENEFICIARY,
+            EntityType.VEHICLE_IDENTIFIER,
+            EntityType.US_ZIP,
         }
     }
     for entity_type in {
@@ -363,6 +369,65 @@ CUSTOM_POLICY = Policy(
 )
 
 
+HIPAA_SAFE_HARBOR_POLICY = Policy(
+    name="hipaa_safe_harbor",
+    display_name="HIPAA Safe Harbor",
+    description=(
+        "Mechanical de-identification aid for HIPAA Safe Harbor (45 CFR 164.514(b)(2)) text "
+        "processing. It removes enumerated textual identifiers where detection exists, but it is "
+        "NOT a compliance certification: it cannot satisfy the actual-knowledge prong "
+        "(164.514(b)(2)(ii)) or replace Expert Determination (164.514(b)(1))."
+    ),
+    category_actions={
+        EntityType.PERSON: PrivacyAction.REDACT,
+        EntityType.ADDRESS: PrivacyAction.REDACT,
+        EntityType.STREET_ADDRESS: PrivacyAction.REDACT,
+        EntityType.HOUSE_NUMBER: PrivacyAction.REDACT,
+        EntityType.US_ZIP: PrivacyAction.REDACT,
+        EntityType.LOCATION: PrivacyAction.REVIEW,
+        EntityType.DATE: PrivacyAction.REVIEW,
+        EntityType.DATE_OF_BIRTH: PrivacyAction.REDACT,
+        EntityType.AGE: PrivacyAction.REVIEW,
+        EntityType.APPOINTMENT: PrivacyAction.REVIEW,
+        EntityType.TIME: PrivacyAction.REVIEW,
+        EntityType.PHONE: PrivacyAction.REDACT,
+        EntityType.FAX: PrivacyAction.REDACT,
+        EntityType.EMAIL: PrivacyAction.REDACT,
+        EntityType.SSN: PrivacyAction.REDACT,
+        EntityType.MEDICAL_RECORD_NUMBER: PrivacyAction.REDACT,
+        EntityType.HEALTH_PLAN_BENEFICIARY: PrivacyAction.REDACT,
+        EntityType.BANK_ACCOUNT_REFERENCE: PrivacyAction.REDACT,
+        EntityType.ACCOUNT_NUMBER: PrivacyAction.REDACT,
+        EntityType.DRIVING_LICENCE_NUMBER: PrivacyAction.REDACT,
+        EntityType.NATIONAL_ID: PrivacyAction.REDACT,
+        EntityType.PASSPORT_NUMBER: PrivacyAction.REDACT,
+        EntityType.VEHICLE_IDENTIFIER: PrivacyAction.REDACT,
+        EntityType.DEVICE_IDENTIFIER: PrivacyAction.REDACT,
+        EntityType.URL: PrivacyAction.REDACT,
+        EntityType.SENSITIVE_URL_PARAMETER: PrivacyAction.REDACT,
+        EntityType.INTERNAL_URL: PrivacyAction.REDACT,
+        EntityType.IPV4: PrivacyAction.REDACT,
+        EntityType.IPV6: PrivacyAction.REDACT,
+        EntityType.BIOMETRIC_DATA: PrivacyAction.BLOCK,
+        EntityType.GENETIC_DATA: PrivacyAction.BLOCK,
+        EntityType.PATIENT_NUMBER: PrivacyAction.REDACT,
+        EntityType.CASE_NUMBER: PrivacyAction.REDACT,
+        EntityType.EMPLOYEE_ID: PrivacyAction.REDACT,
+        EntityType.CUSTOMER_NUMBER: PrivacyAction.REDACT,
+        EntityType.PAYROLL_NUMBER: PrivacyAction.REDACT,
+        EntityType.INVOICE_NUMBER: PrivacyAction.REDACT,
+        EntityType.POLICY_NUMBER: PrivacyAction.REDACT,
+        EntityType.UNKNOWN_SENSITIVE: PrivacyAction.REVIEW,
+        EntityType.FREE_TEXT_SENSITIVE_CONTEXT: PrivacyAction.REVIEW,
+    },
+    minimum_confidence=0.15,
+    auto_accept_confidence=1.0,
+    review_all_contextual=False,
+    contextual_residual_scan=True,
+    residual_validation_enabled=True,
+)
+
+
 BUILT_IN_POLICIES = (
     DEFAULT_POLICY,
     STRICT_EXTERNAL_AI_POLICY,
@@ -377,6 +442,7 @@ BUILT_IN_POLICIES = (
     BUSINESS_POLICY,
     SPECIAL_CATEGORY_STRICT_POLICY,
     CUSTOM_POLICY,
+    HIPAA_SAFE_HARBOR_POLICY,
 )
 
 

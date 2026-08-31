@@ -919,7 +919,7 @@ URL_PATTERN = re.compile(r"\b(?:https?://|www\.)[^\s<>\[\]()]+", re.IGNORECASE)
 PREFIX_PATTERN = re.compile(
     rf"(?<![A-Z0-9])(?P<prefix>{'|'.join(sorted(PREFIX_TYPES, key=len, reverse=True))})"
     r"(?:(?:-[A-Z]{2,8})?[-_][A-Z0-9][A-Z0-9_-]{2,}"
-    r"|[0-9][A-Z0-9._-]{2,})(?![A-Z0-9])",
+    r"|[0-9][A-Z0-9._-]{2,})(?![A-Z0-9@])",
     re.IGNORECASE,
 )
 RF_REFERENCE_PATTERN = re.compile(r"(?<![A-Z0-9])RF\d{8,25}(?![A-Z0-9])", re.IGNORECASE)

@@ -852,6 +852,12 @@ def test_uac_resumed_setup_preserves_google_selection(tmp_path: Path, monkeypatc
     _seed_machine_registration(machine)
     monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
     monkeypatch.setenv(deploy.AGENT_ELEVATED_ENV, "1")
+    # Force/mimic the Windows branch hermetically so the UAC-resumed path actually
+    # runs on any host (the production module short-circuits on non-Windows).
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+    monkeypatch.setattr(deploy, "is_elevated", lambda: True)
+    # Inject the Windows-only service collaborators so no real Task Scheduler /
+    # win32api / setx is touched; the fake install reports a successful service.
     monkeypatch.setattr(
         deploy,
         "install_service_from_runtime",
@@ -866,7 +872,7 @@ def test_uac_resumed_setup_preserves_google_selection(tmp_path: Path, monkeypatc
     )
     monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
     out = io.StringIO()
-    deploy.run_managed_agent_module(
+    rc = deploy.run_managed_agent_module(
         input_fn=lambda _p: "y",
         output=out,
         secret_input_fn=lambda _p: "srr_tok",
@@ -878,8 +884,17 @@ def test_uac_resumed_setup_preserves_google_selection(tmp_path: Path, monkeypatc
         google_integration_id="int-uac",
         authorize_google_fn=lambda *_a, **_k: True,
         verify_google_binding_fn=lambda *_a, **_k: True,
+        # Hermetic: never spawn setx on the Windows branch.
+        apply_google_env_fn=lambda _d, **_k: None,
     )
-    assert (machine / "agent" / "connector-bindings.json").is_file()
+    # --agent-elevated resumes the onboarding exactly once; setup completes.
+    assert rc == 0
+    # Google selection survives, the explicit integration id survives, and the local
+    # connector binding is created and proves the integration id.
+    bindings = machine / "agent" / "connector-bindings.json"
+    assert bindings.is_file()
+    payload = json.loads(bindings.read_text(encoding="utf-8"))
+    assert "int-uac" in payload
 
 
 # ---------------------------------------------------------------------------
@@ -1089,11 +1104,13 @@ class _FailRunner:
 
 
 def _machine_runtime_at(runtime_path: Path) -> Path:
-    runtime_path.mkdir(parents=True, exist_ok=True)
-    python = runtime_path / "Scripts" / "python.exe"
-    python.parent.mkdir(parents=True, exist_ok=True)
-    python.write_bytes(b"")
-    return python
+    # Create the fake interpreter at exactly the location the engine resolves for the
+    # current platform (``<root>/Scripts/python.exe`` on Windows,
+    # ``<root>/bin/python`` elsewhere) so resolve_machine_runtime_python() finds it.
+    runtime_python = deploy.resolve_runtime_python(runtime_path)
+    runtime_python.parent.mkdir(parents=True, exist_ok=True)
+    runtime_python.write_bytes(b"")
+    return runtime_python
 
 
 def test_post_callback_failure_not_reported_as_managed_unavailable(

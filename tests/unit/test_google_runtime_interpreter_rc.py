@@ -525,6 +525,10 @@ def test_provision_fails_closed_on_stale_google_bootstrap(tmp_path: Path) -> Non
             acl_provider=safe_provider,
             command_runner=StaleGoogleBootstrapRunner(),
             google_enabled=True,
+            # This test is about stale Google bootstrap detection, NOT Task Scheduler:
+            # inject a hermetic agent-control collaborator so the real backend
+            # (schtasks) is never consulted.
+            _agent_control=lambda action: False,
         )
     message = str(exc.value)
     assert "google-auth" in message

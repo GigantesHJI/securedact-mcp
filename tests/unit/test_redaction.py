@@ -1,5 +1,6 @@
 import pytest
 
+from securedact_core.detectors import RegexDetector
 from securedact_core.models import Detection, DetectionSource, EntityType, RedactionMode
 from securedact_core.redaction import _resolve_person_aliases, redact_text, restore_text
 
@@ -204,3 +205,18 @@ def test_unique_and_ambiguous_surname_resolution_is_conservative() -> None:
     assert redact_text(ambiguous_text, ambiguous_entities).sanitized_text == (
         "[PERSON_1] met [PERSON_2]. [PERSON_3] sent the report."
     )
+
+
+def test_adversarial_log_url_no_partial_alphanumeric_replacement() -> None:
+    text = "2026-04-12T09:30:00Z INFO redirect=http://crm.internal/portal/?email=log.synthetic%40example.test&case_id=CASE-NL-8841 status=302"
+    findings = RegexDetector().detect(text)
+    entities = [
+        item
+        for item in findings
+        if item.entity_type in {EntityType.DATE, EntityType.INTERNAL_URL}
+    ]
+    result = redact_text(text, entities)
+    assert "[INTERNAL_URL_" in result.sanitized_text
+    assert "CASE-NL-8841" not in result.sanitized_text
+    assert "log.synthetic%40example.test" not in result.sanitized_text
+    assert "[DATE_" not in result.sanitized_text

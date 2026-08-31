@@ -343,7 +343,7 @@ def _email(value: str) -> bool:
 # greedily swallowing ordinary prose words (so "ACC-773102884 billed" stays bounded to
 # the identifier). This keeps label-anchored detection precise.
 _IDENTIFIER_TOKEN = r"[A-Z0-9][A-Z0-9._/-]*"  # noqa: S105
-IDENTIFIER_VALUE = rf"{_IDENTIFIER_TOKEN}(?:\s+[A-Z0-9]*\d[A-Z0-9._/-]*)?"
+IDENTIFIER_VALUE = rf"{_IDENTIFIER_TOKEN}(?:[^\S\r\n]+[A-Z0-9]*\d[A-Z0-9._/-]*)?"
 
 
 def _nonempty_identifier(value: str) -> bool:
@@ -352,7 +352,7 @@ def _nonempty_identifier(value: str) -> bool:
         and bool(re.search(r"\d", value))
         and bool(
             re.fullmatch(
-                rf"{_IDENTIFIER_TOKEN}(?:\s+[A-Z0-9]*\d[A-Z0-9._/-]*)?", value, re.IGNORECASE
+                rf"{_IDENTIFIER_TOKEN}(?:[^\S\r\n]+[A-Z0-9]*\d[A-Z0-9._/-]*)?", value, re.IGNORECASE
             )
         )
     )
@@ -363,7 +363,7 @@ DATE_VALUE = (
     r"September|October|November|December|januari|februari|maart|april|mei|"
     r"juni|juli|augustus|september|oktober|november|december)\s+\d{4}|"
     r"\d{1,2}[-/.]\d{1,2}[-/.]\d{4}|"
-    r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2})"
+    r"(?!\d{4}[-/.]\d{1,2}[-/.]\d{1,2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2}|$))\d{4}[-/.]\d{1,2}[-/.]\d{1,2})"
 )
 TEXT_FIELD_VALUE = r"[^\r\n;|]{2,160}"
 # Labelled telephone/fax values may start with an area-code parenthesis, e.g.

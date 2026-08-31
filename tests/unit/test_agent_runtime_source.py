@@ -176,7 +176,8 @@ def test_no_fallback_to_stale_pypi_when_local_running_code_newer(
         )
 
     # And the install target it *would* have chosen is the exact pin, never latest.
-    assert select_runtime_install_source() == "securedact-mcp==0.4.2"
+    expected_pin = f"securedact-mcp=={securedact_mcp.__version__}"
+    assert select_runtime_install_source() == expected_pin
 
 
 def test_dev_local_mode_installs_controlled_wheel_not_pypi(

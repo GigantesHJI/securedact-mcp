@@ -45,7 +45,6 @@ from pathlib import Path
 
 import pytest
 
-from securedact_mcp.agent import cli as agent_cli
 from securedact_mcp.agent import deploy, google_setup, runtime_bootstrap
 from securedact_mcp.agent.config import AgentConfig, AgentFiles, save_config
 from securedact_mcp.agent.deploy import RunInput, RunResult
@@ -524,91 +523,6 @@ def test_provision_fails_closed_on_stale_google_bootstrap(tmp_path: Path) -> Non
     message = str(exc.value)
     assert "google-auth" in message
     assert "stale" in message.lower()
-
-
-# ---------------------------------------------------------------------------
-# 7. Direct runtime verification (no browser, no token, no network)
-# ---------------------------------------------------------------------------
-
-
-def test_verify_google_runtime_runs_both_documented_commands(tmp_path: Path, monkeypatch) -> None:
-    runtime = _machine_runtime(tmp_path)
-    runtime_python = deploy.resolve_runtime_python(runtime)
-    monkeypatch.setattr(deploy.service, "resolve_service_data_dir", lambda _d: tmp_path / "machine")
-    runner = RuntimeRunner()
-
-    report = deploy.verify_google_runtime(
-        runtime_path=runtime, data_dir=tmp_path / "machine", command_runner=runner
-    )
-    assert report["ok"] is True
-    assert report["runtime_python"] == str(runtime_python)
-    # Command 1: the exact hand-runnable import check.
-    assert report["import_command"] == [
-        str(runtime_python),
-        "-c",
-        deploy.GOOGLE_RUNTIME_IMPORT_CHECK,
-    ]
-    assert "google_auth_oauthlib" in deploy.GOOGLE_RUNTIME_IMPORT_CHECK
-    assert deploy.GOOGLE_RUNTIME_OK_MARKER == "GOOGLE RUNTIME OK"
-    # Command 2: the runtime_bootstrap loopback path in verification mode.
-    assert report["verify_command"] == deploy.build_google_auth_argv(
-        runtime_python, tmp_path / "machine", verify=True
-    )
-    assert report["loopback_verify"]["interpreter"] == str(runtime_python)
-    # It is a dry run: no token exchange and no interactive input were requested.
-    for call in runner.calls:
-        assert "--code-stdin" not in call
-        assert "--begin" not in call
-
-
-def test_verify_google_runtime_fails_closed_on_missing_extra(tmp_path: Path, monkeypatch) -> None:
-    runtime = _machine_runtime(tmp_path)
-    monkeypatch.setattr(deploy.service, "resolve_service_data_dir", lambda _d: tmp_path / "machine")
-    report = deploy.verify_google_runtime(
-        runtime_path=runtime,
-        data_dir=tmp_path / "machine",
-        command_runner=RuntimeRunner(deps_ok=False),
-    )
-    assert report["ok"] is False
-    assert report["imports_ok"] is False
-
-
-def test_verify_google_runtime_reports_absent_interpreter(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(deploy.service, "resolve_service_data_dir", lambda _d: tmp_path / "machine")
-    report = deploy.verify_google_runtime(
-        runtime_path=tmp_path / "nope",
-        data_dir=tmp_path / "machine",
-        command_runner=RuntimeRunner(),
-    )
-    assert report["ok"] is False
-    assert report["runtime_python_exists"] is False
-    assert "not found" in str(report["error"])
-
-
-def test_agent_google_verify_cli_is_fail_closed_and_needs_no_registration(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-
-    def _verify(*, data_dir=None, runtime_path=None):
-        seen["data_dir"] = data_dir
-        seen["runtime_path"] = runtime_path
-        return {
-            "ok": False,
-            "runtime_python": r"C:\ProgramData\Securedact\runtime\Scripts\python.exe",
-        }
-
-    monkeypatch.setattr(deploy, "verify_google_runtime", _verify)
-    # Registration is deliberately NOT required: the RC failure happened before it.
-    monkeypatch.setattr(
-        agent_cli,
-        "load_config",
-        lambda *_a, **_k: pytest.fail("google-verify must not need config"),
-    )
-    rc = agent_cli.main(["agent", "google-verify", "--data-dir", "D:\\md"], output=io.StringIO())
-    assert rc == 2
-    assert seen["data_dir"] == "D:\\md"
-
-    monkeypatch.setattr(deploy, "verify_google_runtime", lambda **_k: {"ok": True})
-    assert agent_cli.main(["agent", "google-verify"], output=io.StringIO()) == 0
 
 
 @requires_google

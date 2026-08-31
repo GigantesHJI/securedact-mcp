@@ -55,6 +55,7 @@ import re
 import shutil  # noqa: F401 - kept so tests can monkeypatch deploy.shutil.which
 import subprocess
 import sys
+import time
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from ctypes import wintypes
@@ -1201,6 +1202,63 @@ def _google_extra_install_target() -> str:
     return f"securedact-mcp[{GOOGLE_EXTRA}]=={ver}"
 
 
+# Bounded wait (seconds) for a running scheduled agent to release the runtime
+# files it holds open (notably ``runtime\Scripts\python.exe``) before we rebuild
+# the machine-owned runtime. A release that overruns this window fails closed: we
+# refuse to overwrite a runtime that is still being executed (the exact
+# RC-development "Permission denied" defect seen when reprovisioning over a live
+# managed agent).
+_AGENT_STOP_WAIT_SECONDS = 30.0
+
+
+def _default_agent_control(action: str) -> bool:
+    """Stop/start the already-registered managed-agent scheduled task.
+
+    Returns ``True`` if a task was present (and the action was attempted).
+    ``stop`` additionally waits *bounded* for the agent process to exit so the
+    runtime files it holds open are released before the caller rebuilds them.
+
+    Returns ``False`` (a no-op) on non-Windows or when no task is registered, so
+    the initial-install path and machines without a live agent are unchanged. The
+    behavior is injectable via ``provision_machine_runtime(_agent_control=...)``
+    for hermetic tests.
+    """
+
+    if sys.platform != "win32":
+        return False
+    try:
+        from . import service_taskscheduler as _ts
+    except Exception:
+        return False
+    name = _ts.SCHEDULED_TASK_NAME
+    if not _ts.task_exists(name):
+        return False
+    runner = _ts._default_schtasks_runner
+    if action == "stop":
+        _ts._stop_task(name, runner)
+        # Boundedly wait for the agent process to leave the runtime. We only treat
+        # an explicit "running" state as in-progress; a query that cannot be parsed
+        # ("unknown") is not treated as "still running" so a transient lookup failure
+        # cannot wedge the upgrade forever.
+        deadline = time.monotonic() + _AGENT_STOP_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            state = str(_ts._parse_status(name, runner).get("state", "")).strip().lower()
+            if state != "running":
+                break
+            time.sleep(0.5)
+        else:
+            raise AgentError(
+                "managed-agent scheduled task did not stop within the bounded wait "
+                f"({_AGENT_STOP_WAIT_SECONDS:.0f}s); refusing to rebuild the runtime "
+                "while it is still executing and holding files open"
+            )
+    elif action == "start":
+        _ts._start_task(name, runner)
+    else:
+        raise AgentError(f"unknown agent control action: {action!r}")
+    return True
+
+
 def provision_machine_runtime(
     runtime_path: Path | str | None = None,
     *,
@@ -1217,6 +1275,7 @@ def provision_machine_runtime(
     wheel_builder: Callable[[Path], Path] | None = None,
     dev_digest_fn: DevDigestFn | None = None,
     google_enabled: bool = False,
+    _agent_control: Callable[[str], bool] | None = None,
 ) -> ProvisionResult:
     """Create / verify the admin-owned machine runtime for the service.
 
@@ -1233,6 +1292,9 @@ def provision_machine_runtime(
     runtime = Path(runtime_path or default_runtime_path())
     runtime_python = resolve_runtime_python(runtime)
     runner = command_runner or _default_runner
+    # Hermetic-injectable control for the running managed-agent scheduled task. The
+    # default (None) uses the real Task Scheduler backend; tests pass a fake.
+    control = _agent_control or _default_agent_control
     # DEV-ONLY baseline mode bypasses the custom runtime ACL hardening and the
     # code-path integrity gate; the simplest viable identity (LocalSystem) is used
     # by the active Task Scheduler backend (service_taskscheduler). Application/protocol security is preserved.
@@ -1314,6 +1376,18 @@ def provision_machine_runtime(
             "provisioned by an Administrator (it installs code under "
             f"{runtime})."
         )
+
+    # Upgrade / reprovision safety: if a managed-agent scheduled task is already
+    # registered and running, it holds the runtime's interpreter and DLLs open.
+    # Stop it (and wait boundedly for the process to exit) BEFORE we rebuild the
+    # runtime, otherwise ``python -m venv`` fails with "Permission denied" on the
+    # locked ``runtime\Scripts\python.exe``. We restart it again only after a
+    # *successful* provisioning. Reaching this point means the fast-path returned
+    # False, so a rebuild is genuinely required; the initial install (no task yet)
+    # and the idempotent already-provisioned path are unaffected. The agent's
+    # registration / OAuth / binding live in the data dir, not the runtime, so they
+    # survive the stop/restart untouched.
+    stopped_existing_agent = bool(control("stop"))
 
     runtime.mkdir(parents=True, exist_ok=True)
 
@@ -1452,6 +1526,11 @@ def provision_machine_runtime(
             if include_service_acl
             else None,
         )
+    # A rebuild that reached this point succeeded; restart the agent we stopped
+    # above (fail-closed on success only — if provisioning raised, we never get
+    # here and the broken runtime is left untouched for an operator to inspect).
+    if stopped_existing_agent:
+        control("start")
     return ProvisionResult(
         runtime, runtime_python, already_provisioned=False, hardened=not baseline
     )
@@ -1590,109 +1669,6 @@ def install_service_from_runtime(
         "runtime_path": str(provisioned.runtime_path),
         "runtime_python": str(runtime_python),
     }
-
-
-def verify_google_runtime(
-    *,
-    runtime_path: Path | str | None = None,
-    data_dir: Path | str | None = None,
-    command_runner: CommandRunner | None = None,
-) -> dict[str, object]:
-    """Prove the machine runtime interpreter can perform Google OAuth (no browser).
-
-    This is the direct, operator-runnable equivalent of the two manual commands::
-
-        C:\\ProgramData\\Securedact\\runtime\\Scripts\\python.exe -c
-            "import google_auth_oauthlib, google.auth, requests; print('GOOGLE RUNTIME OK')"
-
-        C:\\ProgramData\\Securedact\\runtime\\Scripts\\python.exe -m
-            securedact_mcp.agent.runtime_bootstrap google-auth
-            --data-dir C:\\ProgramData\\Securedact --loopback --verify
-
-    Step 1 proves the Google extra is importable *in that interpreter*. Step 2 runs
-    the real loopback authorization code path in the machine runtime up to (but not
-    including) the browser and the token exchange: it imports the Google modules,
-    resolves the machine-local config, binds the 127.0.0.1 listener, and builds the
-    PKCE consent URL. No real token, no browser, no network, no customer prompt.
-
-    Returns a JSON-safe report containing the exact interpreter and the exact argv
-    of both commands, so a failing laptop retest shows *which* Python was used.
-    Fails closed: ``ok`` is True only when both steps succeed.
-    """
-
-    runtime = Path(runtime_path or default_runtime_path())
-    runtime_python = resolve_runtime_python(runtime)
-    resolved_data = service.resolve_service_data_dir(data_dir)
-    runner = command_runner or _default_runner
-
-    import_argv = [str(runtime_python), "-c", GOOGLE_RUNTIME_IMPORT_CHECK]
-    capability_argv = [str(runtime_python), "-c", GOOGLE_AUTH_CAPABILITY_CHECK]
-    verify_argv = build_google_auth_argv(runtime_python, resolved_data, verify=True)
-
-    report: dict[str, object] = {
-        "ok": False,
-        "runtime_path": str(runtime),
-        "runtime_python": str(runtime_python),
-        "runtime_python_exists": runtime_python.exists(),
-        "data_dir": str(resolved_data),
-        "import_command": import_argv,
-        "capability_command": capability_argv,
-        "verify_command": verify_argv,
-        "imports_ok": False,
-        "bootstrap_google_auth_ok": False,
-        "loopback_verify_ok": False,
-    }
-    if not runtime_python.exists():
-        report["error"] = (
-            f"machine runtime interpreter not found at {runtime_python}; run "
-            "'securedact-mcp setup --agent --google yes' from an elevated "
-            "Administrator PowerShell to provision it"
-        )
-        return report
-
-    def _run(argv: list[str]) -> RunResult:
-        try:
-            return runner(argv, RunInput(env=_env_for(resolved_data)))
-        except Exception as exc:  # a runtime that cannot be launched is a hard stop
-            return RunResult(returncode=1, stderr=scrub(str(exc)))
-
-    imports = _run(import_argv)
-    report["imports_ok"] = imports.returncode == 0 and GOOGLE_RUNTIME_OK_MARKER in imports.stdout
-    report["import_output"] = scrub((imports.stdout or imports.stderr).strip())
-
-    capability = _run(capability_argv)
-    report["bootstrap_google_auth_ok"] = capability.returncode == 0
-    if capability.returncode != 0:
-        report["capability_output"] = scrub((capability.stderr or capability.stdout).strip())
-
-    verified = _run(verify_argv)
-    payload: dict[str, object] = {}
-    try:
-        payload = json.loads(verified.stdout)
-    except Exception:
-        payload = {}
-    report["loopback_verify_ok"] = verified.returncode == 0 and bool(payload.get("verified"))
-    # Echo only the non-secret verification facts (never the consent URL/state).
-    report["loopback_verify"] = {
-        key: payload.get(key)
-        for key in (
-            "interpreter",
-            "imports_ok",
-            "client_configured",
-            "loopback_bound",
-            "loopback_host",
-            "loopback_port",
-            "consent_url_built",
-            "error",
-        )
-        if key in payload
-    }
-    if not payload:
-        report["loopback_verify_output"] = scrub((verified.stderr or verified.stdout).strip())
-    report["ok"] = bool(
-        report["imports_ok"] and report["bootstrap_google_auth_ok"] and report["loopback_verify_ok"]
-    )
-    return report
 
 
 def verify_heartbeat(

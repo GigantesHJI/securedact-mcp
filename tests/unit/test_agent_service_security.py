@@ -9,7 +9,6 @@ pure and testable without pywin32.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +17,6 @@ import pytest
 
 from securedact_mcp.agent import service, service_security
 from securedact_mcp.agent.agent_runner import build_provider
-from securedact_mcp.agent.errors import AgentError
 from securedact_mcp.agent.executor import JobClaim, ScanTarget
 from securedact_mcp.agent.provider_google import GoogleScanProvider
 from securedact_mcp.agent.safe_log import scrub
@@ -281,27 +279,6 @@ def test_phase1_does_not_attempt_vsa_lookup(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_phase1_bootstrap_reset_removes_stale_vsa_ace(tmp_path, monkeypatch):
-    sw = __import__("securedact_legacy.service_windows", fromlist=["_harden_data_dir_initial"])
-    captured: list[list[str]] = []
-
-    def _ok(cmd, *a, **k):
-        captured.append([str(c) for c in cmd])
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(sw.subprocess, "run", _ok)
-    sw._harden_data_dir_initial(tmp_path, command_runner=None, installing_user="alice")
-    flat = [arg for cmd in captured for arg in cmd]
-    # A deterministic reset strips every explicit ACE (incl. a stale vSA ACE from
-    # a prior install whose SCM service no longer exists).
-    assert "/reset" in flat
-    joined = " ".join(flat)
-    # The bootstrap grants must NOT include the vSA principal.
-    assert "NT SERVICE" not in joined
-    assert "SecuredactAgent" not in joined
-    assert "alice:(OI)(CI)RX" in joined
-
-
 def test_vsa_sid_resolves_after_scm_creation(tmp_path, monkeypatch):
     # Post-SCM: the account now exists, so LookupAccountName yields the exact SID.
     _patch_vsa_lookup(monkeypatch)
@@ -480,41 +457,6 @@ def test_service_account_principals_omit_system_for_localsystem():
 # ---------------------------------------------------------------------------
 
 
-def test_harden_data_dir_fails_closed_when_icacls_fails(tmp_path, monkeypatch):
-    sw = __import__("securedact_legacy.service_windows", fromlist=["_harden_data_dir"])
-    monkeypatch.setattr(sw, "win32api", SimpleNamespace(GetUserName=lambda: "alice"))
-
-    def _boom(*a, **k):
-        raise subprocess.CalledProcessError(1, "icacls.exe")
-
-    monkeypatch.setattr(sw.subprocess, "run", _boom)
-    with pytest.raises(AgentError):
-        sw._harden_data_dir(tmp_path, service_account=r"NT SERVICE\SecuredactAgent")
-
-
-def test_harden_data_dir_invokes_icacls_with_readonly_user(tmp_path, monkeypatch):
-    sw = __import__("securedact_legacy.service_windows", fromlist=["_harden_data_dir"])
-    monkeypatch.setattr(sw, "win32api", SimpleNamespace(GetUserName=lambda: "alice"))
-
-    captured: list[list[str]] = []
-
-    def _ok(cmd, *a, **k):
-        captured.append([str(c) for c in cmd])
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(sw.subprocess, "run", _ok)
-    sw._harden_data_dir(tmp_path, service_account=r"NT SERVICE\SecuredactAgent")
-    # Two-pass: pass 1 removes inheritance and sets container propagation ACEs.
-    assert captured, "icacls was not invoked"
-    first = captured[0]
-    assert "icacls.exe" in first[0]
-    assert "/inheritance:r" in first
-    # Pass 1 carries the (OI)(CI) container-inherit ACEs; the installing user is
-    # read-only (RX), never Full (F).
-    assert any("alice:(OI)(CI)RX" in c for c in first)
-    assert not any("alice:(OI)(CI)F" in c for c in first)
-
-
 # ---------------------------------------------------------------------------
 # Section 4: import/DLL hijacking mitigation
 # ---------------------------------------------------------------------------
@@ -625,13 +567,33 @@ def test_safe_log_scrubs_all_secret_families():
 # ---------------------------------------------------------------------------
 
 
-def test_service_command_line_module_path_has_no_secret():
-    sw = __import__("securedact_legacy.service_windows", fromlist=["WindowsAgentService"])
-    module_id = f"{sw.WindowsAgentService.__module__}.{sw.WindowsAgentService.__name__}"
-    # The only value placed on the SCM command line is the module.class path.
-    assert module_id == "securedact_legacy.service_windows.WindowsAgentService"
-    for forbidden in ("sra_", "srr_", "sl_", "--token", "Bearer"):
-        assert forbidden not in module_id
+# ---------------------------------------------------------------------------
+# Dev-baseline flag safety (migrated from the orphaned legacy SCM test suite)
+# ---------------------------------------------------------------------------
+#
+# ``SECUREDACT_AGENT_SERVICE_DEV_BASELINE`` is a DEV-ONLY escape hatch that
+# bypasses the custom hardening and runs under the simplest viable identity. It
+# must be impossible to flip on by accident (only the literal ``"1"`` enables
+# it); otherwise a misconfigured host could silently ship an unhardened runtime.
+
+
+@pytest.mark.parametrize(
+    "val",
+    ["", "0", "false", "FALSE", "true", "yes", "on", "y", "2", "10", "one", " 1", "1 "],
+)
+def test_dev_baseline_not_enabled_for_other_values(monkeypatch, val):
+    monkeypatch.setenv(service_security.DEV_BASELINE_ENV, val)
+    assert service_security.is_dev_baseline_enabled() is False
+
+
+def test_dev_baseline_disabled_when_unset(monkeypatch):
+    monkeypatch.delenv(service_security.DEV_BASELINE_ENV, raising=False)
+    assert service_security.is_dev_baseline_enabled() is False
+
+
+def test_dev_baseline_enabled_only_for_literal_1(monkeypatch):
+    monkeypatch.setenv(service_security.DEV_BASELINE_ENV, "1")
+    assert service_security.is_dev_baseline_enabled() is True
 
 
 # ---------------------------------------------------------------------------

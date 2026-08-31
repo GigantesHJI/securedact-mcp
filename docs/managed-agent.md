@@ -118,6 +118,14 @@ securedact-mcp agent connector bind google `
 Binding must not contain OAuth tokens. List bindings with
 `securedact-mcp agent connectors list`.
 
+> **Advanced escape hatch.** The manual `--integration-id` / `agent connector bind google`
+> flow is an *advanced* path. Normal customers should **not** need to paste an opaque
+> integration ID: the setup wizard auto-resolves the correct integration for the machine's
+> tenant once the tenant-scoped eligible-integrations endpoint ships (see
+> [Roadmap: tenant-scoped eligible integration discovery](#roadmap-tenant-scoped-eligible-integration-discovery)).
+> Only use manual binding when an operator must pin a specific integration that the
+> automatic resolution does not surface (e.g. a non-default or pre-provisioned integration).
+
 ## Control-plane target descriptor
 
 The claimed job supplies a target descriptor. The agent maps it cleanly to

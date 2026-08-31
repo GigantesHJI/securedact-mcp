@@ -299,7 +299,7 @@ def test_install_service_from_runtime_passes_token_in_memory(tmp_path: Path, mon
     assert result["agent_id"] == "agent-123"
     assert result["account"] == r"NT SERVICE\SecuredactAgent"
     # The token reached the backend in-memory (not via argv/stdin/env).
-    assert _fake_install_service.last["token"] == "srr_topsecret"
+    assert _fake_install_service.last["token"] == "srr_topsecret"  # noqa: S105 - synthetic test token
     # The token never appears on any privileged command line or environment.
     for args, run_input in runner.calls:
         blob = " ".join(str(a) for a in args)

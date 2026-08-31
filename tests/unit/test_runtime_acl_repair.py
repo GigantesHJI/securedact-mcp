@@ -45,7 +45,7 @@ VSA_SID = "S-1-5-80-620614963-1222874592-19579718-3907403416-2176592688"
 # policy functions unchanged.
 _SID_NORM = {
     "*S-1-5-18": "S-1-5-18",
-    "Administrators": "S-1-5-32-544",
+    "*S-1-5-32-544": "S-1-5-32-544",
     VSA: VSA_SID,
 }
 
@@ -181,7 +181,7 @@ def _seed_data_dir(sim: WindowsAclSimulator, data_dir: Path, *, with_vsa: bool =
 
     data_dir.mkdir(parents=True, exist_ok=True)
     sim.paths.append(data_dir)
-    dacl = {"*S-1-5-18": "F", "Administrators": "F", "alice": "RX"}
+    dacl = {"*S-1-5-18": "F", "*S-1-5-32-544": "F", "alice": "RX"}
     if with_vsa:
         dacl[VSA] = "F"
     sim.dacls[data_dir] = dacl
@@ -215,7 +215,7 @@ def test_two_pass_repairs_empty_dacl_child_executable(tmp_path: Path) -> None:
 
     # Every leaf file now has usable ACEs (NOT an empty DACL).
     python = runtime / "Scripts" / "python.exe"
-    assert sim.dacls[python] == {"*S-1-5-18": "F", "Administrators": "F", "alice": "RX"}, sim.dacls[
+    assert sim.dacls[python] == {"*S-1-5-18": "F", "*S-1-5-32-544": "F", "alice": "RX"}, sim.dacls[
         python
     ]
     dll = runtime / "python312.dll"
@@ -245,7 +245,7 @@ def test_two_pass_repairs_full_tree_including_package_files(tmp_path: Path) -> N
     for path in deploy._runtime_code_paths(runtime):
         dacl = sim.dacls.get(path, {})
         assert dacl.get("*S-1-5-18") == "F", f"{path} not SYSTEM-executable: {dacl}"
-        assert dacl.get("Administrators") == "F", f"{path} not Admin-executable: {dacl}"
+        assert dacl.get("*S-1-5-32-544") == "F", f"{path} not Admin-executable: {dacl}"
         # Installing user is read-only, never Full, on the runtime tree.
         assert dacl.get("alice") == "RX", f"{path} user ACE wrong: {dacl}"
 
@@ -325,7 +325,7 @@ def test_verify_fails_closed_on_permissive_parent_users_write(tmp_path: Path) ->
     parent = tmp_path / "data"
     parent.mkdir(parents=True, exist_ok=True)
     sim.paths.append(parent)
-    sim.dacls[parent] = {"S-1-5-18": "F", "Administrators": "F", "alice": "RX", "S-1-5-32-545": "F"}
+    sim.dacls[parent] = {"S-1-5-18": "F", "*S-1-5-32-544": "F", "alice": "RX", "S-1-5-32-545": "F"}
     with pytest.raises(AgentError):
         deploy.verify_runtime_tree_acl(runtime, acl_provider=sim.provider, data_dir=parent)
 

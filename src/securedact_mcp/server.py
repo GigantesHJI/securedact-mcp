@@ -12,7 +12,6 @@ from typing import Annotated, Any, cast
 import anyio
 from mcp import types as mcp_types
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.server import ToolAnnotations
 from pydantic import Field, ValidationError
 
 from securedact_core import (
@@ -472,7 +471,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
     )
 
     @server.tool(
-        annotations=ToolAnnotations(
+        annotations=mcp_types.ToolAnnotations(
             readOnlyHint=True,
             destructiveHint=False,
             idempotentHint=True,
@@ -559,7 +558,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         return public_engine.prepare(request).model_dump(mode="json", exclude_none=True)
 
     @server.tool(
-        annotations=ToolAnnotations(
+        annotations=mcp_types.ToolAnnotations(
             readOnlyHint=True,
             destructiveHint=False,
             idempotentHint=True,
@@ -669,7 +668,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         return output
 
     @server.tool(
-        annotations=ToolAnnotations(
+        annotations=mcp_types.ToolAnnotations(
             readOnlyHint=True,
             destructiveHint=False,
             idempotentHint=True,
@@ -774,7 +773,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         }
 
     @server.tool(
-        annotations=ToolAnnotations(
+        annotations=mcp_types.ToolAnnotations(
             readOnlyHint=False,
             destructiveHint=False,
             idempotentHint=False,
@@ -877,7 +876,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         }
 
     @server.tool(
-        annotations=ToolAnnotations(
+        annotations=mcp_types.ToolAnnotations(
             readOnlyHint=False,
             destructiveHint=False,
             idempotentHint=False,
@@ -959,7 +958,7 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         }
 
     @server.tool(
-        annotations=ToolAnnotations(
+        annotations=mcp_types.ToolAnnotations(
             readOnlyHint=True,
             destructiveHint=False,
             idempotentHint=True,

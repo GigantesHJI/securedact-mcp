@@ -139,6 +139,21 @@ class FailingBootstrapRunner(FakeRunner):
         return super().__call__(arguments, run_input)
 
 
+def make_runtime_python(runtime: Path) -> Path:
+    """Create a stand-in runtime interpreter at the platform-appropriate path.
+
+    Uses the production :func:`deploy.resolve_runtime_python` resolver so the
+    fake interpreter lives at ``<root>/Scripts/python.exe`` on Windows and
+    ``<root>/bin/python`` elsewhere -- matching what the engine actually looks
+    for, which keeps the test meaningful on every OS (no hardcoded Windows layout).
+    """
+
+    py = deploy.resolve_runtime_python(runtime)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_text("")  # stands in for the interpreter
+    return py
+
+
 @pytest.fixture(autouse=True)
 def _elevated(monkeypatch: pytest.MonkeyPatch) -> None:
     # Provisioning/upgrade require elevation; simulate it for happy paths.
@@ -180,8 +195,7 @@ def test_runtime_acl_unverifiable_fails_closed(tmp_path: Path, monkeypatch) -> N
 def test_provision_is_idempotent_when_runtime_present(tmp_path: Path, monkeypatch) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")  # stands in for the interpreter
+    make_runtime_python(runtime)  # stands in for the interpreter
     runner = FakeRunner()
     result = provision_machine_runtime(
         runtime_path=runtime, acl_provider=safe_provider, command_runner=runner
@@ -234,8 +248,7 @@ def test_provision_creates_runtime_and_hardens_acl(tmp_path: Path, monkeypatch) 
 def test_provision_rejects_user_writable_runtime(tmp_path: Path, monkeypatch) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
+    make_runtime_python(runtime)
     with pytest.raises(AgentError):
         provision_machine_runtime(
             runtime_path=runtime, acl_provider=user_writable_provider, command_runner=FakeRunner()
@@ -285,8 +298,7 @@ def test_install_service_from_runtime_passes_token_in_memory(tmp_path: Path, mon
     # agent in-process from this hand-off; the schedule XML carries no token.
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
+    make_runtime_python(runtime)
     monkeypatch.setattr(deploy.service, "install_service", _fake_install_service)
     runner = FakeRunner()
     result = install_service_from_runtime(
@@ -314,8 +326,7 @@ def test_service_starts_from_machine_owned_runtime(tmp_path: Path, monkeypatch) 
     # and hands it to the backend; the token is never placed on argv/env.
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
+    make_runtime_python(runtime)
     monkeypatch.setattr(deploy.service, "install_service", _fake_install_service)
     runner = FakeRunner()
     result = install_service_from_runtime(
@@ -345,8 +356,7 @@ def test_install_service_from_runtime_surfaces_safe_diagnostic(tmp_path: Path, m
     # but never leaks the registration token.
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
+    make_runtime_python(runtime)
     token = "srr_topsecret_token_do_not_leak"  # noqa: S105 - synthetic test token
     error = (
         "failed to apply least-privilege service identity "
@@ -384,8 +394,7 @@ def test_install_service_from_runtime_surfaces_safe_diagnostic(tmp_path: Path, m
 
 def test_heartbeat_verification_success(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
+    make_runtime_python(runtime)
 
     class HBRunner(FakeRunner):
         def __call__(self, arguments, run_input):  # type: ignore[override]
@@ -426,8 +435,7 @@ def test_heartbeat_verification_failure(tmp_path: Path) -> None:
 def test_upgrade_stops_starts_and_preserves_state(tmp_path: Path, monkeypatch) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
+    make_runtime_python(runtime)
     data = tmp_path / "data"
     data.mkdir()
     (data / "agent.json").write_text('{"agent_id": "agent-1"}')  # simulated state
@@ -718,6 +726,17 @@ def test_resolve_accepts_local_wheel(tmp_path: Path) -> None:
     assert resolve_install_target(wheel_path=str(wheel)) == str(wheel.resolve())
 
 
+@pytest.mark.windows
+def test_resolve_installing_user_uses_win32api_on_windows() -> None:
+    # The real Windows branch resolves the installing user via win32api.
+    # Skipped off Windows (no pywin32). Pure provisioning tests inject the user
+    # instead, so they never need pywin32 on non-Windows CI (see
+    # :func:`deploy.resolve_installing_user`).
+    assert isinstance(deploy.resolve_installing_user(), str)
+    # An explicitly provided identity is always preferred (no win32api call).
+    assert deploy.resolve_installing_user("explicit-alice") == "explicit-alice"
+
+
 def test_provision_installs_exact_running_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -777,8 +796,7 @@ def test_dev_wheel_replaces_stale_same_version_runtime(
     # that DOES contain the agent. Setup must deterministically replace the stale
     # same-version distribution so the agent ends up importable.
     runtime = tmp_path / "runtime"
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
+    make_runtime_python(runtime)
 
     wheel = _make_valid_controlled_wheel(tmp_path / "securedact_mcp-0.4.2+local-py3-none-any.whl")
     # Route the dev/local build through the real resolver, but return the synthetic

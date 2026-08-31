@@ -170,6 +170,12 @@ def _build_runtime_tree(root: Path) -> None:
     (root / "Lib" / "site-packages" / "securedact_mcp" / "__init__.py").write_bytes(b"")
     (root / "Lib" / "site-packages" / "win32").mkdir(parents=True)
     (root / "Lib" / "site-packages" / "win32" / "pythonservice.exe").write_bytes(b"MZ")
+    # The runtime interpreter the engine actually resolves (Scripts/python.exe on
+    # Windows, bin/python elsewhere) -- required so the simulator discovers it and
+    # the post-hardening verify (which enumerates resolve_runtime_python) finds it.
+    py = deploy.resolve_runtime_python(root)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_bytes(b"MZ")
 
 
 def _icacls_calls(runner: SimulatingRunner) -> list[list[str]]:
@@ -198,7 +204,7 @@ def test_two_pass_repairs_empty_dacl_child_executable(tmp_path: Path) -> None:
     # Model the reported defect: the existing child executable has an EMPTY (deny-all)
     # DACL / non-inheriting ACEs before hardening.
     sim = WindowsAclSimulator.discover(runtime)
-    sim.dacls[runtime / "Scripts" / "python.exe"] = {}
+    sim.dacls[deploy.resolve_runtime_python(runtime)] = {}
     runner = SimulatingRunner(sim)
 
     deploy._harden_runtime_dir(runtime, command_runner=runner, installing_user="alice")
@@ -214,7 +220,7 @@ def test_two_pass_repairs_empty_dacl_child_executable(tmp_path: Path) -> None:
     assert any("alice:RX" in a for a in pass2)
 
     # Every leaf file now has usable ACEs (NOT an empty DACL).
-    python = runtime / "Scripts" / "python.exe"
+    python = deploy.resolve_runtime_python(runtime)
     assert sim.dacls[python] == {"*S-1-5-18": "F", "*S-1-5-32-544": "F", "alice": "RX"}, sim.dacls[
         python
     ]
@@ -278,7 +284,7 @@ def test_final_pass_adds_vsa_rx_recursively_not_f(tmp_path: Path, monkeypatch) -
     # vSA is NEVER granted F anywhere on the runtime tree.
     assert not any(f"{VSA}:(OI)(CI)F" in a or f"{VSA}:F" in a for c in calls for a in c)
 
-    python = runtime / "Scripts" / "python.exe"
+    python = deploy.resolve_runtime_python(runtime)
     assert sim.dacls[python].get(VSA) == "RX", sim.dacls[python]
     # No vSA:F on any runtime object.
     for path, dacl in sim.dacls.items():
@@ -307,7 +313,7 @@ def test_verify_fails_closed_on_empty_dacl_file(tmp_path: Path) -> None:
         runtime, command_runner=SimulatingRunner(sim), installing_user="alice"
     )
     # ...then regress one file to an empty DACL (the primary defect).
-    sim.dacls[runtime / "Scripts" / "python.exe"] = {}
+    sim.dacls[deploy.resolve_runtime_python(runtime)] = {}
     with pytest.raises(AgentError):
         deploy.verify_runtime_tree_acl(
             runtime, acl_provider=sim.provider, data_dir=tmp_path / "data"
@@ -360,7 +366,7 @@ def test_old_single_pass_leaves_child_file_empty_and_verify_rejects(tmp_path: Pa
     deploy._harden_runtime_dir(
         runtime, command_runner=SinglePassRunner(sim), installing_user="alice"
     )
-    python = runtime / "Scripts" / "python.exe"
+    python = deploy.resolve_runtime_python(runtime)
     # The leaf file is left with an EMPTY DACL (the real defect).
     assert sim.dacls[python] == {}, sim.dacls[python]
     # Fail-closed verification therefore rejects the runtime before any token use.

@@ -220,13 +220,29 @@ def _default_runner(arguments: Sequence[str], run_input: RunInput) -> RunResult:
 # ---------------------------------------------------------------------------
 
 
+def _get_windll() -> Any | None:
+    """Return ``ctypes.windll`` on Windows, else ``None``.
+
+    Resolved via :func:`getattr` and typed as ``Any | None`` so the
+    cross-platform (Linux) mypy run never sees a raw ``ctypes.windll`` attribute
+    access, which would otherwise be flagged as ``attr-defined``. Tests inject a
+    fake Windows API surface by monkeypatching this function (or by passing
+    ``win32_api`` into :func:`_shell_execute_runas`).
+    """
+
+    return getattr(ctypes, "windll", None)
+
+
 def is_elevated() -> bool:
     """Return True only when the current process holds admin rights (Windows)."""
 
     if sys.platform != "win32":
         return False
     try:  # pragma: no cover - platform specific
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        windll = _get_windll()
+        if windll is None:
+            return False
+        return bool(windll.shell32.IsUserAnAdmin())
     except Exception:  # pragma: no cover - defensive
         return False
 
@@ -327,15 +343,20 @@ def self_elevate(
 
 
 def _shell_execute_runas(
-    argv: list[str], cwd: str | None = None
+    argv: list[str], cwd: str | None = None, *, win32_api: Any | None = None
 ) -> int:  # pragma: no cover - platform specific
     """Use ShellExecuteEx with the ``runas`` verb to request elevation.
 
     The elevated child is launched with the current working directory preserved
     (``cwd`` defaults to ``os.getcwd()``), so the RC checkout / launch context is
-    retained across the UAC boundary. ``ctypes`` is referenced via the module
-    attribute so it can be mocked in tests on non-Windows platforms.
+    retained across the UAC boundary. The Windows API surface is obtained through
+    :func:`_get_windll` (so it can be monkeypatched in tests on non-Windows
+    platforms) or injected directly via ``win32_api``.
     """
+
+    win = win32_api if win32_api is not None else _get_windll()
+    if win is None:
+        return 2
 
     exe = sys.executable
     params = subprocess.list2cmdline(argv)
@@ -378,11 +399,11 @@ def _shell_execute_runas(
         work_dir,
     )
 
-    if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+    if not win.shell32.ShellExecuteExW(ctypes.byref(info)):
         # Sanitized diagnostics only: executable basename, argument *count*
         # (shape), cwd, and the Windows error code. Never argv values, env, or
         # any secret material.
-        last_error = ctypes.windll.kernel32.GetLastError()
+        last_error = win.kernel32.GetLastError()
         _LOGGER.error(
             "elevation handoff failed: exe=%s args=%d cwd=%s code=%s",
             os.path.basename(exe),
@@ -392,10 +413,10 @@ def _shell_execute_runas(
         )
         return 2
     if info.hProcess:
-        ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 0xFFFFFFFF)
+        win.kernel32.WaitForSingleObject(info.hProcess, 0xFFFFFFFF)
         exit_code = wintypes.DWORD()
-        ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code))
-        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+        win.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code))
+        win.kernel32.CloseHandle(info.hProcess)
         _LOGGER.debug(
             "elevation handoff child exited: exe=%s args=%d cwd=%s exit=%s",
             os.path.basename(exe),
@@ -788,6 +809,27 @@ def resolve_install_target(
 # ---------------------------------------------------------------------------
 
 
+def resolve_installing_user(installing_user: str | None = None) -> str:
+    """Resolve the identity that owns/launches the machine runtime.
+
+    On Windows the default is the current elevated interactive user
+    (``win32api.GetUserName()``); on every other platform it falls back to the
+    environment. Callers that already know the identity (the wizard after
+    resolving it once, or tests) pass ``installing_user`` to skip the Windows-only
+    ``win32api`` import entirely, so pure provisioning tests never require
+    pywin32 on non-Windows CI. A dedicated Windows-only test verifies the real
+    ``win32api`` resolution.
+    """
+
+    if installing_user is not None:
+        return installing_user
+    if sys.platform == "win32":  # pragma: no cover - platform specific
+        import win32api
+
+        return str(win32api.GetUserName())
+    return os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
+
+
 def _harden_runtime_dir(
     runtime_path: Path,
     *,
@@ -815,12 +857,7 @@ def _harden_runtime_dir(
     """
 
     account = service_account or service_security.recommended_service_account()
-    if sys.platform == "win32":  # pragma: no cover - platform specific
-        import win32api
-
-        user = installing_user or win32api.GetUserName()
-    else:
-        user = installing_user or os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
+    user = resolve_installing_user(installing_user)
 
     principals = [
         r"*S-1-5-18:(OI)(CI)F",
@@ -1302,14 +1339,9 @@ def provision_machine_runtime(
 
     # Resolve the installing/elevated identity once and thread it through both
     # hardening steps so the principal that *launches* the bootstrap is explicitly
-    # represented (RX) on the runtime and its parent data dir.
-    if installing_user is None:
-        if sys.platform == "win32":  # pragma: no cover - platform specific
-            import win32api
-
-            installing_user = win32api.GetUserName()
-        else:
-            installing_user = os.environ.get("USERNAME") or os.environ.get("USER") or "SYSTEM"
+    # represented (RX) on the runtime and its parent data dir. ``win32api`` is
+    # imported lazily inside :func:`resolve_installing_user` only when needed.
+    installing_user = resolve_installing_user(installing_user)
 
     # Resolve the exact install target. Released mode pins the running wizard
     # version (cheap: no build). Dev / local-validation mode DEFERS the controlled
@@ -2611,7 +2643,7 @@ def run_managed_agent_module(
     # machine runtime and fall back to an in-process import in the setup CLI's own
     # interpreter -> ``No module named 'google_auth_oauthlib'`` while the readiness
     # probe (which did default to ProgramData) reported "available".
-    resolved_runtime_path: Path | str | None = result.get("runtime_path") or runtime_path  # type: ignore[assignment]
+    resolved_runtime_path = cast("Path | str | None", result.get("runtime_path") or runtime_path)
 
     # --- Google Workspace onboarding (only when configured/selected) -----------
     resolved_data = machine_data_dir

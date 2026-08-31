@@ -385,8 +385,9 @@ def test_dev_fast_path_rebuilds_stale_same_version_checkout(
     digest_holder = lambda _root: digest_state["value"]  # noqa: E731 - test helper
 
     runtime = tmp_path / "runtime"
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")  # existing, secure runtime
+    py = deploy.resolve_runtime_python(runtime)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_text("")  # existing, secure runtime at the platform-appropriate path
 
     # Simulate a prior successful dev provision from checkout A by pre-seeding the
     # stored artifact digest (matching checkout A).

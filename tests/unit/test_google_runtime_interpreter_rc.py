@@ -64,10 +64,15 @@ _REAL_IN_PROCESS_AUTHORIZE = google_setup.authorize_google_machine
 
 @pytest.fixture(autouse=True)
 def _windows_and_elevated(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The managed agent path is Windows-only; pin it so the runtime interpreter is
-    # deterministically ``<runtime>/Scripts/python.exe`` on every platform.
+    # The managed agent path is Windows-only; pin the Windows branch hermetically
+    # so the runtime interpreter is ``<runtime>/Scripts/python.exe`` on every host.
+    # Inject ``resolve_installing_user`` so the Windows-only ``win32api`` import is
+    # never triggered on non-Windows CI (pure provisioning stays pywin32-free).
     monkeypatch.setattr(deploy.sys, "platform", "win32")
     monkeypatch.setattr(deploy, "is_elevated", lambda: True)
+    monkeypatch.setattr(
+        deploy, "resolve_installing_user", lambda installing_user=None: installing_user or "alice"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -95,8 +100,9 @@ def _never_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _machine_runtime(tmp_path: Path) -> Path:
     runtime = tmp_path / "runtime"
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("", encoding="utf-8")
+    py = deploy.resolve_runtime_python(runtime)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_text("", encoding="utf-8")
     return runtime
 
 

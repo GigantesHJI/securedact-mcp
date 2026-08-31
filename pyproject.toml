@@ -125,6 +125,9 @@ line-ending = "lf"
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "windows: Windows-only behavior requiring Windows APIs/runtime (Task Scheduler, win32api, setx /M, UAC). Skipped on non-Windows CI; run on a Windows job.",
+]
 
 [tool.coverage.run]
 branch = true

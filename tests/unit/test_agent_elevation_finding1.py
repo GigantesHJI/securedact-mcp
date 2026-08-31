@@ -26,6 +26,15 @@ import pytest
 
 from securedact_mcp.agent import deploy
 
+
+@pytest.fixture(autouse=True)
+def _force_windows_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These tests pin Windows UAC/elevation behavior; force the Windows branch
+    # hermetically so the logic is exercised on any CI host. The Windows API
+    # surface is injected via the fake ctypes (no pywin32 import on Linux).
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
+
+
 # ---------------------------------------------------------------------------
 # Fake ctypes so the platform-specific ShellExecuteEx path is exercisable here.
 # ---------------------------------------------------------------------------

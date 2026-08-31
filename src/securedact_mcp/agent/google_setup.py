@@ -918,8 +918,14 @@ def _set_machine_env_var(key: str, value: str) -> None:
 
     Only non-secret operational variables are ever published this way. No OAuth
     token, client secret, lease secret, or entitlement JWT is ever written here.
+
+    Machine-wide environment publication is a Windows (``setx /M``) operation. On
+    non-Windows there is no equivalent machine scope, so this is a safe no-op and
+    never attempts to spawn ``setx.exe`` (which does not exist off Windows).
     """
 
+    if sys.platform != "win32":
+        return
     setx = _setx_exe()
     if os.environ.get(key) == value:
         return

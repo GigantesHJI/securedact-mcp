@@ -35,9 +35,10 @@ def _machine_root(tmp_path: Path) -> Path:
 
 def _make_runtime(tmp_path: Path, machine_root: Path) -> Path:
     runtime = machine_root / "runtime"
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
-    return runtime / "Scripts" / "python.exe"
+    py = deploy.resolve_runtime_python(runtime)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_text("")
+    return py
 
 
 class FakeSchtasks:
@@ -264,8 +265,12 @@ def test_registration_and_runtime_share_machine_root(
     assert service.resolve_service_data_dir(machine_root) == machine_root
     # The runtime/launcher and registration both live under it.
     assert register.files_root == machine_root / "agent"
-    # The scheduled task's working/root directory is the machine root.
-    assert (machine_root / "runtime" / "Scripts" / "securedact_agent_loop.py").is_file()
+    # The scheduled task's working/root directory is the machine root, and the
+    # in-runtime launcher script is materialised next to the runtime interpreter.
+    expected_loop = (
+        deploy.resolve_runtime_python(machine_root / "runtime").parent / "securedact_agent_loop.py"
+    )
+    assert expected_loop.is_file()
 
 
 # ---------------------------------------------------------------------------

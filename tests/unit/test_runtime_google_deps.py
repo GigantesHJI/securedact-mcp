@@ -143,8 +143,9 @@ class RuntimeGoogleAuthRunner(FakeRunner):
 
 def _machine_runtime(tmp_path: Path) -> Path:
     runtime = tmp_path / "runtime"
-    (runtime / "Scripts").mkdir(parents=True, exist_ok=True)
-    (runtime / "Scripts" / "python.exe").write_text("")
+    py = deploy.resolve_runtime_python(runtime)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_text("")
     return runtime
 
 

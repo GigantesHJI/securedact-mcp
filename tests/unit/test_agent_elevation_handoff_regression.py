@@ -40,8 +40,12 @@ def test_rc_interpreter_explicit_not_global_exe(monkeypatch: pytest.MonkeyPatch)
     )
     exe, params = deploy.resolve_elevation_target()
     assert exe == sys.executable
-    assert Path(exe).name.lower() == "python.exe"
     assert "securedact-mcp.exe" not in exe.lower()
+    # The RC interpreter is the Python executable that launched setup; on Windows
+    # that is ``python.exe`` (the canonical venv interpreter), but on other
+    # platforms it may be ``python3`` -- only assert the name where meaningful.
+    if sys.platform == "win32":
+        assert Path(exe).name.lower() == "python.exe"
     assert params[0] == "-m"
     assert params[1] == "securedact_mcp.cli"
     # The bare console command (which a global install owns) is never used.
@@ -161,9 +165,10 @@ def test_shell_execute_runas_builds_structure_with_real_wintypes(
         shell32 = _Shell32()
         kernel32 = _Kernel32()
 
-    # Only the Windows-only ``windll`` surface is injected; the real ``ctypes``
-    # (and the real imported ``wintypes``) drives the structure construction.
-    monkeypatch.setattr(deploy.ctypes, "windll", _Windll())
+    # Only the Windows-only ``windll`` surface is injected (via the injectable
+    # ``_get_windll`` accessor); the real ``ctypes`` (and the real imported
+    # ``wintypes``) drives the structure construction, so this runs on any OS.
+    monkeypatch.setattr(deploy, "_get_windll", lambda: _Windll())
     monkeypatch.setattr(deploy.os, "getcwd", lambda: str(tmp_path))
 
     rc = deploy._shell_execute_runas(["-m", "securedact_mcp.cli", "setup", "--agent"])
@@ -174,6 +179,9 @@ def test_shell_execute_runas_builds_structure_with_real_wintypes(
 def test_agent_elevated_reaches_resumed_flow_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # This test pins Windows-only Task-Scheduler resume behavior; force the branch
+    # hermetically (no pywin32 import: install/heartbeat are injected).
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
     """``--agent-elevated`` enters the Managed Agent flow exactly once.
 
     It must NOT re-prompt for elevation and must NOT re-launch a child.
@@ -221,6 +229,9 @@ def test_agent_elevated_reaches_resumed_flow_once(
 
 def test_uac_cancellation_fails_safely(monkeypatch: pytest.MonkeyPatch) -> None:
     """A declined/failed elevation stops safely; it must not fake success."""
+
+    # Force the Windows elevation branch hermetically (no pywin32 import).
+    monkeypatch.setattr(deploy.sys, "platform", "win32")
 
     monkeypatch.delenv(deploy.AGENT_ELEVATED_ENV, raising=False)
     monkeypatch.setattr(deploy, "is_elevated", lambda: False)

@@ -60,6 +60,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -379,6 +380,11 @@ def _apply_service_env_vars(data_dir: Path) -> None:
     matches, so re-running install is a no-op for values already set.
     """
 
+    # Machine-wide environment publication is a Windows (``setx /M``) operation.
+    # On non-Windows there is no equivalent machine scope, so this is a safe no-op
+    # and never attempts to spawn ``setx.exe``.
+    if sys.platform != "win32":
+        return
     desired = {
         "SECUREDACT_APP_DATA_DIR": str(data_dir),
         "SECUREDACT_AGENT_DATA_DIR": str(data_dir),

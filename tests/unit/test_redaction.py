@@ -211,9 +211,7 @@ def test_adversarial_log_url_no_partial_alphanumeric_replacement() -> None:
     text = "2026-04-12T09:30:00Z INFO redirect=http://crm.internal/portal/?email=log.synthetic%40example.test&case_id=CASE-NL-8841 status=302"
     findings = RegexDetector().detect(text)
     entities = [
-        item
-        for item in findings
-        if item.entity_type in {EntityType.DATE, EntityType.INTERNAL_URL}
+        item for item in findings if item.entity_type in {EntityType.DATE, EntityType.INTERNAL_URL}
     ]
     result = redact_text(text, entities)
     assert "[INTERNAL_URL_" in result.sanitized_text

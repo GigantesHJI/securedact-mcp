@@ -12,6 +12,7 @@ from typing import Annotated, Any, cast
 import anyio
 from mcp import types as mcp_types
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import ToolAnnotations
 from pydantic import Field, ValidationError
 
 from securedact_core import (
@@ -470,7 +471,14 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
         protocol_initialized
     )
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        )
+    )
     def prepare_for_external_ai(
         text: Annotated[
             str,
@@ -550,7 +558,14 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             return _safe_block(policy, "request_invalid")
         return public_engine.prepare(request).model_dump(mode="json", exclude_none=True)
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        )
+    )
     def analyze_text(
         text: Annotated[
             str,
@@ -653,7 +668,14 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             output["debug_details"] = analysis.model_dump(mode="json")
         return output
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        )
+    )
     def redact_text(
         text: Annotated[
             str,
@@ -751,7 +773,14 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             **result.model_dump(mode="json"),
         }
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        )
+    )
     def restore_text(
         text: Annotated[
             str,
@@ -847,7 +876,14 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             "reason_codes": ["restoration_session_required"],
         }
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        )
+    )
     def create_safe_copy(
         content: Annotated[
             str,
@@ -922,7 +958,14 @@ def create_server(engine: PrivacyEngine | None = None) -> FastMCP:
             "counts": outcome["counts"],
         }
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        )
+    )
     def securedact_read_file(
         path: Annotated[
             str,

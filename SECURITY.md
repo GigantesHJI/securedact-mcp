@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Securedact MCP is released from this repository (current version `0.4.2`). Only
+Securedact MCP is released from this repository (current version `0.5.0`). Only
 the latest released version receives security updates; earlier `0.x` releases
 are not separately patched. Security-relevant fixes land on `main` and ship in
 the next patch/minor release. Check [CHANGELOG.md](CHANGELOG.md) and the GitHub

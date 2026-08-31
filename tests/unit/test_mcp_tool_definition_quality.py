@@ -62,6 +62,45 @@ EXPECTED_DEFAULTS: dict[str, dict[str, object]] = {
     "securedact_read_file": {"policy": "strict_external_ai", "max_bytes": None},
 }
 
+EXPECTED_ANNOTATIONS: dict[str, dict[str, bool | None]] = {
+    "prepare_for_external_ai": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    "analyze_text": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    "redact_text": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    "restore_text": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "create_safe_copy": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "securedact_read_file": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+}
+
 MIN_TOOL_DESCRIPTION = 80
 MIN_PARAM_DESCRIPTION = 20
 
@@ -154,3 +193,19 @@ def test_parameter_description_coverage_is_complete() -> None:
                 documented += 1
     assert total > 0
     assert documented == total
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_TOOLS))
+def test_tool_annotations_are_present_and_boolean(name: str) -> None:
+    tools = _tools()
+    tool = tools[name]
+    annotations = getattr(tool, "annotations", None)
+    assert annotations is not None, f"{name} is missing annotations"
+    expected = EXPECTED_ANNOTATIONS[name]
+    for hint_name, expected_value in expected.items():
+        actual = getattr(annotations, hint_name, None)
+        assert actual is not None, f"{name}.{hint_name} is None (must be True or False)"
+        assert isinstance(actual, bool), (
+            f"{name}.{hint_name} must be bool, got {type(actual).__name__}"
+        )
+        assert actual == expected_value, f"{name}.{hint_name} = {actual}, expected {expected_value}"

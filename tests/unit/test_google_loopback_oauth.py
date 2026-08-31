@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from securedact_mcp.agent import deploy
+from securedact_mcp.agent import deploy, google_setup
 from securedact_mcp.agent.config import AgentConfig, AgentFiles, save_config
 from securedact_mcp.agent.deploy import RunInput, RunResult
 from securedact_mcp.connectors.google import managed
@@ -137,9 +137,11 @@ def test_managed_client_id_resolved_without_customer_input(tmp_path: Path, monke
     monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
     cfg = load_google_config(data_dir=tmp_path)
     assert cfg.client_id == "managed.app.id.example"
-    # A public installed client carries no secret and needs none.
+    # A managed Desktop client uses the "installed" client type and carries the
+    # SecuRedact-managed Desktop client secret (packaged product configuration,
+    # not a customer secret) for the token exchange.
     assert cfg.client_type == "installed"
-    assert cfg.client_secret in (None, "")
+    assert cfg.client_secret == managed.resolve_managed_client_secret()
 
 
 def test_managed_client_id_is_single_source_of_truth(tmp_path: Path, monkeypatch) -> None:
@@ -150,12 +152,158 @@ def test_managed_client_id_is_single_source_of_truth(tmp_path: Path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
+# 2b. Packaged managed config is the default production source of truth
+# ---------------------------------------------------------------------------
+
+
+def test_packaged_managed_client_id_resolves_without_env(tmp_path: Path, monkeypatch) -> None:
+    # A normal released build has no managed env override; the packaged default
+    # must resolve so a customer needs nothing.
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+    from securedact_mcp.connectors.google import managed_config
+
+    cfg = managed_config.packaged_managed_google_config()
+    assert cfg.client_id == managed.resolve_managed_client_id()
+    assert cfg.client_id.endswith("apps.googleusercontent.com")
+    assert managed.is_managed_client_configured()
+    # Resolves into the connector config with managed flag set.
+    gcfg = load_google_config(data_dir=tmp_path)
+    assert gcfg.client_id == cfg.client_id
+    assert gcfg.managed is True
+    assert gcfg.client_type == "installed"
+
+
+def test_packaged_managed_client_secret_resolves_without_env(monkeypatch) -> None:
+    # The managed Desktop client secret ships in the package and resolves with no
+    # env override (normal customers never supply it).
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+    secret = managed.resolve_managed_client_secret()
+    assert secret
+    assert secret.startswith("GOCSPX-")
+    assert managed.is_managed_client_secret_configured()
+
+
+def test_env_overrides_packaged_id_and_secret(tmp_path: Path, monkeypatch) -> None:
+    # DEV/OPS env overrides win over the packaged default (precedence 1).
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "env.id.override")
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, "env.secret.override")
+    assert managed.resolve_managed_client_id() == "env.id.override"
+    assert managed.resolve_managed_client_secret() == "env.secret.override"
+    gcfg = load_google_config(data_dir=tmp_path)
+    assert gcfg.client_id == "env.id.override"
+    assert gcfg.client_secret == "env.secret.override"  # noqa: S105
+    assert gcfg.managed is True
+
+
+def test_normal_setup_succeeds_with_packaged_config_no_env(tmp_path: Path, monkeypatch) -> None:
+    # End-to-end normal onboarding: no managed env vars, packaged default only.
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+
+    client_config_calls: list[int] = []
+
+    def fake_client_config(*_a, **_k):
+        client_config_calls.append(1)
+        return False
+
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-1",
+        authorize_google_fn=lambda *_a, **_k: True,
+        client_config_fn=fake_client_config,
+        verify_binding_fn=lambda *_a, **_k: True,
+    )
+    # No OAuth client id/secret prompt, packaged config drives the flow.
+    assert client_config_calls == []
+    assert outcome.selected and outcome.authorized and outcome.binding_verified
+    assert outcome.ready
+    assert managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG not in out.getvalue()
+
+
+def test_existing_env_override_machine_still_works(tmp_path: Path, monkeypatch) -> None:
+    # Backward compatibility: a machine that already has the managed env override
+    # continues to work.
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "env.id.override")
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, "env.secret.override")
+    out = io.StringIO()
+    outcome = deploy.run_google_machine_onboarding(
+        data_dir=machine,
+        output=out,
+        input_fn=lambda _p: "y",
+        secret_input_fn=lambda _p: "x",
+        google_integration_id="int-1",
+        authorize_google_fn=lambda *_a, **_k: True,
+        verify_binding_fn=lambda *_a, **_k: True,
+    )
+    assert outcome.ready
+    assert managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG not in out.getvalue()
+
+
+def test_byo_ignores_packaged_managed_config(tmp_path: Path, monkeypatch) -> None:
+    # When BYO is explicitly selected with its own client id/secret, the packaged
+    # managed config must NOT be used (managed flag False, BYO creds win).
+    machine = tmp_path / "machine"
+    _seed_machine_registration(machine)
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+    monkeypatch.setenv(google_setup.GOOGLE_CLIENT_ID_ENV, "byo.app.id")
+    monkeypatch.setenv(google_setup.GOOGLE_CLIENT_SECRET_ENV, "byo.app.secret")
+
+    # The resolved config must reflect BYO, not the packaged managed app.
+    gcfg = load_google_config(data_dir=machine)
+    assert gcfg.client_id == "byo.app.id"
+    assert gcfg.client_secret == "byo.app.secret"  # noqa: S105
+    assert gcfg.managed is False
+    assert gcfg.client_type == "web"
+
+
+def test_managed_secret_absent_from_argv_and_env_forwarding(tmp_path: Path, monkeypatch) -> None:
+    # The managed secret never travels on argv or into the runtime env forwarding
+    # unless explicitly set as an override (overrides are by design, and still
+    # never placed on argv). Normal (no-override) forwardings carry nothing.
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+
+    argv = deploy.build_google_auth_argv("python", tmp_path, google_byo=False)
+    assert not any("GOCSPX" in part or "client_secret" in part.lower() for part in argv)
+    assert "--google-byo" not in argv
+
+    # Without an explicit override, _env_for forwards neither managed identifier.
+    env = deploy._env_for(tmp_path)
+    assert managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV not in env
+    assert managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV not in env
+
+
+def test_managed_secret_not_logged_during_resolve(tmp_path: Path, monkeypatch, caplog) -> None:
+    # Resolving the packaged managed secret must never log it.
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+    secret = managed.resolve_managed_client_secret()
+    assert secret
+    # Exercise the connector config resolution path, which must not emit the secret.
+    _ = load_google_config(data_dir=tmp_path)
+    assert secret not in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # 3. Missing managed client id fails clearly
 # ---------------------------------------------------------------------------
 
 
-def test_missing_managed_client_id_fails_clearly() -> None:
-    monkeypatch_delenv_managed()
+def test_missing_managed_client_id_fails_clearly(monkeypatch) -> None:
+    monkeypatch_delenv_managed(monkeypatch)
     with pytest.raises(GoogleConfigError) as exc:
         managed.assert_managed_client_configured()
     assert managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG in str(exc.value)
@@ -164,7 +312,7 @@ def test_missing_managed_client_id_fails_clearly() -> None:
 def test_wizard_reports_managed_not_configured_message(tmp_path: Path, monkeypatch) -> None:
     machine = tmp_path / "machine"
     _seed_machine_registration(machine)
-    monkeypatch_delenv_managed()
+    monkeypatch_delenv_managed(monkeypatch)
     out = io.StringIO()
     outcome = deploy.run_google_machine_onboarding(
         data_dir=machine,
@@ -179,8 +327,15 @@ def test_wizard_reports_managed_not_configured_message(tmp_path: Path, monkeypat
     assert outcome.ready is False
 
 
-def monkeypatch_delenv_managed() -> None:
-    os.environ.pop(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, None)
+def monkeypatch_delenv_managed(mp) -> None:
+    # Clear both the DEV/OPS env override and the packaged default so the
+    # "managed app unavailable" path is exercised.
+    mp.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
+    mp.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+    from securedact_mcp.connectors.google import managed_config
+
+    mp.setattr(managed_config, "MANAGED_GOOGLE_CLIENT_ID", "")
+    mp.setattr(managed_config, "MANAGED_GOOGLE_CLIENT_SECRET", "")
 
 
 # ---------------------------------------------------------------------------
@@ -1067,6 +1222,12 @@ def test_managed_desktop_sends_configured_secret(tmp_path: Path, monkeypatch) ->
 def test_missing_managed_secret_fails_before_browser(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
     monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV, raising=False)
+    # The managed Desktop secret must be absent for the fail-closed pre-check to
+    # fire -- clear the packaged default too so this is a genuine "no secret"
+    # situation.
+    from securedact_mcp.connectors.google import managed_config
+
+    monkeypatch.setattr(managed_config, "MANAGED_GOOGLE_CLIENT_SECRET", "")
     cfg = load_google_config(data_dir=tmp_path)
     assert cfg.managed is True
     assert not cfg.client_secret
@@ -1097,9 +1258,9 @@ def test_normal_customer_setup_resolves_managed_without_prompt(tmp_path: Path, m
     cfg = load_google_config(data_dir=tmp_path)
     assert cfg.managed is True
     assert cfg.client_id == "managed.app.id.example"
-    # No customer secret is required for the resolution itself; the managed Desktop
-    # secret is SecuRedact application configuration supplied out-of-band.
-    assert cfg.client_secret in (None, "")
+    # The managed Desktop client secret resolves from the packaged default
+    # (SecuRedact application configuration); the customer is never asked for it.
+    assert cfg.client_secret == managed.resolve_managed_client_secret()
 
 
 # ---------------------------------------------------------------------------

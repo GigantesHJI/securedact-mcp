@@ -561,3 +561,79 @@ integration*. The setup wizard then knows the intended integration immediately a
 skips discovery entirely. This scoped-token architecture is the preferred long-term
 direction but is **not** implemented in this task — the resolver only consumes it
 once the control plane exposes it.
+
+## Managed Google OAuth — product configuration vs. customer secrets
+
+Normal customers connect to Google Workspace through a Google OAuth application
+**that SecuRedact owns and operates** (the "managed" Google Desktop / Installed
+application). The customer experience is:
+
+```
+pip install securedact-mcp
+securedact-mcp setup
+→ Connect Google Workspace? yes
+→ browser opens Google
+→ approve Drive read-only
+→ local token/binding
+→ Online
+```
+
+No customer needs a Google Cloud project, an OAuth client id prompt, an OAuth client
+secret prompt, or any machine environment variable for Google.
+
+### Source of truth (packaged managed config)
+
+The managed Google OAuth client id and Desktop client secret ship **in the package**
+as open-source product configuration:
+
+- module: `src/securedact_mcp/connectors/google/managed_config.py`
+- `MANAGED_GOOGLE_CLIENT_ID` — public (a Google Desktop/Installed client id).
+- `MANAGED_GOOGLE_CLIENT_SECRET` — published as product configuration; it is
+  **SecuRedact-managed application configuration, not a customer secret and not a
+  customer OAuth token**.
+- structured view: `packaged_managed_google_config()` → `ManagedGoogleConfig`.
+
+These values are shipped in both the wheel and the sdist, so a fresh
+`pip install securedact-mcp` resolves them with no environment configuration.
+
+### Resolution precedence (normal vs. override)
+
+1. explicit DEV/OPS override environment variables
+   `SECUREDACT_GOOGLE_MANAGED_CLIENT_ID` / `SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET`
+   (used for CI injection, enterprise repackaging, or local development);
+2. the packaged default in `managed_config.py`;
+3. fail closed only when both are absent.
+
+So:
+
+- a released wheel works out of the box (no env vars required);
+- development/testing can override without modifying source;
+- CI can inject synthetic values;
+- a future enterprise build can override safely.
+
+### What stays local (customer secrets)
+
+The actual customer OAuth **access token and refresh token remain local and
+encrypted** under the machine data root (`<machine root>/google/token.json.enc`). The
+managed app client secret never travels on argv, into the environment of the scheduled
+task (unless explicitly overridden), into logs, or to the control plane. Customer Drive
+content and PII stay on the machine.
+
+### BYO (bring-your-own / advanced / enterprise)
+
+`securedact-mcp setup --agent --google yes --google-byo` opts into a customer/admin
+supplied Google Cloud OAuth application. BYO uses the customer's own client id/secret
+(explicitly provided) and **ignores the packaged managed config** unless an override is
+also set. BYO credentials may require encrypted local persistence as part of that
+advanced flow.
+
+### Rotating / changing the managed OAuth app for a future release
+
+To ship a new SecuRedact-managed Google OAuth app, update `MANAGED_GOOGLE_CLIENT_ID`
+and `MANAGED_GOOGLE_CLIENT_SECRET` in
+`src/securedact_mcp/connectors/google/managed_config.py` (and the corresponding
+`MANAGED_GOOGLE_*` endpoint/project constants if they change), then release a new
+wheel. Existing customers keep their local OAuth tokens/bindings; only the app
+identity used for new authorizations changes. Do **not** place the managed app
+credentials in Task Scheduler argv or machine environment variables as a substitute
+for packaging them in the wheel.

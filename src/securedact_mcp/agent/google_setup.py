@@ -48,12 +48,11 @@ GOOGLE_ENABLED_ENV = "SECUREDACT_GOOGLE_ENABLED"
 GOOGLE_CLIENT_ID_ENV = "SECUREDACT_GOOGLE_CLIENT_ID"
 GOOGLE_CLIENT_SECRET_ENV = "SECUREDACT_GOOGLE_CLIENT_SECRET"  # noqa: S105 - env name, not a secret
 
-# Bring the SecuRedact-managed (owned) Google OAuth application identifiers into
-# scope. When these are configured, normal customers connect through SecuRedact's
-# own app and never need to create their own Google Cloud project / OAuth client.
-from ..connectors.google.config import (  # noqa: E402
-    GOOGLE_MANAGED_CLIENT_ID_ENV,
-)
+# Bring the SecuRedact-managed (owned) Google OAuth application resolution into
+# scope. When it is configured (env override or packaged default), normal
+# customers connect through SecuRedact's own app and never need to create their
+# own Google Cloud project / OAuth client.
+from ..connectors.google import managed as google_managed  # noqa: E402
 
 GOOGLE_BYO_ENV = "SECUREDACT_GOOGLE_BYO"
 
@@ -388,10 +387,13 @@ def inspect_google_machine(
     client_configured = bool(
         environ.get(GOOGLE_CLIENT_ID_ENV) and environ.get(GOOGLE_CLIENT_SECRET_ENV)
     )
-    # A SecuRedact-managed (owned) OAuth app id is also a valid client config: it
-    # is the default production path, so its presence means Google can authorize
-    # without the customer creating their own Google Cloud project.
-    managed_configured = bool(environ.get(GOOGLE_MANAGED_CLIENT_ID_ENV))
+    # A SecuRedact-managed (owned) OAuth app is also a valid client config: it is
+    # the default production path, so its presence means Google can authorize
+    # without the customer creating their own Google Cloud project. The managed
+    # app is configured whenever the env override is set OR the packaged default
+    # is present (a normal released build), so a normal customer is treated as
+    # fully configured and is never prompted for an OAuth client id/secret.
+    managed_configured = google_managed.is_managed_client_configured()
     if not client_configured and not managed_configured:
         try:
             from ..connectors.google.storage import GoogleClientConfigStore
@@ -400,7 +402,8 @@ def inspect_google_machine(
             client_configured = bool(stored_id and stored_secret)
         except Exception:
             client_configured = False
-    # A managed app id alone is sufficient client configuration.
+    # A managed app (env override or packaged default) alone is sufficient client
+    # configuration.
     client_configured = client_configured or managed_configured
 
     token_present = (root / "google" / "token.json.enc").is_file()
@@ -440,8 +443,12 @@ def resolve_google_selection(
     2. an explicit ``--google yes`` always wins (including a value forwarded to the
        elevated continuation on argv);
     3. the non-secret ``SECUREDACT_GOOGLE_ENABLED=1`` operational override;
-    4. *detected* machine-local Google configuration (client config, OAuth token, or
-       an existing Google binding) -- an idempotent rerun re-verifies it;
+    4. *detected* machine-local Google configuration that shows the customer already
+       chose/connected Google: a stored OAuth token, an existing machine binding, or
+       an explicit ``SECUREDACT_GOOGLE_MANAGED_CLIENT_ID`` environment override. The
+       packaged managed app is always present (the default production path) and is
+       therefore NOT, by itself, a detection signal -- a fresh machine still asks
+       "Connect Google Workspace?"; an idempotent rerun re-verifies existing state.
     5. an explicit interactive question, defaulting to "no";
     6. a non-interactive run with none of the above skips Google safely.
     """
@@ -458,7 +465,14 @@ def resolve_google_selection(
     detected = (
         state if state is not None else inspect_google_machine(data_dir, files=files, env=env)
     )
-    if detected.configured:
+    # Auto-select only on genuine customer evidence: a stored token, an existing
+    # binding, or an explicit managed-app environment override. The packaged managed
+    # app is always present (the default production path), so it alone must NOT force
+    # Google onboarding on a fresh machine -- the customer is still asked "Connect
+    # Google Workspace?" (defaulting to no). An explicit override is a deliberate
+    # packaging/operator decision and is treated as detected configuration.
+    managed_env_override = bool(environ.get(google_managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV))
+    if detected.token_present or detected.binding_integration_id or managed_env_override:
         print(
             "Google Workspace configuration detected on this computer; "
             "verifying the machine-local Google onboarding.",

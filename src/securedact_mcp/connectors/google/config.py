@@ -22,11 +22,9 @@ from .storage import GoogleClientConfigStore, GoogleCredentialStore
 
 # SecuRedact-owned (managed) Google OAuth application. When configured, normal
 # customers connect to Google Workspace through SecuRedact's own OAuth app and
-# never have to create their own Google Cloud project / OAuth client. These are
-# NON-SECRET overrides: a client id is public, and an installed-app client secret
-# (if any) is provided by operators out-of-band, never committed to the repo.
-GOOGLE_MANAGED_CLIENT_ID_ENV = managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV
-GOOGLE_MANAGED_CLIENT_SECRET_ENV = "SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET"  # noqa: S105 - env name, not a secret
+# never have to create their own Google Cloud project / OAuth client. The managed
+# identifiers resolve from the environment override or the packaged default (see
+# :mod:`securedact_mcp.connectors.google.managed`).
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +163,10 @@ def load_google_config(
         if managed_id:
             is_managed = True
             client_id = managed_id
-            managed_secret = os.getenv(GOOGLE_MANAGED_CLIENT_SECRET_ENV) or None
+            # Resolve the managed Desktop client secret from the environment
+            # override, then the packaged default. Normal customers never supply
+            # this value; it is SecuRedact-managed application configuration.
+            managed_secret = managed.resolve_managed_client_secret()
             client_secret = managed_secret
 
     redirect_uri = os.getenv("SECUREDACT_GOOGLE_REDIRECT_URI", "http://localhost:8080/")

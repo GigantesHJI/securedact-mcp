@@ -2223,6 +2223,9 @@ def run_google_machine_onboarding(
         # warrants the "managed OAuth application unavailable" message. A failure that
         # happens *after* the browser OAuth flow started (state validation, token
         # exchange, or persistence) must never be misreported as managed-app absence.
+        # A normal released build always has the packaged managed app, so normal
+        # customers are never told to create a Google Cloud project or set a machine
+        # environment variable.
         if google_byo:
             collected = bool(
                 _client_config(
@@ -2252,19 +2255,15 @@ def run_google_machine_onboarding(
         if not outcome.authorized:
             if not google_byo and not google_managed.is_managed_client_configured():
                 print(
-                    google_managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG
-                    + " Normal customers should not create their own Google Cloud "
-                    "project; once the managed app is configured (set "
-                    "SECUREDACT_GOOGLE_MANAGED_CLIENT_ID, or have it supplied by "
-                    "packaging), re-run setup, or pass --google-byo to use your own "
-                    "OAuth app (advanced/enterprise).",
+                    google_managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG,
                     file=output,
                 )
             else:
                 _report_google_auth_failure(outcome, output, google_byo)
             print(
                 "Google authorization was not completed. No Google job can run until "
-                "it is (finish it with 'securedact-mcp setup --agent --google yes').",
+                "it is (finish it with 'securedact-mcp setup --agent --google yes', "
+                "or --google-byo to use your own Google Cloud OAuth app).",
                 file=output,
             )
             return outcome

@@ -21,10 +21,8 @@ from securedact_mcp.agent import deploy
 from securedact_mcp.agent.deploy import GOOGLE_RUNTIME_IMPORTS, RunResult
 from securedact_mcp.agent.errors import AgentError
 from securedact_mcp.agent.google_setup import GOOGLE_BYO_ENV, inspect_google_machine
-from securedact_mcp.connectors.google.config import (
-    GOOGLE_MANAGED_CLIENT_ID_ENV,
-    load_google_config,
-)
+from securedact_mcp.connectors.google import managed
+from securedact_mcp.connectors.google.config import load_google_config
 from tests.unit.test_agent_deploy import FakeRunner, safe_provider
 
 
@@ -203,7 +201,8 @@ def test_google_auth_runtime_failure_is_fail_closed(tmp_path: Path) -> None:
     # No credential prompt on the default (non-BYO) path.
     assert "Google OAuth client ID:" not in text
     assert "Google OAuth client secret:" not in text
-    assert "SecuRedact-managed" in text
+    # Fail closed: the run did not complete and did not fall back to prompting.
+    assert outcome.ready is False
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +216,7 @@ def test_load_google_config_uses_managed_client_id(monkeypatch) -> None:
     monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_ID", raising=False)
     monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("SECUREDACT_GOOGLE_ENABLED", raising=False)
-    monkeypatch.setenv(GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
     config = load_google_config(require_enabled=False, data_dir=__import__("tempfile").mkdtemp())
     assert config.client_id == "managed.app.id.example"
 
@@ -225,7 +224,7 @@ def test_load_google_config_uses_managed_client_id(monkeypatch) -> None:
 def test_inspect_google_machine_detects_managed_client(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_ID", raising=False)
     monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv(GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
+    monkeypatch.setenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, "managed.app.id.example")
     state = inspect_google_machine(tmp_path / "machine")
     assert state.client_configured is True
 

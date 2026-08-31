@@ -554,6 +554,12 @@ def test_runtime_verification_needs_no_browser_or_token(tmp_path: Path, monkeypa
 def test_runtime_verification_fails_closed_without_client(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv(managed.SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV, raising=False)
     monkeypatch.delenv("SECUREDACT_GOOGLE_CLIENT_ID", raising=False)
+    # The packaged managed default also counts as a configured client, so clear it
+    # to exercise the genuine "no client configured" fail-closed path.
+    from securedact_mcp.connectors.google import managed_config
+
+    monkeypatch.setattr(managed_config, "MANAGED_GOOGLE_CLIENT_ID", "")
+    monkeypatch.setattr(managed_config, "MANAGED_GOOGLE_CLIENT_SECRET", "")
     payload = google_setup.verify_google_authorization_runtime(tmp_path)
     assert payload["verified"] is False
     assert payload["imports_ok"] is True

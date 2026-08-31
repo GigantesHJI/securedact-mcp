@@ -45,6 +45,24 @@ public server release.
   reported ready) rather than falling back to a manual copy/paste flow or prompting
   the customer for OAuth credentials.
 
+- **Packaged source of truth for the SecuRedact-managed Google OAuth app.**
+  The managed Google Desktop client id and client secret now ship in the package as
+  open-source product configuration in
+  `src/securedact_mcp/connectors/google/managed_config.py`
+  (`MANAGED_GOOGLE_CLIENT_ID`, `MANAGED_GOOGLE_CLIENT_SECRET`, and a structured
+  `packaged_managed_google_config()`). A released `securedact-mcp` wheel therefore
+  provisions/uses the SecuRedact-managed Google Desktop OAuth application
+  automatically: a normal customer runs `securedact-mcp setup`, chooses Google,
+  approves Drive read-only in the browser, and reaches Online with **no** Google
+  Cloud project, no OAuth client id/secret prompt, and no machine environment
+  variable. Resolution precedence is (1) the `SECUREDACT_GOOGLE_MANAGED_CLIENT_ID` /
+  `SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET` env overrides, (2) the packaged default,
+  (3) fail closed. The managed app secret is SecuRedact-managed application
+  configuration (published in the wheel), never a customer secret and never a
+  customer OAuth token; actual customer tokens remain local and encrypted. See
+  `docs/managed-agent.md` ("Managed Google OAuth — product configuration vs.
+  customer secrets").
+
 ### Fixed
 
 - **Google OAuth no longer fails with `No module named 'google_auth_oauthlib'`

@@ -9,24 +9,33 @@ of truth for the managed (Desktop / Installed application) client id.
 A Desktop/Installed OAuth ``client_id`` is public (not a secret). The supported
 resolution order, least operationally fragile first, is:
 
-1. the non-secret environment override ``SECUREDACT_GOOGLE_MANAGED_CLIENT_ID``
-   (packaging / configuration may set this at build/policy time);
-2. a package-compiled default (``MANAGED_GOOGLE_CLIENT_ID``).
+ 1. the non-secret environment override ``SECUREDACT_GOOGLE_MANAGED_CLIENT_ID``
+    (packaging / configuration may set this at build/policy time);
+ 2. the packaged default in
+    :mod:`securedact_mcp.connectors.google.managed_config`
+    (``MANAGED_GOOGLE_CLIENT_ID``), which is the shipped production source of truth.
 
-No real Google credential is ever invented or committed here. When the managed
-client id is not configured, :func:`assert_managed_client_configured` fails closed
-with a clear, customer-safe message and normal mode NEVER falls back to prompting
-the customer for a client id/secret.
+The real SecuRedact-managed client id and Desktop client secret are published as
+open-source product configuration in
+:mod:`securedact_mcp.connectors.google.managed_config` (they are SecuRedact-managed
+application configuration, not customer secrets and not customer OAuth tokens).
+When neither the env override nor the packaged default is present,
+:func:`assert_managed_client_configured` fails closed with a clear, customer-safe
+message and normal mode NEVER falls back to prompting the customer for a client
+id/secret.
 """
 
 from __future__ import annotations
 
 import os
 
+from . import managed_config
+
 # Non-secret environment override for the SecuRedact-managed (owned) Google OAuth
 # *client id*. This is the least operationally fragile source of truth and is what
 # packaging/configuration should supply (e.g. baked into the released installer or
 # provided by a configuration management policy). A client id is public by design.
+# When unset, the packaged default in :mod:`.managed_config` is used.
 SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV = "SECUREDACT_GOOGLE_MANAGED_CLIENT_ID"
 
 # Non-secret environment override for the SecuRedact-managed Desktop OAuth *client
@@ -36,20 +45,29 @@ SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV = "SECUREDACT_GOOGLE_MANAGED_CLIENT_ID"
 # outside the local machine, never logged, never placed on argv, and never sent to
 # the control plane. Google's Desktop OAuth token endpoint for this client requires
 # it (a missing value is rejected with ``invalid_request`` / "client_secret is
-# missing"), so it must be configured before the browser authorization begins.
+# missing"), so it must be configured before the browser authorization begins. When
+# unset, the packaged default in :mod:`.managed_config` is used.
 SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV = "SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET"  # noqa: S105 - env name, not a secret
 
-# Package-compiled default. Intentionally empty: no real Google credential is
-# invented or committed. Operators/packaging provide the public client id via the
-# environment override above. A non-empty value here would be a placeholder only.
-MANAGED_GOOGLE_CLIENT_ID: str = ""
+# Re-export of the packaged default so existing callers that read this attribute
+# continue to work. The canonical value lives in :mod:`.managed_config`; the
+# resolvers below read it from there and apply the environment override on top.
+MANAGED_GOOGLE_CLIENT_ID: str = managed_config.MANAGED_GOOGLE_CLIENT_ID
 
 # Clear, customer-safe failure used when the managed app is not configured. Kept as
 # a single constant so the message is identical across the setup wizard, the
-# machine-runtime bootstrap, and the CLI.
+# machine-runtime bootstrap, and the CLI. This only fires in a build that has no
+# managed app configured at all (neither env override nor packaged default); a
+# normal released build always has the packaged default, so normal customers never
+# see this. It intentionally does NOT instruct normal customers to create a Google
+# Cloud project, set a machine environment variable, or paste OAuth credentials --
+# those are packaging/supply concerns or advanced/enterprise (BYO) choices.
 MANAGED_CLIENT_NOT_CONFIGURED_MSG = (
-    "SecuRedact Google Workspace authorization is not yet configured for this build. "
-    "The SecuRedact-managed Google OAuth application is unavailable in this build."
+    "SecuRedact Google Workspace authorization is not available in this build: the "
+    "SecuRedact-managed Google OAuth application is not configured. This is a "
+    "packaging/supply issue, not something a customer configures. Install a released "
+    "SecuRedact build, or pass --google-byo to use your own Google Cloud OAuth app "
+    "(advanced/enterprise)."
 )
 
 # Clear, customer-safe failure used when the managed app id is configured but the
@@ -86,8 +104,9 @@ def resolve_managed_client_id() -> str | None:
     env_id = os.getenv(SECUREDACT_GOOGLE_MANAGED_CLIENT_ID_ENV)
     if env_id and env_id.strip():
         return env_id.strip()
-    if MANAGED_GOOGLE_CLIENT_ID and MANAGED_GOOGLE_CLIENT_ID.strip():
-        return MANAGED_GOOGLE_CLIENT_ID.strip()
+    pkg = managed_config.MANAGED_GOOGLE_CLIENT_ID
+    if pkg and pkg.strip():
+        return pkg.strip()
     return None
 
 
@@ -124,6 +143,9 @@ def resolve_managed_client_secret() -> str | None:
     env_secret = os.getenv(SECUREDACT_GOOGLE_MANAGED_CLIENT_SECRET_ENV)
     if env_secret and env_secret.strip():
         return env_secret.strip()
+    pkg = managed_config.MANAGED_GOOGLE_CLIENT_SECRET
+    if pkg and pkg.strip():
+        return pkg.strip()
     return None
 
 

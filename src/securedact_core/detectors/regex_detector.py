@@ -107,11 +107,22 @@ class LabelRule:
     value_pattern: str
     validator: Validator = lambda _value: True
     confidence: float = 0.99
+    # When True, the label may be followed by a plain whitespace run ("VIN 1M8...") or a
+    # connective word ("fax is 415...", "patient MRN is 558201") instead of only
+    # ':'/'='/ '#'. This is intentionally restricted to structured identifier labels
+    # (not free-text fields like name/diagnosis) so that relaxing the separator cannot
+    # make a free-text label swallow an entire sentence.
+    loose_separator: bool = False
 
     def compile(self) -> re.Pattern[str]:
         labels = "|".join(re.escape(label) for label in sorted(self.labels, key=len, reverse=True))
+        if self.loose_separator:
+            separator = r"(?::|=|#|[^\S\r\n]+(?:is|was|are|were)[^\S\r\n]+|[^\S\r\n]+)"
+        else:
+            separator = r"(?::|=|#)"
         return re.compile(
-            rf"(?im)(?<![\w])(?P<label>{labels})[^\S\r\n]*(?::|=|#)[^\S\r\n]*(?P<value>{self.value_pattern})",
+            rf"(?im)(?<![\w])(?P<label>{labels})[^\S\r\n]*{separator}[^\S\r\n]*"
+            rf"(?P<value>{self.value_pattern})",
             re.IGNORECASE,
         )
 
@@ -169,6 +180,15 @@ def _ip(version: int) -> Validator:
     return validate
 
 
+# North American Numbering Plan digit groupings written with separators only (no country
+# prefix, no parentheses, no dots). ``415-555-2671`` and ``1-800-555-0199`` are the dominant
+# written US/Canada forms; without these groupings the generic heuristic below rejects them
+# because it was calibrated on EU numbers (leading ``+`` or trunk ``0``). The groupings are
+# deliberately narrow so that 3-2-4 (SSN), 2-2-4 (date), 5-4 (ZIP+4) and 4-4-4-4 (card)
+# shapes are not promoted to telephone numbers.
+_NANP_DIGIT_GROUPS = frozenset({(3, 3, 4), (1, 3, 3, 4)})
+
+
 def _phone(value: str) -> bool:
     digits = _digits(value)
     if not 7 <= len(digits) <= 15:
@@ -179,6 +199,8 @@ def _phone(value: str) -> bool:
     groups = re.findall(r"\d+", value)
     if groups and all(len(group) == 1 for group in groups):
         return False
+    if tuple(len(group) for group in groups) in _NANP_DIGIT_GROUPS:
+        return True
     return any(char in value for char in "(). ") or stripped.startswith("0")
 
 
@@ -189,6 +211,99 @@ def _bic(value: str) -> bool:
 def _card_expiry(value: str) -> bool:
     match = re.fullmatch(r"(0[1-9]|1[0-2])/(?:\d{2}|\d{4})", value)
     return match is not None
+
+
+def ssn_valid(value: str) -> bool:
+    digits = _digits(value)
+    if len(digits) != 9:
+        return False
+    area, group, serial = digits[:3], digits[3:5], digits[5:]
+    # Area 000, 666, and 900-999 are never assigned; group/serial 00/0000 invalid.
+    if area in {"000", "666"} or area[0] == "9":
+        return False
+    if group == "00":
+        return False
+    if serial == "0000":
+        return False
+    return True
+
+
+# ISO 3779 VIN transliteration weights and character values (I, O, Q excluded).
+_VIN_WEIGHTS = (8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2)
+_VIN_VALUES = {c: i for i, c in enumerate("0123456789X")}
+_VIN_VALUES.update(
+    {
+        "A": 1,
+        "B": 2,
+        "C": 3,
+        "D": 4,
+        "E": 5,
+        "F": 6,
+        "G": 7,
+        "H": 8,
+        "J": 1,
+        "K": 2,
+        "L": 3,
+        "M": 4,
+        "N": 5,
+        "P": 7,
+        "R": 9,
+        "S": 2,
+        "T": 3,
+        "U": 4,
+        "V": 5,
+        "W": 6,
+        "X": 7,
+        "Y": 8,
+        "Z": 9,
+    }
+)
+
+
+def vin_valid(value: str) -> bool:
+    """Return ``True`` when ``value`` carries a valid North American VIN check digit.
+
+    NOTE: this helper is deliberately **not** wired into ``vehicle_identifier_label``.
+    ISO 3779 defines the 17-character VIN structure but does not mandate a check digit;
+    the check digit at position 9 is a North American requirement (49 CFR 565.15), so
+    gating detection on it would drop legitimate VINs recorded outside North America.
+    It is retained as an opt-in helper for callers that know their data is North American.
+    Detection therefore does not claim ISO 3779 or check-digit validation.
+    """
+
+    vin = value.upper()
+    if len(vin) != 17:
+        return False
+    if not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin):
+        return False
+    total = 0
+    for char, weight in zip(vin, _VIN_WEIGHTS, strict=True):
+        char_value = _VIN_VALUES.get(char)
+        if char_value is None:
+            return False
+        total += char_value * weight
+    check = total % 11
+    expected = "X" if check == 10 else str(check)
+    return vin[8] == expected
+
+
+# US state identifiers used to qualify a five-digit code as a US ZIP.
+_US_STATE_ABBREV = (
+    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT "
+    "NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC"
+).split()
+# Only USPS abbreviations are used for ZIP qualification to keep the postal format
+# "(ZIP, ST)" precise; full state names are not redacted because Safe Harbor permits
+# retaining state-level geography.
+_US_STATE_SET = "|".join(sorted(_US_STATE_ABBREV, key=len, reverse=True))
+
+
+def age_over_89(value: str) -> bool:
+    digits = re.sub(r"\D", "", value)
+    if not digits:
+        return False
+    age = int(digits)
+    return 90 <= age <= 119
 
 
 # Practical ASCII mailbox subset used for privacy detection. It deliberately
@@ -222,11 +337,24 @@ def _email(value: str) -> bool:
     )
 
 
+# An identifier value is an alphanumeric token, optionally followed by a single
+# whitespace-separated token that itself contains a digit (e.g. "MBR 448821039",
+# "CA 9920314"). The digit requirement in the trailing token prevents the value from
+# greedily swallowing ordinary prose words (so "ACC-773102884 billed" stays bounded to
+# the identifier). This keeps label-anchored detection precise.
+_IDENTIFIER_TOKEN = r"[A-Z0-9][A-Z0-9._/-]*"  # noqa: S105
+IDENTIFIER_VALUE = rf"{_IDENTIFIER_TOKEN}(?:\s+[A-Z0-9]*\d[A-Z0-9._/-]*)?"
+
+
 def _nonempty_identifier(value: str) -> bool:
     return (
         3 <= len(value) <= 128
         and bool(re.search(r"\d", value))
-        and bool(re.fullmatch(r"[A-Z0-9][A-Z0-9._/-]*", value, re.IGNORECASE))
+        and bool(
+            re.fullmatch(
+                rf"{_IDENTIFIER_TOKEN}(?:\s+[A-Z0-9]*\d[A-Z0-9._/-]*)?", value, re.IGNORECASE
+            )
+        )
     )
 
 
@@ -234,17 +362,20 @@ DATE_VALUE = (
     r"(?:\d{1,2}\s+(?:January|February|March|April|May|June|July|August|"
     r"September|October|November|December|januari|februari|maart|april|mei|"
     r"juni|juli|augustus|september|oktober|november|december)\s+\d{4}|"
-    r"\d{1,2}[-/.]\d{1,2}[-/.]\d{4})"
+    r"\d{1,2}[-/.]\d{1,2}[-/.]\d{4}|"
+    r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2})"
 )
-IDENTIFIER_VALUE = r"[A-Z0-9][A-Z0-9._/-]{2,127}"
 TEXT_FIELD_VALUE = r"[^\r\n;|]{2,160}"
+# Labelled telephone/fax values may start with an area-code parenthesis, e.g.
+# ``Fax number: (415) 555-8890``.
+PHONE_LABEL_VALUE = r"(?:\+|\()?\d[\d(). -]{5,}\d"
 
 
 LABEL_RULES = (
     LabelRule("name_label", ("name", "naam"), EntityType.PERSON, TEXT_FIELD_VALUE, confidence=0.95),
     LabelRule(
         "date_of_birth_label",
-        ("date of birth", "birth date", "geboortedatum"),
+        ("date of birth", "DOB", "birth date", "geboortedatum"),
         EntityType.DATE_OF_BIRTH,
         DATE_VALUE,
     ),
@@ -265,7 +396,7 @@ LABEL_RULES = (
         "phone_label",
         ("telephone", "phone", "telefoon", "mobiel"),
         EntityType.PHONE,
-        r"\+?\d[\d(). -]{5,}\d",
+        PHONE_LABEL_VALUE,
         _phone,
     ),
     LabelRule("bsn_label", ("BSN", "burgerservicenummer"), EntityType.BSN, r"\d{9}", bsn_valid),
@@ -327,17 +458,31 @@ LABEL_RULES = (
     ),
     LabelRule(
         "patient_number_label",
-        ("patient number", "patient ID", "patiëntnummer", "patientnummer"),
+        ("patient number", "patient no", "patient ID", "patiëntnummer", "patientnummer"),
         EntityType.PATIENT_NUMBER,
         IDENTIFIER_VALUE,
         _nonempty_identifier,
     ),
     LabelRule(
         "medical_record_number_label",
-        ("medical record number", "medical record ID", "MRN", "medisch dossiernummer"),
+        (
+            "medical record number",
+            "medical record ID",
+            "medical record",
+            "record number",
+            "record no",
+            "chart number",
+            "chart no",
+            "chart ID",
+            "patient record number",
+            "patient record no",
+            "MRN",
+            "medisch dossiernummer",
+        ),
         EntityType.MEDICAL_RECORD_NUMBER,
         IDENTIFIER_VALUE,
         _nonempty_identifier,
+        loose_separator=True,
     ),
     LabelRule(
         "policy_number_label",
@@ -345,6 +490,7 @@ LABEL_RULES = (
         EntityType.POLICY_NUMBER,
         IDENTIFIER_VALUE,
         _nonempty_identifier,
+        loose_separator=True,
     ),
     LabelRule(
         "invoice_number_label",
@@ -369,14 +515,15 @@ LABEL_RULES = (
     ),
     LabelRule(
         "account_reference_label",
-        ("account reference", "bank account reference", "rekeningreferentie"),
+        ("account reference", "bank account reference", "bank account ref", "rekeningreferentie"),
         EntityType.BANK_ACCOUNT_REFERENCE,
         IDENTIFIER_VALUE,
         _nonempty_identifier,
+        loose_separator=True,
     ),
     LabelRule(
         "payment_reference_label",
-        ("payment reference", "betalingskenmerk", "betalingsreferentie"),
+        ("payment reference", "payment ref", "betalingskenmerk", "betalingsreferentie"),
         EntityType.PAYMENT_REFERENCE,
         IDENTIFIER_VALUE,
         _nonempty_identifier,
@@ -455,7 +602,13 @@ LABEL_RULES = (
     ),
     LabelRule(
         "device_label",
-        ("device identifier", "device ID", "apparaat-ID"),
+        (
+            "device identifier",
+            "device ID",
+            "apparaat-ID",
+            "serial number",
+            "serial no",
+        ),
         EntityType.DEVICE_IDENTIFIER,
         IDENTIFIER_VALUE,
         _nonempty_identifier,
@@ -490,6 +643,71 @@ LABEL_RULES = (
         EntityType.APPOINTMENT,
         rf"{DATE_VALUE}(?:\s+(?:at|om)\s+(?:[01]\d|2[0-3]):[0-5]\d)?",
         confidence=0.98,
+    ),
+    LabelRule(
+        "ssn_label",
+        ("SSN", "SS", "social security number", "social security no", "social security"),
+        EntityType.SSN,
+        r"\d{3}[ -]?\d{2}[ -]?\d{4}",
+        ssn_valid,
+        loose_separator=True,
+    ),
+    LabelRule(
+        "fax_label",
+        ("fax", "fax number", "telefax", "facsimile"),
+        EntityType.FAX,
+        PHONE_LABEL_VALUE,
+        _phone,
+        loose_separator=True,
+    ),
+    LabelRule(
+        "account_number_label",
+        ("account number", "account no", "account no.", "acct", "account #"),
+        EntityType.ACCOUNT_NUMBER,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "health_plan_beneficiary_label",
+        (
+            "member ID",
+            "member number",
+            "member no",
+            "subscriber ID",
+            "subscriber number",
+            "beneficiary ID",
+            "beneficiary number",
+            "health plan ID",
+            "health plan number",
+            "insurance ID",
+            "payer ID",
+        ),
+        EntityType.HEALTH_PLAN_BENEFICIARY,
+        IDENTIFIER_VALUE,
+        _nonempty_identifier,
+    ),
+    LabelRule(
+        "vehicle_identifier_label",
+        (
+            "VIN",
+            "vehicle identification number",
+            "chassis number",
+            "chassis no",
+            "license plate",
+            "licence plate",
+            "plate no",
+            "plate number",
+        ),
+        EntityType.VEHICLE_IDENTIFIER,
+        r"(?:[A-HJ-NPR-Z0-9]{11,17}|[A-Z0-9][A-Z0-9_-]{2,9})",
+        _nonempty_identifier,
+        loose_separator=True,
+    ),
+    LabelRule(
+        "us_zip_label",
+        ("zip", "zip code", "zipcode", "postal code", "postal code"),
+        EntityType.US_ZIP,
+        r"\d{5}(?:-\d{4})?",
     ),
 )
 
@@ -601,11 +819,51 @@ RULES = (
         _phone,
         precedence=40,
     ),
+    RegexRule(
+        "ssn",
+        EntityType.SSN,
+        re.compile(r"(?<!\d)(\d{3})[ -](\d{2})[ -](\d{4})(?!\d)"),
+        ssn_valid,
+        precedence=85,
+    ),
+    RegexRule(
+        "us_zip_plus4",
+        EntityType.US_ZIP,
+        re.compile(r"(?<!\d)\d{5}-\d{4}(?!\d)"),
+        precedence=70,
+    ),
+    RegexRule(
+        "us_zip_state",
+        EntityType.US_ZIP,
+        # Case-sensitive on purpose: USPS abbreviations are uppercase, and matching them
+        # case-insensitively turned ordinary lowercase English words that happen to spell a
+        # state code ("in", "or", "me", "hi", "ok", "de", "la", "pa") into ZIP qualifiers,
+        # so any nearby five-digit value (dosages, counts, identifiers) was redacted as a
+        # US ZIP under every policy.
+        re.compile(
+            r"(?<!\d)\d{5}(?:-\d{4})?"
+            r"(?=\s*,\s*(?:" + _US_STATE_SET + r")\b)"
+            r"|(?<=\b(?:" + _US_STATE_SET + r")[ -])\d{5}(?:-\d{4})?(?!\d)"
+            r"|(?<=\b(?:" + _US_STATE_SET + r"), )\d{5}(?:-\d{4})?(?!\d)",
+        ),
+        precedence=70,
+    ),
+    RegexRule(
+        "age_over_89",
+        EntityType.AGE,
+        re.compile(
+            r"(?i)(?:\b(?:aged|age\s+of)\s+(9\d|1[0-1]\d)\s*(?:years?|yrs?|year-old)?\b|"
+            r"\b(9\d|1[0-1]\d)[- ](?:year|yr)s?[- ]old\b)",
+        ),
+        age_over_89,
+        confidence=0.9,
+        precedence=55,
+    ),
 )
 
 
 PREFIX_TYPES: dict[str, EntityType] = {
-    "ACC": EntityType.BANK_ACCOUNT_REFERENCE,
+    "ACC": EntityType.ACCOUNT_NUMBER,
     "CUST": EntityType.CUSTOMER_NUMBER,
     "KLANT": EntityType.CUSTOMER_NUMBER,
     "CASE": EntityType.CASE_NUMBER,
@@ -618,6 +876,9 @@ PREFIX_TYPES: dict[str, EntityType] = {
     "POL": EntityType.POLICY_NUMBER,
     "INV": EntityType.INVOICE_NUMBER,
     "DEV": EntityType.DEVICE_IDENTIFIER,
+    "MBR": EntityType.HEALTH_PLAN_BENEFICIARY,
+    "SUB": EntityType.HEALTH_PLAN_BENEFICIARY,
+    "BEN": EntityType.HEALTH_PLAN_BENEFICIARY,
     "DL": EntityType.DRIVING_LICENCE_NUMBER,
     "DV": EntityType.DRIVING_LICENCE_NUMBER,
     "UNION": EntityType.TRADE_UNION_MEMBERSHIP,
@@ -650,9 +911,15 @@ SENSITIVE_QUERY_KEYS = frozenset(
 )
 
 URL_PATTERN = re.compile(r"\b(?:https?://|www\.)[^\s<>\[\]()]+", re.IGNORECASE)
+# A prefix may be followed by a separator ('-'/'_') then the value (e.g. "MRN-558201"),
+# or by a digit-led value with no separator (e.g. "MBR55210983", "ACC773102884",
+# "DEV55120983"). The no-separator branch requires the value to START with a digit so
+# ordinary words that merely contain a prefix (e.g. "SUBMIT", "ACCEPT", "GENETIC") are
+# not misclassified as identifiers.
 PREFIX_PATTERN = re.compile(
     rf"(?<![A-Z0-9])(?P<prefix>{'|'.join(sorted(PREFIX_TYPES, key=len, reverse=True))})"
-    r"(?:-[A-Z]{2,8})?[-_][A-Z0-9][A-Z0-9_-]{2,}(?![A-Z0-9])",
+    r"(?:(?:-[A-Z]{2,8})?[-_][A-Z0-9][A-Z0-9_-]{2,}"
+    r"|[0-9][A-Z0-9._-]{2,})(?![A-Z0-9])",
     re.IGNORECASE,
 )
 RF_REFERENCE_PATTERN = re.compile(r"(?<![A-Z0-9])RF\d{8,25}(?![A-Z0-9])", re.IGNORECASE)

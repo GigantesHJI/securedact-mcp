@@ -56,6 +56,12 @@ _DIRECT_PERSONAL_TYPES = frozenset(
         EntityType.PATIENT_NUMBER,
         EntityType.MEDICAL_RECORD_NUMBER,
         EntityType.IBAN,
+        EntityType.SSN,
+        EntityType.FAX,
+        EntityType.ACCOUNT_NUMBER,
+        EntityType.HEALTH_PLAN_BENEFICIARY,
+        EntityType.VEHICLE_IDENTIFIER,
+        EntityType.US_ZIP,
     }
 )
 _PERSONAL_RELATION = re.compile(

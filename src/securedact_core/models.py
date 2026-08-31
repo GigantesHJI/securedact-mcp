@@ -19,13 +19,16 @@ class EntityType(StrEnum):
 
     DATE = "date"
     DATE_OF_BIRTH = "date_of_birth"
+    AGE = "age"
     TIME = "time"
     APPOINTMENT = "appointment"
 
     EMAIL = "email"
     PHONE = "phone"
+    FAX = "fax"
 
     BSN = "bsn"
+    SSN = "ssn"
     PASSPORT_NUMBER = "passport_number"
     DRIVING_LICENCE_NUMBER = "driving_licence_number"
     NATIONAL_ID = "national_id"
@@ -38,6 +41,8 @@ class EntityType(StrEnum):
     MEDICAL_RECORD_NUMBER = "medical_record_number"
     POLICY_NUMBER = "policy_number"
     INVOICE_NUMBER = "invoice_number"
+    ACCOUNT_NUMBER = "account_number"
+    HEALTH_PLAN_BENEFICIARY = "health_plan_beneficiary"
 
     IBAN = "iban"
     BIC_SWIFT = "bic_swift"
@@ -63,6 +68,7 @@ class EntityType(StrEnum):
     IPV6 = "ipv6"
     MAC_ADDRESS = "mac_address"
     DEVICE_IDENTIFIER = "device_identifier"
+    VEHICLE_IDENTIFIER = "vehicle_identifier"
     SESSION_TOKEN = "session_token"
     API_TOKEN = "api_token"
     ACCESS_TOKEN = "access_token"
@@ -74,6 +80,7 @@ class EntityType(StrEnum):
     INTERNAL_URL = "internal_url"
 
     POSTCODE = "postcode"
+    US_ZIP = "us_zip"
     RELATIONSHIP = "relationship"
     FREE_TEXT_SENSITIVE_CONTEXT = "free_text_sensitive_context"
     UNKNOWN_SENSITIVE = "unknown_sensitive"

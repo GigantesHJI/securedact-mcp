@@ -1,0 +1,2669 @@
+{
+  "corpus_version": 1,
+  "split": "hipaa_adversarial",
+  "description": "Independent HIPAA Safe Harbor adversarial evaluation (NOT the 27-sample implementation corpus). Gold labels encode what SHOULD be detected under 45 CFR 164.514(b)(2). hard_negative cases assert nothing in the category scope is detected (precision guards). adversarial cases probe blind spots and surface as reproduced known_missing/known_extra when measured by scripts/experimental/run_hipaa_adversarial.py.",
+  "generated_by": "scripts/experimental/build_hipaa_adversarial.py",
+  "samples": [
+    {
+      "id": "adv-A-001",
+      "category": "A",
+      "domain": "intake",
+      "text": "Name: John A. Smith",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled name field is detected deterministically."
+    },
+    {
+      "id": "adv-A-002",
+      "category": "A",
+      "domain": "intake",
+      "text": "Patient: Maria Gonzalez",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled patient name detected."
+    },
+    {
+      "id": "adv-A-003",
+      "category": "A",
+      "domain": "clinical_note",
+      "text": "Attending physician: Jane Doe",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled attending name detected."
+    },
+    {
+      "id": "adv-A-004",
+      "category": "A",
+      "domain": "clinical_note",
+      "text": "Guarantor name: William Clark",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Guarantor name field detected."
+    },
+    {
+      "id": "adv-A-005",
+      "category": "A",
+      "domain": "clinical_note",
+      "text": "John Smith presented with chest pain and was admitted.",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Unlabelled free-text name; without the contextual model it is a reproduced FN."
+    },
+    {
+      "id": "adv-A-006",
+      "category": "A",
+      "domain": "clinical_note",
+      "text": "The patient, Mary Johnson, was discharged to home care.",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Unlabelled free-text name; reproduced FN without Flair."
+    },
+    {
+      "id": "adv-A-007",
+      "category": "A",
+      "domain": "clinical_note",
+      "text": "Next of kin is Emily Carter who will coordinate follow-up.",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "'next of kin:' is not a name label; reproduced FN."
+    },
+    {
+      "id": "adv-A-008",
+      "category": "A",
+      "domain": "clinical_note",
+      "text": "Emergency contact on file is Olivia Bennett.",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "'emergency contact:' not a name label; reproduced FN."
+    },
+    {
+      "id": "adv-A-009",
+      "category": "A",
+      "domain": "hard_negative",
+      "text": "Smith & Wesson is the equipment manufacturer.",
+      "gold_present": [],
+      "gold_absent": [
+        "person"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Organisation token; person must not be synthesised."
+    },
+    {
+      "id": "adv-A-010",
+      "category": "A",
+      "domain": "hard_negative",
+      "text": "the smiths moved to a new clinic location.",
+      "gold_present": [],
+      "gold_absent": [
+        "person"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Lowercase plural surname is not a detected person name."
+    },
+    {
+      "id": "adv-A-011",
+      "category": "A",
+      "domain": "hard_negative",
+      "text": "Dr. Lee reviewed the radiology images.",
+      "gold_present": [],
+      "gold_absent": [
+        "person"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "'Dr. Lee' is a title+name but no name label fires; assert no false person."
+    },
+    {
+      "id": "adv-A-012",
+      "category": "A",
+      "domain": "intake",
+      "text": "Son of Mr. Lee was notified of the results.",
+      "gold_present": [
+        "person"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "'Mr. Lee' is a person reference but no name label matches; reproduced FN."
+    },
+    {
+      "id": "adv-B-001",
+      "category": "B",
+      "domain": "address",
+      "text": "14 Birchwood Lane, Springfield, IL 62704, United States.",
+      "gold_present": [
+        "address",
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Full street address + state-qualified ZIP."
+    },
+    {
+      "id": "adv-B-002",
+      "category": "B",
+      "domain": "address",
+      "text": "ZIP code: 90210-1234",
+      "gold_present": [
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled ZIP+4."
+    },
+    {
+      "id": "adv-B-003",
+      "category": "B",
+      "domain": "address",
+      "text": "62704, IL",
+      "gold_present": [
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "ZIP preceded by state token."
+    },
+    {
+      "id": "adv-B-004",
+      "category": "B",
+      "domain": "address",
+      "text": "Boston MA 02115",
+      "gold_present": [
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "State then ZIP with a space is a postal form."
+    },
+    {
+      "id": "adv-B-005",
+      "category": "B",
+      "domain": "address",
+      "text": "Reno NV 89501",
+      "gold_present": [
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "State then ZIP with a space."
+    },
+    {
+      "id": "adv-B-006",
+      "category": "B",
+      "domain": "address",
+      "text": "Springfield, IL, 62704",
+      "gold_present": [
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Comma between state and ZIP."
+    },
+    {
+      "id": "adv-B-007",
+      "category": "B",
+      "domain": "address",
+      "text": "14 Birchwood Lane, Springfield, IL 62704",
+      "gold_present": [
+        "address",
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Address without trailing country."
+    },
+    {
+      "id": "adv-B-008",
+      "category": "B",
+      "domain": "address",
+      "text": "PO Box 1234, Seattle WA 98101",
+      "gold_present": [
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "ZIP qualified by WA."
+    },
+    {
+      "id": "adv-B-009",
+      "category": "B",
+      "domain": "address",
+      "text": "New York, NY 10001",
+      "gold_present": [
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "City, state, ZIP."
+    },
+    {
+      "id": "adv-B-010",
+      "category": "B",
+      "domain": "address",
+      "text": "Street: 100 Main St, Apt 4B, Denver CO 80203",
+      "gold_present": [
+        "address",
+        "us_zip"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Street address with state-qualified ZIP."
+    },
+    {
+      "id": "adv-B-011",
+      "category": "B",
+      "domain": "hard_negative",
+      "text": "The code 90210 was referenced without a state.",
+      "gold_present": [],
+      "gold_absent": [
+        "us_zip"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Bare 5-digit value with no state is not a ZIP (no over-redaction)."
+    },
+    {
+      "id": "adv-B-012",
+      "category": "B",
+      "domain": "hard_negative",
+      "text": "The quantity 48217 was ordered from the pharmacy.",
+      "gold_present": [],
+      "gold_absent": [
+        "us_zip"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Bare 5-digit quantity must not become a ZIP."
+    },
+    {
+      "id": "adv-B-013",
+      "category": "B",
+      "domain": "hard_negative",
+      "text": "Cook County, IL received the referral.",
+      "gold_present": [],
+      "gold_absent": [
+        "us_zip"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "County + state, no ZIP; not a ZIP false positive."
+    },
+    {
+      "id": "adv-B-014",
+      "category": "B",
+      "domain": "clinical_note",
+      "text": "The patient resides in Chicago, Illinois near the lake.",
+      "gold_present": [
+        "location"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "City/state is a Safe Harbor geographic identifier; undetected without Flair (FN)."
+    },
+    {
+      "id": "adv-B-015",
+      "category": "B",
+      "domain": "clinical_note",
+      "text": "Transferred from Los Angeles, California to a rural clinic.",
+      "gold_present": [
+        "location"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "City/state geographic identifier; reproduced FN without contextual model."
+    },
+    {
+      "id": "adv-B-016",
+      "category": "B",
+      "domain": "hard_negative",
+      "text": "latitude 41.8781 longitude -87.6298 plotted on the map.",
+      "gold_present": [],
+      "gold_absent": [
+        "us_zip",
+        "address"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Coordinates are not a ZIP or street address; assert no false geo detection."
+    },
+    {
+      "id": "adv-C-001",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "The patient was admitted on 03/14/2021 and discharged 03/20/2021.",
+      "gold_present": [
+        "date"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Individual dates mm/dd/yyyy."
+    },
+    {
+      "id": "adv-C-002",
+      "category": "C",
+      "domain": "intake",
+      "text": "Date of birth: 09/30/1965",
+      "gold_present": [
+        "date_of_birth",
+        "date"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled DOB; the same value is also a general date."
+    },
+    {
+      "id": "adv-C-003",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "The 92-year-old patient recovered",
+      "gold_present": [
+        "age"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Age over 89 hyphenated."
+    },
+    {
+      "id": "adv-C-004",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "aged 105 at last visit",
+      "gold_present": [
+        "age"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "'aged N' form."
+    },
+    {
+      "id": "adv-C-005",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "age of 90 years",
+      "gold_present": [
+        "age"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "'age of N' form."
+    },
+    {
+      "id": "adv-C-006",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "appointment on 03/14/2021 at 14:30",
+      "gold_present": [
+        "date",
+        "time"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Unlabelled date + time; appointment label needs a colon."
+    },
+    {
+      "id": "adv-C-007",
+      "category": "C",
+      "domain": "hard_negative",
+      "text": "storage age is 45 days for the sample",
+      "gold_present": [],
+      "gold_absent": [
+        "age"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Non-individual age must not trigger age>89."
+    },
+    {
+      "id": "adv-C-008",
+      "category": "C",
+      "domain": "hard_negative",
+      "text": "the sample age 9 weeks is not a person",
+      "gold_present": [],
+      "gold_absent": [
+        "age"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Non-individual age guard."
+    },
+    {
+      "id": "adv-C-009",
+      "category": "C",
+      "domain": "intake",
+      "text": "Date of birth: 1965-09-30",
+      "gold_present": [
+        "date_of_birth",
+        "date"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "ISO yyyy-mm-dd DOB; detected as both date_of_birth and date."
+    },
+    {
+      "id": "adv-C-010",
+      "category": "C",
+      "domain": "intake",
+      "text": "DOB: 1965-09-30",
+      "gold_present": [
+        "date_of_birth",
+        "date"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "DOB abbreviation + ISO date; now detected as date_of_birth and date."
+    },
+    {
+      "id": "adv-C-011",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "born 9/30/1965 and raised locally",
+      "gold_present": [
+        "date"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Unlabelled individual date; general_date catches mm/dd/yyyy."
+    },
+    {
+      "id": "adv-C-012",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "procedure date 12/01/2022 was uneventful",
+      "gold_present": [
+        "date"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Unlabelled individual date."
+    },
+    {
+      "id": "adv-C-013",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "the 95 yrs old donor was unsuitable",
+      "gold_present": [
+        "age"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "'N yrs old' (no hyphen) is not matched by the age grammar (FN)."
+    },
+    {
+      "id": "adv-C-014",
+      "category": "C",
+      "domain": "hard_negative",
+      "text": "the 88-year-old was below the threshold",
+      "gold_present": [],
+      "gold_absent": [
+        "age"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Age 88 is not over 89; must not be flagged."
+    },
+    {
+      "id": "adv-C-015",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "the 119-year-old centenarian was reviewed",
+      "gold_present": [
+        "age"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Upper bound of age grammar (119)."
+    },
+    {
+      "id": "adv-C-016",
+      "category": "C",
+      "domain": "intake",
+      "text": "Date: 2021-03-14",
+      "gold_present": [
+        "date"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Labelled ISO date is not matched by DATE_VALUE (FN)."
+    },
+    {
+      "id": "adv-C-017",
+      "category": "C",
+      "domain": "clinical_note",
+      "text": "discharged 03/20/2021 after surgery",
+      "gold_present": [
+        "date"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Unlabelled discharge date."
+    },
+    {
+      "id": "adv-C-018",
+      "category": "C",
+      "domain": "hard_negative",
+      "text": "the meeting is scheduled on Friday",
+      "gold_present": [],
+      "gold_absent": [
+        "date"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Weekday with no calendar date is not a date entity."
+    },
+    {
+      "id": "adv-D-001",
+      "category": "D",
+      "domain": "contact",
+      "text": "Call 415-555-2671",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Hyphen NANP form (3-3-4)."
+    },
+    {
+      "id": "adv-D-002",
+      "category": "D",
+      "domain": "contact",
+      "text": "Phone: 415-555-2671",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled hyphen phone."
+    },
+    {
+      "id": "adv-D-003",
+      "category": "D",
+      "domain": "contact",
+      "text": "Telephone: 415-555-2671",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Telephone label."
+    },
+    {
+      "id": "adv-D-004",
+      "category": "D",
+      "domain": "contact",
+      "text": "Call 1-800-555-0199",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "1-NXX-NXX-XXXX form."
+    },
+    {
+      "id": "adv-D-005",
+      "category": "D",
+      "domain": "contact",
+      "text": "Reach the clinic at +1 (415) 555-2671",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "International/parenthesised form."
+    },
+    {
+      "id": "adv-D-006",
+      "category": "D",
+      "domain": "contact",
+      "text": "Message 212.555.0199 for results",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Dot-separated NANP."
+    },
+    {
+      "id": "adv-D-007",
+      "category": "D",
+      "domain": "contact",
+      "text": "tel 305-555-0123 to confirm",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "'tel' token preceding a hyphen number."
+    },
+    {
+      "id": "adv-D-008",
+      "category": "D",
+      "domain": "contact",
+      "text": "mobile 646-555-0144 available after hours",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Mobile token preceding hyphen number."
+    },
+    {
+      "id": "adv-D-009",
+      "category": "D",
+      "domain": "contact",
+      "text": "call 415.555.2671 ext 22",
+      "gold_present": [
+        "phone"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Dot phone with extension text."
+    },
+    {
+      "id": "adv-D-010",
+      "category": "D",
+      "domain": "hard_negative",
+      "text": "the value 4155552671 is just a counter",
+      "gold_present": [],
+      "gold_absent": [
+        "phone"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "10-digit run with no separators is not a phone (precision guard)."
+    },
+    {
+      "id": "adv-D-011",
+      "category": "D",
+      "domain": "hard_negative",
+      "text": "the part number 1234567 is obsolete",
+      "gold_present": [],
+      "gold_absent": [
+        "phone"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "7-digit run must not be a phone."
+    },
+    {
+      "id": "adv-D-012",
+      "category": "D",
+      "domain": "hard_negative",
+      "text": "invoice 555-01-23 is not a phone",
+      "gold_present": [],
+      "gold_absent": [
+        "phone"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Short grouped digits are not a phone."
+    },
+    {
+      "id": "adv-E-001",
+      "category": "E",
+      "domain": "contact",
+      "text": "Fax: +1 415-555-8890",
+      "gold_present": [
+        "fax"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled fax with country code."
+    },
+    {
+      "id": "adv-E-002",
+      "category": "E",
+      "domain": "contact",
+      "text": "FAX# 415-555-8890",
+      "gold_present": [
+        "fax"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Fax label with hash."
+    },
+    {
+      "id": "adv-E-003",
+      "category": "E",
+      "domain": "contact",
+      "text": "Fax number: (415) 555-8890",
+      "gold_present": [
+        "fax"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Fax number with parentheses."
+    },
+    {
+      "id": "adv-E-004",
+      "category": "E",
+      "domain": "contact",
+      "text": "Telefax: 415-555-8890",
+      "gold_present": [
+        "fax"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Telefax label."
+    },
+    {
+      "id": "adv-E-005",
+      "category": "E",
+      "domain": "contact",
+      "text": "Facsimile: 415-555-8890",
+      "gold_present": [
+        "fax"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Facsimile label."
+    },
+    {
+      "id": "adv-E-006",
+      "category": "E",
+      "domain": "contact",
+      "text": "Fax: 415 555 8890",
+      "gold_present": [
+        "fax"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Space-separated fax value."
+    },
+    {
+      "id": "adv-E-007",
+      "category": "E",
+      "domain": "contact",
+      "text": "Our fax is 415-555-8890 for referrals.",
+      "gold_present": [
+        "fax"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Fax with no colon/label syntax; generic phone catches the number but fax label does not fire (reproduced FN for fax)."
+    },
+    {
+      "id": "adv-E-008",
+      "category": "E",
+      "domain": "hard_negative",
+      "text": "the tax form 415-55 is incomplete",
+      "gold_present": [],
+      "gold_absent": [
+        "fax"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Too-short grouped digits are not a fax."
+    },
+    {
+      "id": "adv-F-001",
+      "category": "F",
+      "domain": "contact",
+      "text": "Reach the coordinator at maria.gonzalez@example.test",
+      "gold_present": [
+        "email"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Bare email."
+    },
+    {
+      "id": "adv-F-002",
+      "category": "F",
+      "domain": "contact",
+      "text": "Email: john@example.test for scheduling",
+      "gold_present": [
+        "email"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled email."
+    },
+    {
+      "id": "adv-F-003",
+      "category": "F",
+      "domain": "contact",
+      "text": "contact: a.b-c@example.test please",
+      "gold_present": [
+        "email"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Subdomain-style email on the allowed example.test domain."
+    },
+    {
+      "id": "adv-F-004",
+      "category": "F",
+      "domain": "contact",
+      "text": "support+billing@example.test handles queries",
+      "gold_present": [
+        "email"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Plus-tag email."
+    },
+    {
+      "id": "adv-F-005",
+      "category": "F",
+      "domain": "contact",
+      "text": "user_name@example.test is the inbox",
+      "gold_present": [
+        "email"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Underscore local part."
+    },
+    {
+      "id": "adv-F-006",
+      "category": "F",
+      "domain": "hard_negative",
+      "text": "page 3 of 10 in the report",
+      "gold_present": [],
+      "gold_absent": [
+        "email"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "No email structure."
+    },
+    {
+      "id": "adv-F-007",
+      "category": "F",
+      "domain": "hard_negative",
+      "text": "the local account a@b is invalid",
+      "gold_present": [],
+      "gold_absent": [
+        "email"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Email needs a real TLD; a@b is rejected."
+    },
+    {
+      "id": "adv-F-008",
+      "category": "F",
+      "domain": "contact",
+      "text": "Write to first.last@example.test with questions",
+      "gold_present": [
+        "email"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Standard dotted email."
+    },
+    {
+      "id": "adv-G-001",
+      "category": "G",
+      "domain": "intake",
+      "text": "SSN: 123-45-6789. Please verify before enrollment.",
+      "gold_present": [
+        "ssn"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled valid SSN."
+    },
+    {
+      "id": "adv-G-002",
+      "category": "G",
+      "domain": "intake",
+      "text": "Social Security Number: 789 65 4321 on file.",
+      "gold_present": [
+        "ssn"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Space-separated SSN."
+    },
+    {
+      "id": "adv-G-003",
+      "category": "G",
+      "domain": "intake",
+      "text": "SS# 789-65-4320 listed on the form.",
+      "gold_present": [
+        "ssn"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "SS# label."
+    },
+    {
+      "id": "adv-G-004",
+      "category": "G",
+      "domain": "intake",
+      "text": "social security no 123456789 recorded.",
+      "gold_present": [
+        "ssn"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Unseparated SSN matched by the label grammar."
+    },
+    {
+      "id": "adv-G-005",
+      "category": "G",
+      "domain": "clinical_note",
+      "text": "The record shows 123-45-6789 as the identifier.",
+      "gold_present": [
+        "ssn"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Unlabelled canonical 3-2-4 is the SSN shape."
+    },
+    {
+      "id": "adv-G-006",
+      "category": "G",
+      "domain": "clinical_note",
+      "text": "Cross-reference 789-65-4321 in the chart.",
+      "gold_present": [
+        "ssn"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Unlabelled canonical SSN."
+    },
+    {
+      "id": "adv-G-007",
+      "category": "G",
+      "domain": "hard_negative",
+      "text": "SSN 000-12-3456 is an invalid area.",
+      "gold_present": [],
+      "gold_absent": [
+        "ssn"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Area 000 rejected."
+    },
+    {
+      "id": "adv-G-008",
+      "category": "G",
+      "domain": "hard_negative",
+      "text": "SSN 666-12-3456 is unassigned.",
+      "gold_present": [],
+      "gold_absent": [
+        "ssn"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Area 666 rejected."
+    },
+    {
+      "id": "adv-G-009",
+      "category": "G",
+      "domain": "hard_negative",
+      "text": "SSN 123-00-4567 has a bad group.",
+      "gold_present": [],
+      "gold_absent": [
+        "ssn"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Group 00 rejected."
+    },
+    {
+      "id": "adv-G-010",
+      "category": "G",
+      "domain": "hard_negative",
+      "text": "SSN 123-45-0000 has a bad serial.",
+      "gold_present": [],
+      "gold_absent": [
+        "ssn"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Serial 0000 rejected."
+    },
+    {
+      "id": "adv-G-011",
+      "category": "G",
+      "domain": "hard_negative",
+      "text": "the part code 12-3456-789 was scanned.",
+      "gold_present": [],
+      "gold_absent": [
+        "ssn"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Wrong grouping is not an SSN."
+    },
+    {
+      "id": "adv-G-012",
+      "category": "G",
+      "domain": "hard_negative",
+      "text": "the serial 123-00-4567 is not an SSN.",
+      "gold_present": [],
+      "gold_absent": [
+        "ssn"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Bad group serial rejected."
+    },
+    {
+      "id": "adv-H-001",
+      "category": "H",
+      "domain": "record",
+      "text": "Medical record number: MED-772019 referenced in chart.",
+      "gold_present": [
+        "medical_record_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled MRN."
+    },
+    {
+      "id": "adv-H-002",
+      "category": "H",
+      "domain": "record",
+      "text": "MRN: MRN-558201 confirmed.",
+      "gold_present": [
+        "medical_record_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "MRN label."
+    },
+    {
+      "id": "adv-H-003",
+      "category": "H",
+      "domain": "record",
+      "text": "medisch dossiernummer: MDN-44120 archived.",
+      "gold_present": [
+        "medical_record_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Dutch MRN label."
+    },
+    {
+      "id": "adv-H-004",
+      "category": "H",
+      "domain": "record",
+      "text": "Medical Record: MED772019 scanned.",
+      "gold_present": [
+        "medical_record_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "MRN without hyphen in value."
+    },
+    {
+      "id": "adv-H-005",
+      "category": "H",
+      "domain": "record",
+      "text": "Record number: REC-552109 on file.",
+      "gold_present": [
+        "medical_record_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "'record number' is not a recognised MRN label (reproduced FN)."
+    },
+    {
+      "id": "adv-H-006",
+      "category": "H",
+      "domain": "record",
+      "text": "Chart ID: CHART-5521 referenced.",
+      "gold_present": [
+        "medical_record_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "'chart ID' is an MRN analogue but not labelled (reproduced FN)."
+    },
+    {
+      "id": "adv-H-007",
+      "category": "H",
+      "domain": "record",
+      "text": "patient MRN is 558201 in the system.",
+      "gold_present": [
+        "medical_record_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "MRN without colon/separator is not matched (reproduced FN)."
+    },
+    {
+      "id": "adv-H-008",
+      "category": "H",
+      "domain": "hard_negative",
+      "text": "the term MRN alone was mentioned.",
+      "gold_present": [],
+      "gold_absent": [
+        "medical_record_number"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Bare label with no value is not an MRN."
+    },
+    {
+      "id": "adv-I-001",
+      "category": "I",
+      "domain": "insurance",
+      "text": "Member ID: MBR-448821039 on the card.",
+      "gold_present": [
+        "health_plan_beneficiary"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Member ID label."
+    },
+    {
+      "id": "adv-I-002",
+      "category": "I",
+      "domain": "insurance",
+      "text": "Subscriber ID: SUB-90012773 verified.",
+      "gold_present": [
+        "health_plan_beneficiary"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Subscriber ID label."
+    },
+    {
+      "id": "adv-I-003",
+      "category": "I",
+      "domain": "insurance",
+      "text": "Beneficiary ID: BEN-55210983 active.",
+      "gold_present": [
+        "health_plan_beneficiary"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Beneficiary ID label."
+    },
+    {
+      "id": "adv-I-004",
+      "category": "I",
+      "domain": "insurance",
+      "text": "Insurance ID: INS-552109 current.",
+      "gold_present": [
+        "health_plan_beneficiary"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Insurance ID label."
+    },
+    {
+      "id": "adv-I-005",
+      "category": "I",
+      "domain": "insurance",
+      "text": "Payer ID: PAY-552109 billed.",
+      "gold_present": [
+        "health_plan_beneficiary"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Payer ID label."
+    },
+    {
+      "id": "adv-I-006",
+      "category": "I",
+      "domain": "insurance",
+      "text": "Health plan number: HPN-552109 listed.",
+      "gold_present": [
+        "health_plan_beneficiary"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Health plan number label."
+    },
+    {
+      "id": "adv-I-007",
+      "category": "I",
+      "domain": "hard_negative",
+      "text": "member since 2020 with the plan.",
+      "gold_present": [],
+      "gold_absent": [
+        "health_plan_beneficiary"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "'member since' is not a beneficiary ID label."
+    },
+    {
+      "id": "adv-I-008",
+      "category": "I",
+      "domain": "record",
+      "text": "Patient ID: PAT-552109 cross-referenced.",
+      "gold_present": [],
+      "gold_absent": [
+        "health_plan_beneficiary"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Patient ID must not be misclassified as a health-plan beneficiary."
+    },
+    {
+      "id": "adv-I-009",
+      "category": "I",
+      "domain": "insurance",
+      "text": "MBR55210983 is the printed number.",
+      "gold_present": [
+        "health_plan_beneficiary"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "MBR without hyphen/separator is not matched by label or prefix (FN)."
+    },
+    {
+      "id": "adv-I-010",
+      "category": "I",
+      "domain": "insurance",
+      "text": "Member No: MBR 448821039 on file.",
+      "gold_present": [
+        "health_plan_beneficiary"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Value containing a space is rejected by the identifier grammar (FN)."
+    },
+    {
+      "id": "adv-J-001",
+      "category": "J",
+      "domain": "financial",
+      "text": "Account No: ACC-773102884 billed this month.",
+      "gold_present": [
+        "account_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Account No label."
+    },
+    {
+      "id": "adv-J-002",
+      "category": "J",
+      "domain": "financial",
+      "text": "Account number: ACC-773102884 current.",
+      "gold_present": [
+        "account_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Account number label."
+    },
+    {
+      "id": "adv-J-003",
+      "category": "J",
+      "domain": "financial",
+      "text": "Bank account reference: BAR-55210983 noted.",
+      "gold_present": [
+        "bank_account_reference"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Bank account reference label."
+    },
+    {
+      "id": "adv-J-004",
+      "category": "J",
+      "domain": "financial",
+      "text": "Payment reference: PAYREF-552109 cleared.",
+      "gold_present": [
+        "payment_reference"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Payment reference label."
+    },
+    {
+      "id": "adv-J-005",
+      "category": "J",
+      "domain": "financial",
+      "text": "acct: 441029 settled.",
+      "gold_present": [
+        "account_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "'acct' label."
+    },
+    {
+      "id": "adv-J-006",
+      "category": "J",
+      "domain": "financial",
+      "text": "Account #: 773102884 overdue.",
+      "gold_present": [
+        "account_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "'account #' label."
+    },
+    {
+      "id": "adv-J-007",
+      "category": "J",
+      "domain": "hard_negative",
+      "text": "the account is closed, no number given.",
+      "gold_present": [],
+      "gold_absent": [
+        "account_number"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "No value; not an account number."
+    },
+    {
+      "id": "adv-J-008",
+      "category": "J",
+      "domain": "hard_negative",
+      "text": "reference 12345 mentioned in passing.",
+      "gold_present": [],
+      "gold_absent": [
+        "account_number"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Generic number without a label is not an account number."
+    },
+    {
+      "id": "adv-J-009",
+      "category": "J",
+      "domain": "financial",
+      "text": "Account No ACC-773102884 was reused.",
+      "gold_present": [
+        "account_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Account label without colon/separator is not matched (FN)."
+    },
+    {
+      "id": "adv-J-010",
+      "category": "J",
+      "domain": "financial",
+      "text": "bank account ref BAR-55210983 pending.",
+      "gold_present": [
+        "bank_account_reference"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Label without separator is not matched (FN)."
+    },
+    {
+      "id": "adv-J-011",
+      "category": "J",
+      "domain": "financial",
+      "text": "payment ref: PAYREF 552109 posted.",
+      "gold_present": [
+        "payment_reference"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Space in value rejected by grammar (FN)."
+    },
+    {
+      "id": "adv-J-012",
+      "category": "J",
+      "domain": "financial",
+      "text": "ACC773102884 appeared on the statement.",
+      "gold_present": [
+        "account_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "ACC prefix without hyphen/separator is not matched (FN)."
+    },
+    {
+      "id": "adv-K-001",
+      "category": "K",
+      "domain": "license",
+      "text": "Driver license: DL-A9920314 presented.",
+      "gold_present": [
+        "driving_licence_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Driver license label."
+    },
+    {
+      "id": "adv-K-002",
+      "category": "K",
+      "domain": "license",
+      "text": "Driving licence number: DL-9920314 shown.",
+      "gold_present": [
+        "driving_licence_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Driving licence number label."
+    },
+    {
+      "id": "adv-K-003",
+      "category": "K",
+      "domain": "license",
+      "text": "Passport: P-55210983 on record.",
+      "gold_present": [
+        "passport_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Passport label."
+    },
+    {
+      "id": "adv-K-004",
+      "category": "K",
+      "domain": "license",
+      "text": "National ID: NID-55210983 verified.",
+      "gold_present": [
+        "national_id"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "National ID label."
+    },
+    {
+      "id": "adv-K-005",
+      "category": "K",
+      "domain": "license",
+      "text": "rijbewijs: RBW-552109 valid.",
+      "gold_present": [
+        "driving_licence_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Dutch driving licence label."
+    },
+    {
+      "id": "adv-K-006",
+      "category": "K",
+      "domain": "license",
+      "text": "paspoortnummer: PASP-552109 valid.",
+      "gold_present": [
+        "passport_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Dutch passport label."
+    },
+    {
+      "id": "adv-K-007",
+      "category": "K",
+      "domain": "license",
+      "text": "ID number: IDN-55210983 recorded.",
+      "gold_present": [
+        "national_id"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "ID number label."
+    },
+    {
+      "id": "adv-K-008",
+      "category": "K",
+      "domain": "license",
+      "text": "passport number: AB1234567 issued.",
+      "gold_present": [
+        "passport_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Alphanumeric passport value."
+    },
+    {
+      "id": "adv-K-009",
+      "category": "K",
+      "domain": "hard_negative",
+      "text": "license plate 8KGD204 is a vehicle mark.",
+      "gold_present": [],
+      "gold_absent": [
+        "driving_licence_number",
+        "national_id",
+        "passport_number"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Licence plate is category L, not a K certificate (no false K)."
+    },
+    {
+      "id": "adv-K-010",
+      "category": "K",
+      "domain": "hard_negative",
+      "text": "certificate of completion was issued.",
+      "gold_present": [],
+      "gold_absent": [
+        "driving_licence_number",
+        "national_id",
+        "passport_number"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Occupational certificates are not enumerated (documented K gap)."
+    },
+    {
+      "id": "adv-K-011",
+      "category": "K",
+      "domain": "license",
+      "text": "Driver licence: CA 9920314 on file.",
+      "gold_present": [
+        "driving_licence_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Space in value rejected by identifier grammar (FN)."
+    },
+    {
+      "id": "adv-K-012",
+      "category": "K",
+      "domain": "license",
+      "text": "Passport: AB 1234567 presented.",
+      "gold_present": [
+        "passport_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Space in value rejected by grammar (FN)."
+    },
+    {
+      "id": "adv-K-013",
+      "category": "K",
+      "domain": "license",
+      "text": "National ID: XY 55210983 shown.",
+      "gold_present": [
+        "national_id"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Space in value rejected by grammar (FN)."
+    },
+    {
+      "id": "adv-K-014",
+      "category": "K",
+      "domain": "license",
+      "text": "DL-A9920314 found on the form.",
+      "gold_present": [
+        "driving_licence_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "DL prefix detected without a label."
+    },
+    {
+      "id": "adv-L-001",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "VIN: 1M8GDM9AXKP042788 recorded for the vehicle.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled VIN."
+    },
+    {
+      "id": "adv-L-002",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "License plate: 8KGD204 observed at scene.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Licence plate label."
+    },
+    {
+      "id": "adv-L-003",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "Vehicle identification number: 1M8GDM9AXKP042788 logged.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "VIN label full form."
+    },
+    {
+      "id": "adv-L-004",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "Chassis number: CHS-55210983 stamped.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Chassis number label."
+    },
+    {
+      "id": "adv-L-005",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "Plate no: 8KGD204 photographed.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Plate no label."
+    },
+    {
+      "id": "adv-L-006",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "Plate number: 8KGD204 noted.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Plate number label."
+    },
+    {
+      "id": "adv-L-007",
+      "category": "L",
+      "domain": "hard_negative",
+      "text": "the word vin appeared in unrelated text.",
+      "gold_present": [],
+      "gold_absent": [
+        "vehicle_identifier"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Lowercase 'vin' with no 17-char value is not a VIN."
+    },
+    {
+      "id": "adv-L-008",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "VIN 1M8GDM9AXKP042788 on the door.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "VIN without colon/separator is not matched by the label rule (FN)."
+    },
+    {
+      "id": "adv-L-009",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "license plate 8KGD204 was recorded.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Plate label without separator is not matched (FN)."
+    },
+    {
+      "id": "adv-L-010",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "VIN: 1M8GDM9A0KP042788 (check digit not validated).",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Labelled VIN is detected even with an invalid North American check digit; documented quality gap, not a detection miss."
+    },
+    {
+      "id": "adv-L-011",
+      "category": "L",
+      "domain": "hard_negative",
+      "text": "The batch token 1Z8GDM9AXKP04278Q is 17 chars with excluded letters.",
+      "gold_present": [],
+      "gold_absent": [
+        "vehicle_identifier"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Excluded letters make it not a VIN; no false positive."
+    },
+    {
+      "id": "adv-L-012",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "vin: 1m8gdm9axkp042788 lowercased.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Case-insensitive VIN label."
+    },
+    {
+      "id": "adv-L-013",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "Chassis no: CHS-55210983 present.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Chassis no label."
+    },
+    {
+      "id": "adv-L-014",
+      "category": "L",
+      "domain": "vehicle",
+      "text": "The recovered car had 1M8GDM9AXKP042788 stamped on the dash.",
+      "gold_present": [
+        "vehicle_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Unlabelled VIN is a documented gap (FN)."
+    },
+    {
+      "id": "adv-M-001",
+      "category": "M",
+      "domain": "device",
+      "text": "Device identifier: DEV-55120983 implanted 2020.",
+      "gold_present": [
+        "device_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled device identifier."
+    },
+    {
+      "id": "adv-M-002",
+      "category": "M",
+      "domain": "device",
+      "text": "Device ID: DEV-55120983 serialised.",
+      "gold_present": [
+        "device_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Device ID label."
+    },
+    {
+      "id": "adv-M-003",
+      "category": "M",
+      "domain": "device",
+      "text": "apparaat-ID: DEV-55120983 geactiveerd.",
+      "gold_present": [
+        "device_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Dutch device label."
+    },
+    {
+      "id": "adv-M-004",
+      "category": "M",
+      "domain": "device",
+      "text": "Device: DEV-55120983 in service.",
+      "gold_present": [
+        "device_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "DEV prefix detected without explicit label."
+    },
+    {
+      "id": "adv-M-005",
+      "category": "M",
+      "domain": "device",
+      "text": "Serial No: SN-55210983 on the pump.",
+      "gold_present": [
+        "device_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Serial numbers are part of Safe Harbor category M but 'serial' is not a device label; reproduced FN (M is over-claimed as FULL)."
+    },
+    {
+      "id": "adv-M-006",
+      "category": "M",
+      "domain": "device",
+      "text": "Serial number: SN55210983 recorded.",
+      "gold_present": [
+        "device_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Unprefixed serial number not detected (FN)."
+    },
+    {
+      "id": "adv-M-007",
+      "category": "M",
+      "domain": "hard_negative",
+      "text": "the device was replaced last week.",
+      "gold_present": [],
+      "gold_absent": [
+        "device_identifier"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "No identifier present."
+    },
+    {
+      "id": "adv-M-008",
+      "category": "M",
+      "domain": "device",
+      "text": "DEV55120983 printed on the casing.",
+      "gold_present": [
+        "device_identifier"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "DEV prefix without hyphen/separator is not matched (FN)."
+    },
+    {
+      "id": "adv-N-001",
+      "category": "N",
+      "domain": "web",
+      "text": "Patient summary at https://summary.example.test/patient shared.",
+      "gold_present": [
+        "url"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "External https URL."
+    },
+    {
+      "id": "adv-N-002",
+      "category": "N",
+      "domain": "web",
+      "text": "Record posted at http://example.test/portal/record externally.",
+      "gold_present": [
+        "internal_url"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Path '/portal/' marks the URL as internal."
+    },
+    {
+      "id": "adv-N-003",
+      "category": "N",
+      "domain": "web",
+      "text": "Internal case at https://example.test/case-management/12.",
+      "gold_present": [
+        "internal_url"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Path '/case-management' marks the URL as internal."
+    },
+    {
+      "id": "adv-N-004",
+      "category": "N",
+      "domain": "web",
+      "text": "Login link https://example.test/login?token=abc123.",
+      "gold_present": [
+        "sensitive_url_parameter"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Token query parameter."
+    },
+    {
+      "id": "adv-N-005",
+      "category": "N",
+      "domain": "web",
+      "text": "See www.example.test/page for details.",
+      "gold_present": [
+        "url"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "WWW URL."
+    },
+    {
+      "id": "adv-N-006",
+      "category": "N",
+      "domain": "web",
+      "text": "Portal https://example.test/patient?id=552109 opened.",
+      "gold_present": [
+        "url"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Bare 'id' query key is not in the sensitive-query set; external URL."
+    },
+    {
+      "id": "adv-N-007",
+      "category": "N",
+      "domain": "web",
+      "text": "Public docs at https://public.example.test/docs available.",
+      "gold_present": [
+        "url"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "External public URL."
+    },
+    {
+      "id": "adv-N-008",
+      "category": "N",
+      "domain": "web",
+      "text": "Admin console https://10.0.0.5/admin reachable.",
+      "gold_present": [
+        "internal_url"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Private IP host + admin path."
+    },
+    {
+      "id": "adv-N-009",
+      "category": "N",
+      "domain": "hard_negative",
+      "text": "the string http:// was left incomplete.",
+      "gold_present": [],
+      "gold_absent": [
+        "url"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "No host; not a URL."
+    },
+    {
+      "id": "adv-N-010",
+      "category": "N",
+      "domain": "hard_negative",
+      "text": "ftp server at ftp.example.test hosts files.",
+      "gold_present": [],
+      "gold_absent": [
+        "url"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "FTP host without http/www is not a detected URL."
+    },
+    {
+      "id": "adv-O-001",
+      "category": "O",
+      "domain": "network",
+      "text": "Remote session from 203.0.113.45 logged.",
+      "gold_present": [
+        "ipv4"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Public IPv4."
+    },
+    {
+      "id": "adv-O-002",
+      "category": "O",
+      "domain": "network",
+      "text": "Tunnel endpoint 2001:db8::1 established.",
+      "gold_present": [
+        "ipv6"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "IPv6 documentation address."
+    },
+    {
+      "id": "adv-O-003",
+      "category": "O",
+      "domain": "network",
+      "text": "Traffic from 198.51.100.23 and 2001:db8::2 observed.",
+      "gold_present": [
+        "ipv4",
+        "ipv6"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Mixed IPv4/IPv6."
+    },
+    {
+      "id": "adv-O-004",
+      "category": "O",
+      "domain": "network",
+      "text": "IPv4: 192.0.2.1 configured.",
+      "gold_present": [
+        "ipv4"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled IPv4."
+    },
+    {
+      "id": "adv-O-005",
+      "category": "O",
+      "domain": "network",
+      "text": "IPv6 address 2001:db8:abcd:12::1 assigned.",
+      "gold_present": [
+        "ipv6"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Labelled IPv6."
+    },
+    {
+      "id": "adv-O-006",
+      "category": "O",
+      "domain": "network",
+      "text": "Local hosts 192.168.0.1 and 10.0.0.1 contacted.",
+      "gold_present": [
+        "ipv4",
+        "ipv4"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Private IPv4 pair."
+    },
+    {
+      "id": "adv-O-007",
+      "category": "O",
+      "domain": "hard_negative",
+      "text": "the ratio 1.2.3 is not an address.",
+      "gold_present": [],
+      "gold_absent": [
+        "ipv4"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Three octets is not an IPv4."
+    },
+    {
+      "id": "adv-O-008",
+      "category": "O",
+      "domain": "hard_negative",
+      "text": "the value 256.1.1.1 is out of range.",
+      "gold_present": [],
+      "gold_absent": [
+        "ipv4"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Invalid octet rejected by ipaddress validator (precision guard)."
+    },
+    {
+      "id": "adv-P-001",
+      "category": "P",
+      "domain": "biometric",
+      "text": "Fingerprint template BIO-FP-5521 stored.",
+      "gold_present": [
+        "biometric_data"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "BIO prefix biometric."
+    },
+    {
+      "id": "adv-P-002",
+      "category": "P",
+      "domain": "biometric",
+      "text": "Face scan FACE-5521 enrolled.",
+      "gold_present": [
+        "biometric_data"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "FACE prefix biometric."
+    },
+    {
+      "id": "adv-P-003",
+      "category": "P",
+      "domain": "biometric",
+      "text": "Iris image IRIS-5521 captured.",
+      "gold_present": [
+        "biometric_data"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "IRIS prefix biometric."
+    },
+    {
+      "id": "adv-P-004",
+      "category": "P",
+      "domain": "biometric",
+      "text": "Voice print VOICE-5521 on file.",
+      "gold_present": [
+        "biometric_data"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "VOICE prefix biometric."
+    },
+    {
+      "id": "adv-P-005",
+      "category": "P",
+      "domain": "biometric",
+      "text": "Genetic marker GEN-5521 sequenced.",
+      "gold_present": [
+        "genetic_data"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "GEN prefix genetic."
+    },
+    {
+      "id": "adv-P-006",
+      "category": "P",
+      "domain": "biometric",
+      "text": "Biometric: BIO-FP-5521 retained.",
+      "gold_present": [
+        "biometric_data"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "BIO prefix detected."
+    },
+    {
+      "id": "adv-P-007",
+      "category": "P",
+      "domain": "biometric",
+      "text": "DNA sequencing results indicate familial risk.",
+      "gold_present": [
+        "genetic_data"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Textual DNA reference is genetic data but not enumerated (FN, documented P gap)."
+    },
+    {
+      "id": "adv-P-008",
+      "category": "P",
+      "domain": "hard_negative",
+      "text": "the patient has a heart murmur.",
+      "gold_present": [],
+      "gold_absent": [
+        "biometric_data",
+        "genetic_data"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Clinical note, not a biometric/genetic identifier."
+    },
+    {
+      "id": "adv-Q-001",
+      "category": "Q",
+      "domain": "image_limitation",
+      "text": "Attached full-face photograph of the patient for identification.",
+      "gold_present": [],
+      "gold_absent": [
+        "us_zip",
+        "ssn",
+        "vehicle_identifier"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Images are unsupported; text-only engine must detect nothing here."
+    },
+    {
+      "id": "adv-Q-002",
+      "category": "Q",
+      "domain": "image_limitation",
+      "text": "Scanned driver license image included in the upload.",
+      "gold_present": [],
+      "gold_absent": [
+        "us_zip",
+        "ssn",
+        "vehicle_identifier"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Image content is out of scope for the text engine."
+    },
+    {
+      "id": "adv-Q-003",
+      "category": "Q",
+      "domain": "image_limitation",
+      "text": "Comparable image with identifiable facial features attached.",
+      "gold_present": [],
+      "gold_absent": [
+        "us_zip",
+        "ssn",
+        "vehicle_identifier"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Unsupported category Q."
+    },
+    {
+      "id": "adv-Q-004",
+      "category": "Q",
+      "domain": "image_limitation",
+      "text": "X-ray film of the chest stored in the image archive.",
+      "gold_present": [],
+      "gold_absent": [
+        "us_zip",
+        "ssn",
+        "vehicle_identifier"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Image unsupported; absence of a finding is expected, not compliance."
+    },
+    {
+      "id": "adv-R-001",
+      "category": "R",
+      "domain": "record",
+      "text": "Patient number: PAT-772019 cross-referenced.",
+      "gold_present": [
+        "patient_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Patient number label."
+    },
+    {
+      "id": "adv-R-002",
+      "category": "R",
+      "domain": "record",
+      "text": "Case number: CASE-551209 opened.",
+      "gold_present": [
+        "case_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Case number label."
+    },
+    {
+      "id": "adv-R-003",
+      "category": "R",
+      "domain": "hr",
+      "text": "Employee ID: EMP-552109 on payroll.",
+      "gold_present": [
+        "employee_id"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Employee ID label."
+    },
+    {
+      "id": "adv-R-004",
+      "category": "R",
+      "domain": "record",
+      "text": "Customer number: CUST-552109 active.",
+      "gold_present": [
+        "customer_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Customer number label."
+    },
+    {
+      "id": "adv-R-005",
+      "category": "R",
+      "domain": "hr",
+      "text": "Payroll number: PAYROLL-552109 current.",
+      "gold_present": [
+        "payroll_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Payroll number label."
+    },
+    {
+      "id": "adv-R-006",
+      "category": "R",
+      "domain": "financial",
+      "text": "Invoice number: INV-552109 sent.",
+      "gold_present": [
+        "invoice_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Invoice number label."
+    },
+    {
+      "id": "adv-R-007",
+      "category": "R",
+      "domain": "insurance",
+      "text": "Policy number: POL-552109 renewed.",
+      "gold_present": [
+        "policy_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Policy number label."
+    },
+    {
+      "id": "adv-R-008",
+      "category": "R",
+      "domain": "record",
+      "text": "Patient ID: PAT-772019 verified.",
+      "gold_present": [
+        "patient_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Patient ID label."
+    },
+    {
+      "id": "adv-R-009",
+      "category": "R",
+      "domain": "record",
+      "text": "Case ID: CASE-551209 indexed.",
+      "gold_present": [
+        "case_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Case ID label."
+    },
+    {
+      "id": "adv-R-010",
+      "category": "R",
+      "domain": "record",
+      "text": "Customer ID: CUST-552109 looked up.",
+      "gold_present": [
+        "customer_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Customer ID label."
+    },
+    {
+      "id": "adv-R-011",
+      "category": "R",
+      "domain": "hr",
+      "text": "Employee number: EMP-552109 filed.",
+      "gold_present": [
+        "employee_id"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Employee number label."
+    },
+    {
+      "id": "adv-R-012",
+      "category": "R",
+      "domain": "financial",
+      "text": "Invoice ID: INV-552109 paid.",
+      "gold_present": [
+        "invoice_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "Invoice ID label."
+    },
+    {
+      "id": "adv-R-013",
+      "category": "R",
+      "domain": "insurance",
+      "text": "Policy number POL 552109 renewed.",
+      "gold_present": [
+        "policy_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Space in value rejected by grammar though POL prefix exists (FN)."
+    },
+    {
+      "id": "adv-R-014",
+      "category": "R",
+      "domain": "record",
+      "text": "Patient No: PAT 772019 verified.",
+      "gold_present": [
+        "patient_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Space in value rejected by grammar (FN)."
+    },
+    {
+      "id": "adv-R-015",
+      "category": "R",
+      "domain": "hard_negative",
+      "text": "the number 552109 alone was mentioned.",
+      "gold_present": [],
+      "gold_absent": [
+        "patient_number",
+        "case_number",
+        "employee_id",
+        "customer_number",
+        "payroll_number",
+        "invoice_number",
+        "policy_number"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "Bare number without label/prefix is not a unique identifier."
+    },
+    {
+      "id": "adv-R-016",
+      "category": "R",
+      "domain": "hard_negative",
+      "text": "order case 12 of 30 was processed.",
+      "gold_present": [],
+      "gold_absent": [
+        "case_number"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "'case 12' without 'number'/'ID' label is not a case number."
+    },
+    {
+      "id": "adv-R-017",
+      "category": "R",
+      "domain": "record",
+      "text": "KLANT-552109 is the Dutch customer key.",
+      "gold_present": [
+        "customer_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "KLANT prefix."
+    },
+    {
+      "id": "adv-R-018",
+      "category": "R",
+      "domain": "record",
+      "text": "ZAAK-552109 is the Dutch case key.",
+      "gold_present": [
+        "case_number"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": false,
+      "rationale": "ZAAK prefix."
+    },
+    {
+      "id": "adv-R-019",
+      "category": "R",
+      "domain": "clinical_note",
+      "text": "Relationship: spouse is listed as the emergency contact.",
+      "gold_present": [
+        "relationship"
+      ],
+      "gold_absent": [],
+      "hard_negative": false,
+      "adversarial": true,
+      "rationale": "Relationship is a Safe Harbor category R type but has no detector (FN)."
+    },
+    {
+      "id": "adv-R-020",
+      "category": "R",
+      "domain": "hard_negative",
+      "text": "the patient is clinically stable today.",
+      "gold_present": [],
+      "gold_absent": [
+        "patient_number",
+        "case_number",
+        "employee_id",
+        "customer_number",
+        "payroll_number",
+        "invoice_number",
+        "policy_number"
+      ],
+      "hard_negative": true,
+      "adversarial": false,
+      "rationale": "No unique identifier present."
+    }
+  ]
+}

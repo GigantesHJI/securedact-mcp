@@ -48,6 +48,13 @@ from .firewall import (
     rule_allows_protected,
     validate_firewall_policy,
 )
+from .hipaa import (
+    HIPAA_CATEGORY_METADATA,
+    HipaaContextualMetadata,
+    HipaaSafeHarborResult,
+    HipaaSafeHarborStatus,
+    run_hipaa_safe_harbor,
+)
 from .model_management import (
     InstalledModel,
     IntegrityStatus,
@@ -117,6 +124,7 @@ __all__ = [
     "CATEGORY_DEFINITIONS",
     "CRITICAL_TYPES",
     "DEFAULT_READ_MAX_BYTES",
+    "HIPAA_CATEGORY_METADATA",
     "MAX_INSPECTION_TEXT_CHARS",
     "MAX_TOOL_RESULT_CHARS",
     "PRODUCTION_DETERMINISTIC_DETECTORS",
@@ -139,6 +147,9 @@ __all__ = [
     "FirewallDecision",
     "FirewallPolicy",
     "FirewallRule",
+    "HipaaContextualMetadata",
+    "HipaaSafeHarborResult",
+    "HipaaSafeHarborStatus",
     "IndirectDisclosureRisk",
     "InstalledModel",
     "IntegrityStatus",
@@ -210,6 +221,7 @@ __all__ = [
     "read_file_safely",
     "recursive_text_length",
     "rule_allows_protected",
+    "run_hipaa_safe_harbor",
     "set_audit_sink",
     "validate_firewall_policy",
     "verify_model_pack",

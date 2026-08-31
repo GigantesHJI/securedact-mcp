@@ -1,0 +1,312 @@
+{
+  "samples": 202,
+  "overall": {
+    "tp": 150,
+    "fp": 0,
+    "fn": 15,
+    "precision": 1.0,
+    "recall": 0.9090909090909091,
+    "f1": 0.9523809523809523
+  },
+  "by_category": {
+    "A": {
+      "samples": 12,
+      "tp": 2,
+      "fp": 0,
+      "fn": 7,
+      "known_missing": [
+        {
+          "id": "adv-A-002",
+          "domain": "intake",
+          "missing": [
+            "person"
+          ],
+          "text": "Patient: Maria Gonzalez",
+          "adversarial": false,
+          "rationale": "Labelled patient name detected."
+        },
+        {
+          "id": "adv-A-003",
+          "domain": "clinical_note",
+          "missing": [
+            "person"
+          ],
+          "text": "Attending physician: Jane Doe",
+          "adversarial": false,
+          "rationale": "Labelled attending name detected."
+        },
+        {
+          "id": "adv-A-005",
+          "domain": "clinical_note",
+          "missing": [
+            "person"
+          ],
+          "text": "John Smith presented with chest pain and was admitted.",
+          "adversarial": true,
+          "rationale": "Unlabelled free-text name; without the contextual model it is a reproduced FN."
+        },
+        {
+          "id": "adv-A-006",
+          "domain": "clinical_note",
+          "missing": [
+            "person"
+          ],
+          "text": "The patient, Mary Johnson, was discharged to home care.",
+          "adversarial": true,
+          "rationale": "Unlabelled free-text name; reproduced FN without Flair."
+        },
+        {
+          "id": "adv-A-007",
+          "domain": "clinical_note",
+          "missing": [
+            "person"
+          ],
+          "text": "Next of kin is Emily Carter who will coordinate follow-up.",
+          "adversarial": true,
+          "rationale": "'next of kin:' is not a name label; reproduced FN."
+        },
+        {
+          "id": "adv-A-008",
+          "domain": "clinical_note",
+          "missing": [
+            "person"
+          ],
+          "text": "Emergency contact on file is Olivia Bennett.",
+          "adversarial": true,
+          "rationale": "'emergency contact:' not a name label; reproduced FN."
+        },
+        {
+          "id": "adv-A-012",
+          "domain": "intake",
+          "missing": [
+            "person"
+          ],
+          "text": "Son of Mr. Lee was notified of the results.",
+          "adversarial": true,
+          "rationale": "'Mr. Lee' is a person reference but no name label matches; reproduced FN."
+        }
+      ],
+      "known_extra": []
+    },
+    "B": {
+      "samples": 16,
+      "tp": 10,
+      "fp": 0,
+      "fn": 5,
+      "known_missing": [
+        {
+          "id": "adv-B-001",
+          "domain": "address",
+          "missing": [
+            "address"
+          ],
+          "text": "14 Birchwood Lane, Springfield, IL 62704, United States.",
+          "adversarial": false,
+          "rationale": "Full street address + state-qualified ZIP."
+        },
+        {
+          "id": "adv-B-007",
+          "domain": "address",
+          "missing": [
+            "address"
+          ],
+          "text": "14 Birchwood Lane, Springfield, IL 62704",
+          "adversarial": false,
+          "rationale": "Address without trailing country."
+        },
+        {
+          "id": "adv-B-010",
+          "domain": "address",
+          "missing": [
+            "address"
+          ],
+          "text": "Street: 100 Main St, Apt 4B, Denver CO 80203",
+          "adversarial": false,
+          "rationale": "Street address with state-qualified ZIP."
+        },
+        {
+          "id": "adv-B-014",
+          "domain": "clinical_note",
+          "missing": [
+            "location"
+          ],
+          "text": "The patient resides in Chicago, Illinois near the lake.",
+          "adversarial": true,
+          "rationale": "City/state is a Safe Harbor geographic identifier; undetected without Flair (FN)."
+        },
+        {
+          "id": "adv-B-015",
+          "domain": "clinical_note",
+          "missing": [
+            "location"
+          ],
+          "text": "Transferred from Los Angeles, California to a rural clinic.",
+          "adversarial": true,
+          "rationale": "City/state geographic identifier; reproduced FN without contextual model."
+        }
+      ],
+      "known_extra": []
+    },
+    "C": {
+      "samples": 18,
+      "tp": 18,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "D": {
+      "samples": 12,
+      "tp": 9,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "E": {
+      "samples": 8,
+      "tp": 7,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "F": {
+      "samples": 8,
+      "tp": 6,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "G": {
+      "samples": 12,
+      "tp": 6,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "H": {
+      "samples": 8,
+      "tp": 7,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "I": {
+      "samples": 10,
+      "tp": 8,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "J": {
+      "samples": 12,
+      "tp": 10,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "K": {
+      "samples": 14,
+      "tp": 12,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "L": {
+      "samples": 14,
+      "tp": 11,
+      "fp": 0,
+      "fn": 1,
+      "known_missing": [
+        {
+          "id": "adv-L-014",
+          "domain": "vehicle",
+          "missing": [
+            "vehicle_identifier"
+          ],
+          "text": "The recovered car had 1M8GDM9AXKP042788 stamped on the dash.",
+          "adversarial": true,
+          "rationale": "Unlabelled VIN is a documented gap (FN)."
+        }
+      ],
+      "known_extra": []
+    },
+    "M": {
+      "samples": 8,
+      "tp": 7,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "N": {
+      "samples": 10,
+      "tp": 8,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "O": {
+      "samples": 8,
+      "tp": 7,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "P": {
+      "samples": 8,
+      "tp": 6,
+      "fp": 0,
+      "fn": 1,
+      "known_missing": [
+        {
+          "id": "adv-P-007",
+          "domain": "biometric",
+          "missing": [
+            "genetic_data"
+          ],
+          "text": "DNA sequencing results indicate familial risk.",
+          "adversarial": true,
+          "rationale": "Textual DNA reference is genetic data but not enumerated (FN, documented P gap)."
+        }
+      ],
+      "known_extra": []
+    },
+    "Q": {
+      "samples": 4,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "known_missing": [],
+      "known_extra": []
+    },
+    "R": {
+      "samples": 20,
+      "tp": 16,
+      "fp": 0,
+      "fn": 1,
+      "known_missing": [
+        {
+          "id": "adv-R-019",
+          "domain": "clinical_note",
+          "missing": [
+            "relationship"
+          ],
+          "text": "Relationship: spouse is listed as the emergency contact.",
+          "adversarial": true,
+          "rationale": "Relationship is a Safe Harbor category R type but has no detector (FN)."
+        }
+      ],
+      "known_extra": []
+    }
+  }
+}

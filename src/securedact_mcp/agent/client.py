@@ -240,6 +240,33 @@ class ControlPlaneClient:
         resp = self._post(f"/v1/agents/jobs/{job_id}/result", auth=True, json_body=body)
         return self._ok(resp, 200, "result submission")
 
+    def list_eligible_google_integrations(
+        self, *, agent_identity: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return eligible Google Workspace integrations for the agent's organization.
+
+        Calls ``GET /v1/agents/integrations/eligible`` which requires agent
+        authentication. Returns a list of integration objects with ``id``,
+        ``platform``, and ``display_name``.
+        """
+        resp = self._transport.get(
+            f"{self._base}/v1/agents/integrations/eligible",
+            headers={"User-Agent": self._user_agent, "Authorization": self._credential_provider().authorization_header},
+        )
+        if resp.status == 401:
+            raise AgentCredentialError("agent credential invalid")
+        if resp.status != 200:
+            raise ControlPlaneError(
+                "failed to list eligible integrations",
+                status=resp.status,
+                retryable=resp.status >= 500,
+            )
+        body = resp.body or {}
+        integrations = body.get("integrations", [])
+        if not isinstance(integrations, list):
+            return []
+        return integrations
+
 
 def _require_jwt(body: dict[str, Any], what: str) -> str:
     token = body.get("entitlement")

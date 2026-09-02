@@ -28,6 +28,7 @@ import pytest
 
 import securedact_mcp.agent.provider_google as provider_google
 import securedact_mcp.connectors.google.client as google_client_mod
+import securedact_mcp.connectors.google.auth as google_auth_mod
 from securedact_core import SecuredactEngine
 from securedact_core.connectors.google import (
     CANONICAL_DRIVE_BASE,
@@ -181,7 +182,14 @@ def _patch_google_client(monkeypatch, transport):
     def fake_build(config, eng, *, transport=None, user_id=None):
         return GoogleConnectorClient(config, eng, transport=captured, user_id="user-123")
 
+    def fake_load_credentials(config):
+        # Return a dummy credential object that the client can use
+        class FakeCreds:
+            pass
+        return FakeCreds()
+
     monkeypatch.setattr(google_client_mod, "build_client", fake_build)
+    monkeypatch.setattr(google_auth_mod, "load_credentials", fake_load_credentials)
     return transport
 
 

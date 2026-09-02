@@ -191,8 +191,18 @@ def test_provider_scan_uses_resolved_profile(tmp_path, monkeypatch):
         captured["profile"] = profile
         return object()
 
+    def fake_load_credentials(config):
+        # Return a dummy credential object
+        class FakeCreds:
+            pass
+        return FakeCreds()
+
     config_mod = types.SimpleNamespace(
         GoogleConfigError=GoogleConfigError, load_google_config=fake_load
+    )
+
+    auth_mod = types.SimpleNamespace(
+        load_credentials=fake_load_credentials
     )
 
     def fake_import(name, *args, **kwargs):
@@ -200,6 +210,8 @@ def test_provider_scan_uses_resolved_profile(tmp_path, monkeypatch):
             return client_mod
         if name.endswith(".config"):
             return config_mod
+        if name.endswith(".auth"):
+            return auth_mod
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(provider_google.importlib, "import_module", fake_import)
@@ -237,8 +249,17 @@ def test_bound_profile_config_invalid_fails_closed(tmp_path, monkeypatch):
     def fake_load(*, require_enabled=False, profile="default"):
         raise GoogleConfigError(f"profile {profile!r} not configured")
 
+    def fake_load_credentials(config):
+        class FakeCreds:
+            pass
+        return FakeCreds()
+
     config_mod = types.SimpleNamespace(
         GoogleConfigError=GoogleConfigError, load_google_config=fake_load
+    )
+
+    auth_mod = types.SimpleNamespace(
+        load_credentials=fake_load_credentials
     )
 
     def fake_import(name, *args, **kwargs):
@@ -246,6 +267,8 @@ def test_bound_profile_config_invalid_fails_closed(tmp_path, monkeypatch):
             return client_mod
         if name.endswith(".config"):
             return config_mod
+        if name.endswith(".auth"):
+            return auth_mod
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(provider_google.importlib, "import_module", fake_import)

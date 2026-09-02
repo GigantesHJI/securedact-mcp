@@ -2161,6 +2161,8 @@ def run_google_machine_onboarding(
     client_config_fn: Callable[..., bool] | None = None,
     deps_ready_fn: Callable[[], bool] | None = None,
     google_byo: bool = False,
+    config: AgentConfig | None = None,
+    files: AgentFiles | None = None,
 ) -> GoogleOnboardingOutcome:
     """Perform the machine-local Google onboarding and prove its post-conditions.
 
@@ -2195,6 +2197,12 @@ def run_google_machine_onboarding(
     _deps_ready = deps_ready_fn or (
         lambda: _google_runtime_deps_ready(runtime_python, command_runner)
     )
+
+    # Control-plane integration source for automatic Google Workspace integration
+    # discovery. Only created when we have a registered agent config.
+    _control_plane_source = None
+    if config is not None:
+        _control_plane_source = google_setup.AgentControlPlaneIntegrationSource(config, files)
 
     outcome = GoogleOnboardingOutcome(selected=True, runtime_python=runtime_python)
 
@@ -2312,6 +2320,8 @@ def run_google_machine_onboarding(
             interactive=not non_interactive,
             input_fn=input_fn,
             output=output,
+            control_plane_client=_control_plane_source,
+            agent_identity=config.agent_id if config is not None else None,
         )
     except AgentError as exc:
         print(f"Google Workspace integration ID rejected: {scrub(str(exc))}", file=output)
@@ -2645,6 +2655,11 @@ def run_managed_agent_module(
     # probe (which did default to ProgramData) reported "available".
     resolved_runtime_path = cast("Path | str | None", result.get("runtime_path") or runtime_path)
 
+    # Load agent config for Google onboarding (needed for control-plane integration discovery)
+    from .config import load_config, AgentFiles
+    config = load_config()
+    files = AgentFiles.resolve(root=machine_data_dir / "agent")
+
     # --- Google Workspace onboarding (only when configured/selected) -----------
     resolved_data = machine_data_dir
     google_outcome = GoogleOnboardingOutcome(selected=google_enabled)
@@ -2665,6 +2680,8 @@ def run_managed_agent_module(
             verify_binding_fn=verify_google_binding_fn,
             client_config_fn=google_client_config_fn,
             deps_ready_fn=google_deps_ready_fn,
+            config=config,
+            files=files,
         )
         if not google_outcome.ready:
             # Fail closed: the Managed Agent must NOT be reported as ready (and the

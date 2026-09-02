@@ -433,13 +433,11 @@ def _run_one_job(
         exe_result = _failed_result(policy, "lease_invalid")
     except JobExecutionError as exc:
         logger.warning("job %s execution error: %s", claim.job_id, scrub(str(exc)))
-        # A missing/optional connector surfaces as a distinct safe code so the
-        # control plane can tell "agent has no Google support" from a transient
-        # local execution fault (no ModuleNotFoundError leaks upstream).
-        message = str(exc).lower()
-        code = (
+        # Use the specific error code from the exception if available,
+        # otherwise fall back to the message-based heuristic.
+        code = exc.code or (
             "connector_unavailable"
-            if "unavailable" in message or "google connector" in message
+            if "unavailable" in str(exc).lower() or "google connector" in str(exc).lower()
             else "agent_execution_error"
         )
         exe_result = _failed_result(policy, code)

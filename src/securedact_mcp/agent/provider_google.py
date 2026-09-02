@@ -73,6 +73,12 @@ class _GoogleConfigModule(Protocol):
     def load_google_config(self, *, require_enabled: bool = ..., profile: str = ...) -> object: ...
 
 
+class _GoogleAuthModule(Protocol):
+    """Narrow structural boundary for the optional Google connector auth module."""
+
+    def load_credentials(self, config: object) -> object | None: ...
+
+
 def _summary_to_result(summary: object) -> ScanResult:
     """Reduce a bulk :class:`DriveScanSummary` to one aggregate, safe ScanResult.
 
@@ -186,8 +192,12 @@ class GoogleScanProvider:
                 _GoogleConfigModule,
                 importlib.import_module("securedact_mcp.connectors.google.config"),
             )
+            auth_module = cast(
+                _GoogleAuthModule,
+                importlib.import_module("securedact_mcp.connectors.google.auth"),
+            )
         except ModuleNotFoundError as exc:
-            raise JobExecutionError(f"google provider unavailable: {exc}") from exc
+            raise JobExecutionError("google provider unavailable: google_not_configured", code="google_not_configured") from exc
 
         # Resolve the managed-agent integration binding to the exact local
         # profile, then load THAT profile's configuration/OAuth material. This
@@ -198,8 +208,17 @@ class GoogleScanProvider:
             config = config_module.load_google_config(profile=local_profile)
         except client_module.GoogleConfigError as exc:
             raise JobExecutionError(
-                f"google connector not configured for profile {local_profile!r}: {exc}"
+                f"google connector not configured for profile {local_profile!r}: {exc}",
+                code="google_not_configured",
             ) from exc
+
+        # Check if credentials are available before attempting scan
+        creds = auth_module.load_credentials(config)
+        if creds is None:
+            raise JobExecutionError(
+                f"google authorization required for profile {local_profile!r}: no valid token found",
+                code="google_not_authorized",
+            )
 
         client = client_module.build_client(config, engine)
         if heartbeat is not None:

@@ -82,20 +82,64 @@ def _extract_code(raw: str) -> str:
 def cmd_status(
     *,
     output: TextIO = sys.stdout,
+    profile: str = "default",
+    data_dir: str | Path | None = None,
 ) -> int:
     try:
-        config = load_google_config(require_enabled=True)
+        config = load_google_config(require_enabled=False, profile=profile, data_dir=data_dir)
     except GoogleConfigError as exc:
-        print(json.dumps({"enabled": False, "error": str(exc)}), file=output)
+        print(json.dumps({"provider_enabled": False, "error": str(exc)}), file=output)
         return 2
+
     creds = google_auth.load_credentials(config)
+
+    # Determine OAuth client configuration status
+    oauth_client_configured = False
+    oauth_client_source = "none"
+    if config.managed:
+        oauth_client_configured = bool(config.client_id and config.client_secret)
+        oauth_client_source = "managed"
+    elif config.client_id and config.client_secret:
+        oauth_client_configured = True
+        oauth_client_source = "byo"
+    elif config.client_id and not config.client_secret:
+        # Installed app without secret (public client)
+        oauth_client_configured = True
+        oauth_client_source = "installed_no_secret"
+
+    # Check if machine runtime has Google dependencies (agent_healthy)
+    # This is a lightweight check - just try to import the modules
+    agent_healthy = False
+    try:
+        import google.auth
+        import google.oauth2.credentials
+        import google_auth_oauthlib.flow
+        import requests
+        agent_healthy = True
+    except ImportError:
+        agent_healthy = False
+
+    user_authorized = creds is not None
+    ready_to_scan = (
+        config.enabled
+        and oauth_client_configured
+        and user_authorized
+        and agent_healthy
+    )
+
     status = {
-        "enabled": config.enabled,
-        "client_configured": bool(config.client_id and config.client_secret),
+        "provider_enabled": config.enabled,
+        "oauth_client_configured": oauth_client_configured,
+        "oauth_client_source": oauth_client_source,
+        "user_authorized": user_authorized,
+        "agent_healthy": agent_healthy,
+        "ready_to_scan": ready_to_scan,
         "redirect_uri": config.redirect_uri,
         "scopes": config.scopes,
         "read_only": not _has_write(config.scopes),
-        "token_present": creds is not None,
+        "managed_app": config.managed,
+        "client_type": config.client_type,
+        "token_path": str(config.token_path),
     }
     print(json.dumps(status, indent=2), file=output)
     return 0
@@ -189,7 +233,9 @@ def build_google_parser(subparsers: Any) -> None:
     auth.add_argument("--code", help="authorization code from the redirect URL")
     auth.add_argument("--revoke", action="store_true", help="revoke and forget tokens")
 
-    google_commands.add_parser("status", help="show Google connector status")
+    status_parser = google_commands.add_parser("status", help="show Google connector status")
+    status_parser.add_argument("--profile", default="default", help="OAuth token profile (default: default)")
+    status_parser.add_argument("--data-dir", help="machine data directory (default: SECUREDACT_APP_DATA_DIR)")
 
     list_cmd = google_commands.add_parser("list", help="list Shared Drives and Drive items")
     list_cmd.add_argument("--drive-id", help="Shared Drive id")
@@ -218,7 +264,11 @@ def run_google(
             output=output,
         )
     if command == "status":
-        return cmd_status(output=output)
+        return cmd_status(
+            output=output,
+            profile=getattr(arguments, "profile", "default"),
+            data_dir=getattr(arguments, "data_dir", None),
+        )
     if command == "list":
         return cmd_list(
             drive_id=getattr(arguments, "drive_id", None),

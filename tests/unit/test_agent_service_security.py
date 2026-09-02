@@ -517,10 +517,11 @@ def test_google_provider_fails_closed_on_unknown_target_type(monkeypatch):
         GoogleConfigError=Exception, build_client=lambda *a, **k: object()
     )
     fake_config = SimpleNamespace(load_google_config=lambda *a, **k: object())
+    fake_auth = SimpleNamespace(load_credentials=lambda *a, **k: object())
     monkeypatch.setattr(
         pg.importlib,
         "import_module",
-        lambda name: fake_client if name.endswith(".client") else fake_config,
+        lambda name: fake_client if name.endswith(".client") else (fake_auth if name.endswith(".auth") else fake_config),
     )
     provider = GoogleScanProvider(files=None)
     # Stub the binding store so the local-profile resolution succeeds.

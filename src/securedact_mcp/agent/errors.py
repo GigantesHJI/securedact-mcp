@@ -81,6 +81,10 @@ class LeaseError(AgentError):
 class JobExecutionError(AgentError):
     """Local job execution failed before a safe result could be produced."""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
 
 class ConnectorBindingError(AgentError):
     """Connector binding configuration problem (local integration binding)."""

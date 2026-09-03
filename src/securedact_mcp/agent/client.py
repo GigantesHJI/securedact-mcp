@@ -249,11 +249,14 @@ class ControlPlaneClient:
         authentication. Returns a list of integration objects with ``id``,
         ``platform``, and ``display_name``.
         """
+        cred = self._credential_provider()
+        if cred is None:
+            raise AgentCredentialError("no agent credential available (register first)")
         resp = self._transport.get(
             f"{self._base}/v1/agents/integrations/eligible",
             headers={
                 "User-Agent": self._user_agent,
-                "Authorization": self._credential_provider().authorization_header,
+                "Authorization": cred.authorization_header,
             },
         )
         if resp.status == 401:

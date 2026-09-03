@@ -211,7 +211,7 @@ class ControlPlaneIntegrationSource(Protocol):
 class AgentControlPlaneIntegrationSource:
     """Concrete control-plane integration source using the agent's credential."""
 
-    def __init__(self, config: AgentConfig, files: AgentFiles | None = None) -> None:
+    def __init__(self, config: AgentConfig, files: AgentFiles) -> None:
         self._config = config
         self._files = files
 
@@ -221,9 +221,7 @@ class AgentControlPlaneIntegrationSource:
         from .client import ControlPlaneClient
         from .credentials import AgentCredentialStore
 
-        store = AgentCredentialStore(
-            self._config.agent_id, root=self._files.root if self._files else None
-        )
+        store = AgentCredentialStore(self._config.agent_id, root=self._files.root)
         client = ControlPlaneClient(self._config.control_plane_url, credential_provider=store.get)
         raw = client.list_eligible_google_integrations()
         return [

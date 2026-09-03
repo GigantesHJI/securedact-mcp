@@ -944,6 +944,9 @@ class MicrosoftGraphBrowser:
         next_link = data.get("@odata.nextLink")
         if not next_link:
             return None
+        # Validate next_link is a string before processing
+        if not isinstance(next_link, str):
+            return None
         # Convert absolute URL to relative path
         if next_link.startswith(CANONICAL_GRAPH_BASE):
             return next_link[len(CANONICAL_GRAPH_BASE) + 1 :]

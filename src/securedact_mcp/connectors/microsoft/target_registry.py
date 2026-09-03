@@ -42,6 +42,7 @@ Design choices:
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import secrets
@@ -53,6 +54,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from securedact_core.connectors.fingerprint import (
     EncryptedFingerprintKeyStore,
+    ResourceType,
     compute_resource_fingerprint,
 )
 
@@ -60,9 +62,9 @@ from securedact_core.connectors.fingerprint import (
 TARGET_REGISTRY_VERSION = 1
 
 # Stable, scoped resource-type labels for domain separation in the fingerprint.
-_RESOURCE_TYPE_DRIVE = "drive"
-_RESOURCE_TYPE_FOLDER = "folder"
-_RESOURCE_TYPE_SITE = "site"
+_RESOURCE_TYPE_DRIVE: ResourceType = "drive"
+_RESOURCE_TYPE_FOLDER: ResourceType = "folder"
+_RESOURCE_TYPE_SITE: ResourceType = "site"
 
 # Opaque token length (in bytes) for ``target_id``. 192 bits is more than
 # enough to make accidental or adversarial collisions infeasible while keeping
@@ -282,7 +284,7 @@ class TargetRegistryStore:
             "register it locally via 'securedact-mcp microsoft targets add'"
         )
 
-    def list(self, *, integration_id: str | None = None) -> list[LocalTargetRecord]:
+    def list(self, *, integration_id: str | None = None) -> builtins.list[LocalTargetRecord]:
         """List local targets (optionally filtered by integration_id)."""
 
         records = self._load()
@@ -302,7 +304,7 @@ class TargetRegistryStore:
 
     # --- internals ------------------------------------------------------
 
-    def _load(self) -> list[LocalTargetRecord]:
+    def _load(self) -> builtins.list[LocalTargetRecord]:
         if not self._path.exists():
             return []
         try:
@@ -326,7 +328,7 @@ class TargetRegistryStore:
             out.append(LocalTargetRecord.from_dict(entry))
         return out
 
-    def _save(self, records: list[LocalTargetRecord]) -> None:
+    def _save(self, records: builtins.list[LocalTargetRecord]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         cipher = Fernet(self._load_or_create_key())
         body = json.dumps([r.to_dict() for r in records], separators=(",", ":")).encode("utf-8")

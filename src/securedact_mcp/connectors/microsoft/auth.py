@@ -228,7 +228,10 @@ def build_authorization_url(
 ) -> tuple[str, str]:
     """Return the consent-screen URL and CSRF ``state`` for the flow."""
 
-    from msal import ConfidentialClientApplication, PublicClientApplication
+    from msal import (  # type: ignore[import-not-found]
+        ConfidentialClientApplication,
+        PublicClientApplication,
+    )
 
     client_id, client_secret = config.require_credentials()
 
@@ -407,6 +410,11 @@ def _exchange_token_only(
             reached_microsoft=True,
         )
 
+    if not isinstance(result, dict):
+        raise MicrosoftTokenExchangeError(
+            "Microsoft token exchange returned unexpected type",
+            cause_type="UnexpectedResultType",
+        )
     return result
 
 
@@ -461,6 +469,10 @@ def _refresh_if_needed(config: MicrosoftConnectorConfig, token: dict[str, Any]) 
     if accounts:
         result = app.acquire_token_silent(config.scopes, account=accounts[0])
         if result and "access_token" in result:
+            if not isinstance(result, dict):
+                raise MicrosoftAuthError(
+                    "Microsoft silent token acquisition returned unexpected type"
+                )
             return result
 
     # If no cached token or silent acquire failed, try refresh token
@@ -473,6 +485,10 @@ def _refresh_if_needed(config: MicrosoftConnectorConfig, token: dict[str, Any]) 
                 raise MicrosoftAuthError("Microsoft refresh token was rejected or revoked")
             # Persist the refreshed token
             _persist_credentials(config, result)
+            if not isinstance(result, dict):
+                raise MicrosoftAuthError(
+                    "Microsoft refresh token exchange returned unexpected type"
+                )
             return result
         except MicrosoftAuthError:
             raise

@@ -634,8 +634,12 @@ def run_microsoft(
                 output=output,
             )
         if sub == "remove":
+            target_id = getattr(arguments, "target_id", None)
+            if not target_id:
+                print(json.dumps({"error": "--target-id is required"}), file=output)
+                return 2
             return cmd_targets_remove(
-                target_id=getattr(arguments, "target_id", None),
+                target_id=target_id,
                 output=output,
             )
         return 2

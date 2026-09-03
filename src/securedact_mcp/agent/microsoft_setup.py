@@ -366,9 +366,10 @@ def prompt_microsoft_client_config(
     try:
         client_id = input_fn("Microsoft Entra client (application) id: ").strip()
         tenant_id = input_fn("Tenant id (press Enter for 'common'): ").strip()
-        client_secret = read_secret(
+        client_secret: str | None = read_secret(
             "Microsoft Entra client secret (Enter to skip for public-client / PKCE): "
         ).strip()
+        client_secret = client_secret or None
     except (EOFError, StopIteration):
         print("No Microsoft Entra client supplied; skipping.", file=output)
         return False
@@ -376,7 +377,6 @@ def prompt_microsoft_client_config(
         print("No Microsoft Entra client supplied; skipping.", file=output)
         return False
     tenant_id = tenant_id or "common"
-    client_secret = client_secret or None
 
     try:
         if save_fn is not None:
@@ -624,7 +624,7 @@ def verify_microsoft_authorization_runtime(data_dir: Path | str) -> dict[str, An
             payload["error"] = scrub(str(exc))
             return payload
         payload["oauth_url_built"] = bool(url) and bool(state)
-        microsoft_auth._FLOW_STATE.pop(state, None)  # type: ignore[attr-defined]
+        microsoft_auth._FLOW_STATE.pop(state, None)
     finally:
         if server is not None:
             with contextlib.suppress(Exception):
@@ -680,7 +680,7 @@ def run_microsoft_machine_onboarding(
     apply_microsoft_env_fn: Callable[..., None] | None = None,
     verify_binding_fn: Callable[..., bool] | None = None,
     client_config_fn: Callable[..., bool] | None = None,
-    deps_ready_fn: Callable[[], bool] | None = None,
+    deps_ready_fn: Callable[[Path | None], bool] | None = None,
     microsoft_selection_fn: Callable[..., bool] | None = None,
     microsoft_byo: bool = False,
 ) -> MicrosoftOnboardingOutcome:
@@ -699,12 +699,12 @@ def run_microsoft_machine_onboarding(
        and proven to record exactly that integration id.
     """
 
-    from . import agent_runner
-
     _apply_env = apply_microsoft_env_fn or apply_microsoft_machine_env
     _verify = verify_binding_fn or verify_microsoft_binding
     _client_config = client_config_fn or (
-        lambda **kwargs: prompt_microsoft_client_config(**kwargs, byo=microsoft_byo)
+        lambda data_dir, **kwargs: prompt_microsoft_client_config(
+            data_dir, **kwargs, byo=microsoft_byo
+        )
     )
     _bind = bind_microsoft_fn or bind_microsoft_machine
     _deps_ready = deps_ready_fn or _default_microsoft_deps_ready
@@ -738,7 +738,7 @@ def run_microsoft_machine_onboarding(
     runtime_python = resolve_machine_runtime_python(runtime_path)
     outcome = MicrosoftOnboardingOutcome(
         selected=True,
-        deps_ready=bool(_deps_ready(runtime_python=runtime_python)),
+        deps_ready=bool(_deps_ready(runtime_python)),
     )
     if not outcome.deps_ready:
         print(
@@ -756,10 +756,9 @@ def run_microsoft_machine_onboarding(
         print(f"Microsoft machine env not applied: {scrub(str(exc))}", file=output)
 
     print("Authorizing Microsoft 365 locally against the machine data root...", file=output)
-    auth_ok = (
-        bool(
-            authorize_microsoft_fn
-            and authorize_microsoft_fn(
+    if authorize_microsoft_fn is not None:
+        auth_ok = bool(
+            authorize_microsoft_fn(
                 data_dir,
                 input_fn=input_fn,
                 output=output,
@@ -767,15 +766,14 @@ def run_microsoft_machine_onboarding(
                 require_enabled=False,
             )
         )
-        if authorize_microsoft_fn is not None
-        else authorize_microsoft_machine(
+    else:
+        auth_ok = authorize_microsoft_machine(
             data_dir,
             input_fn=input_fn,
             output=output,
             non_interactive=non_interactive,
             require_enabled=False,
         )
-    )
     if not auth_ok and microsoft_byo:
         collected = bool(
             _client_config(
@@ -853,7 +851,13 @@ def run_microsoft_machine_onboarding(
         integration_id=resolved_id,
     )
 
-    registered = agent_runner._load_registered_config(data_dir)
+    from .config import load_config as load_agent_config
+
+    files = AgentFiles.resolve(root=Path(data_dir) / "agent")
+    try:
+        registered = load_agent_config(files)
+    except Exception:
+        registered = None
     if registered is None:
         print(
             "Agent is not registered locally; complete registration before "
@@ -861,7 +865,6 @@ def run_microsoft_machine_onboarding(
             file=output,
         )
         return outcome
-    files = AgentFiles.resolve(root=Path(data_dir) / "agent")
     try:
         binding = _bind(registered, resolved_id, files=files)
     except AgentError as exc:

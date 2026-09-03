@@ -2349,6 +2349,7 @@ def run_google_machine_onboarding(
     # discovery. Only created when we have a registered agent config.
     _control_plane_source = None
     if config is not None:
+        assert files is not None, "files must be available when config is loaded"
         _control_plane_source = google_setup.AgentControlPlaneIntegrationSource(config, files)
 
     outcome = GoogleOnboardingOutcome(selected=True, runtime_python=runtime_python)
@@ -2591,7 +2592,7 @@ def run_managed_agent_module(
     apply_microsoft_env_fn: Callable[..., None] | None = None,
     verify_microsoft_binding_fn: Callable[..., bool] | None = None,
     microsoft_client_config_fn: Callable[..., bool] | None = None,
-    microsoft_deps_ready_fn: Callable[[], bool] | None = None,
+    microsoft_deps_ready_fn: Callable[[Path | None], bool] | None = None,
     microsoft_selection_fn: Callable[..., bool] | None = None,
 ) -> int:
     """Orchestrate the Managed Agent setup step inside ``securedact-mcp setup``.

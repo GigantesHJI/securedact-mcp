@@ -204,14 +204,15 @@ class MicrosoftGraphTransport:
                 logger.debug("Graph retryable status %d (attempt %d)", status, attempt)
                 # Check for Retry-After header
                 retry_after = response.headers.get("Retry-After")
+                wait: float
                 if retry_after:
                     try:
                         wait = min(int(retry_after), 60)
                     except ValueError:
                         wait = min(0.5 * attempt, 4.0)
-                    time.sleep(wait)
                 else:
-                    time.sleep(min(0.5 * attempt, 4.0))
+                    wait = min(0.5 * attempt, 4.0)
+                time.sleep(wait)
                 continue
             if status != 200:
                 raise self._error("Microsoft Graph request failed", response, safe_endpoint)

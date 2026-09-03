@@ -29,6 +29,7 @@ from securedact_core.connectors.scan import (
     ScanSeverity,
     ScanStatus,
 )
+from securedact_mcp.connectors.microsoft.target_registry import TargetRegistryStore
 
 from .config import AgentFiles
 from .connectors import ConnectorBindingStore
@@ -246,14 +247,12 @@ class MicrosoftScanProvider:
         *,
         files: AgentFiles | None = None,
         binding_store: ConnectorBindingStore | None = None,
-        target_registry_factory: Callable[[Path], object] | None = None,
+        target_registry_factory: Callable[[Path], TargetRegistryStore] | None = None,
     ) -> None:
         self._files = files
         self._binding_store = binding_store or ConnectorBindingStore(files)
         self._fingerprint_store = EncryptedFingerprintKeyStore(AgentFiles.resolve().root)
-        self._target_registry_factory = target_registry_factory or (
-            lambda data_dir: _load_target_registry(data_dir)
-        )
+        self._target_registry_factory = target_registry_factory or _load_target_registry
 
     def _resolve_local_profile(self, target: ScanTarget) -> str:
         """Map a claimed ``integration_id`` to its exact local profile (fail closed)."""
@@ -374,6 +373,13 @@ class MicrosoftScanProvider:
         # keeps the control plane out of credential handling entirely.
         local_profile = self._resolve_local_profile(target)
 
+        integration_id = target.integration_id
+        if not integration_id:
+            raise JobExecutionError(
+                "microsoft365 scan requires an integration_id; the control "
+                "plane must never supply OAuth material"
+            )
+
         try:
             config = config_module.load_microsoft_config(profile=local_profile)
         except client_module.MicrosoftConfigError as exc:
@@ -382,7 +388,7 @@ class MicrosoftScanProvider:
             ) from exc
 
         # Create fingerprint config for privacy-safe resource identity
-        fingerprint_config = self._create_fingerprint_config(target.integration_id)
+        fingerprint_config = self._create_fingerprint_config(integration_id)
 
         client = client_module.build_client(config, engine, fingerprint_config=fingerprint_config)
         if heartbeat is not None:
@@ -517,9 +523,7 @@ def _looks_like_raw_composite(target_ref: str) -> bool:
     return ":" in target_ref
 
 
-def _load_target_registry(data_dir: Path) -> object:
+def _load_target_registry(data_dir: Path) -> TargetRegistryStore:
     """Default factory for the target registry, resolved against the machine root."""
-
-    from securedact_mcp.connectors.microsoft.target_registry import TargetRegistryStore
 
     return TargetRegistryStore(data_dir)

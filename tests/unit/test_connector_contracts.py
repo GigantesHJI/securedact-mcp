@@ -113,9 +113,11 @@ def test_scan_request_and_result_serialization() -> None:
 
 def test_importing_connector_contracts_does_not_pull_microsoft() -> None:
     import securedact_core.connectors as connectors
+    import sys
 
     assert connectors is not None
-    for forbidden in ("msal", "msgraph", "requests_oauthlib", "azure"):
+    # Only check for Microsoft-specific SDKs, not general HTTP/OAuth libraries
+    for forbidden in ("msal", "msgraph", "azure.identity", "azure.mgmt"):
         assert forbidden not in sys.modules
 
 

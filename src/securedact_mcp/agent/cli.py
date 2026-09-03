@@ -18,6 +18,7 @@ from typing import TextIO
 
 from . import agent_runner, service
 from .config import AgentConfig, AgentFiles, load_config
+from .connectors import SUPPORTED_BINDING_PLATFORMS
 from .credentials import AgentCredentialStore
 from .errors import AgentError
 from .safe_log import scrub
@@ -91,7 +92,12 @@ def build_agent_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     connector_cmds = connectors.add_subparsers(dest="connector_command", required=True)
     bind = connector_cmds.add_parser("bind", help="bind a local integration")
     bind.add_argument("--integration-id", required=True)
-    bind.add_argument("--platform", required=True, choices=["google_workspace"])
+    bind.add_argument(
+        "--platform",
+        required=True,
+        choices=sorted(SUPPORTED_BINDING_PLATFORMS),
+        help="managed-agent platform (choices derived from SUPPORTED_BINDING_PLATFORMS)",
+    )
     bind.add_argument("--profile", default="default")
     connector_cmds.add_parser("list", help="list bound integrations")
 

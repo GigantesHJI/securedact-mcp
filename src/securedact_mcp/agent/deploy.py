@@ -67,6 +67,11 @@ from ..connectors.google import managed as google_managed
 from . import google_setup, service, service_security
 from .config import AgentFiles
 from .errors import AgentError
+from .microsoft_setup import (
+    MICROSOFT_BYO_ENV,
+    MicrosoftOnboardingOutcome,
+    run_microsoft_machine_onboarding,
+)
 from .safe_log import scrub
 
 _LOGGER = logging.getLogger(__name__)
@@ -122,6 +127,29 @@ GOOGLE_AUTH_CAPABILITY_CHECK = (
     "from securedact_mcp.agent.runtime_bootstrap import supports; "
     "raise SystemExit(0 if supports("
     + ", ".join(repr(cap) for cap in GOOGLE_AUTH_CAPABILITIES)
+    + ") else 1)"
+)
+
+# Microsoft 365 constants (mirrors Google)
+MICROSOFT_CONNECTOR_PLATFORM = "microsoft365"
+MICROSOFT_EXTRA = "microsoft"
+
+MICROSOFT_RUNTIME_IMPORTS = (
+    "msal",
+    "requests",
+)
+
+MICROSOFT_RUNTIME_OK_MARKER = "MICROSOFT RUNTIME OK"
+MICROSOFT_RUNTIME_IMPORT_CHECK = (
+    "import msal, requests; "
+    f"print({MICROSOFT_RUNTIME_OK_MARKER!r})"
+)
+
+MICROSOFT_AUTH_CAPABILITIES = ("microsoft-auth", "microsoft-auth-loopback", "microsoft-auth-verify")
+MICROSOFT_AUTH_CAPABILITY_CHECK = (
+    "from securedact_mcp.agent.runtime_bootstrap import supports; "
+    "raise SystemExit(0 if supports("
+    + ", ".join(repr(cap) for cap in MICROSOFT_AUTH_CAPABILITIES)
     + ") else 1)"
 )
 
@@ -259,6 +287,9 @@ def build_elevation_argv(
     google: str | None = None,
     google_integration_id: str | None = None,
     google_byo: bool = False,
+    microsoft: str | None = None,
+    microsoft_integration_id: str | None = None,
+    microsoft_byo: bool = False,
 ) -> list[str]:
     """Return the exact argv params for the elevated managed-agent re-launch.
 
@@ -271,9 +302,9 @@ def build_elevation_argv(
     module; ``--agent-elevated`` is the internal resume marker (carries no
     secret). No registration token or credential is ever placed here.
 
-    An explicit Google Workspace selection is forwarded so the elevated
+    An explicit Google/Microsoft selection is forwarded so the elevated
     continuation -- which is the process that actually performs the machine-local
-    Google onboarding -- cannot lose it across the UAC boundary. Only non-secret
+    onboarding -- cannot lose it across the UAC boundary. Only non-secret
     values are forwarded: the ``yes``/``no`` choice and the validated dashboard
     integration id (never a token, credential, or OAuth client secret).
     """
@@ -286,6 +317,13 @@ def build_elevation_argv(
         argv += ["--google-integration-id", validated]
     if google_byo:
         argv += ["--google-byo"]
+    if microsoft in {"yes", "no"}:
+        argv += ["--microsoft", microsoft]
+    validated_ms = google_setup.normalize_integration_id(microsoft_integration_id)
+    if validated_ms:
+        argv += ["--microsoft-integration-id", validated_ms]
+    if microsoft_byo:
+        argv += ["--microsoft-byo"]
     return argv
 
 
@@ -1239,13 +1277,83 @@ def _google_extra_install_target() -> str:
     return f"securedact-mcp[{GOOGLE_EXTRA}]=={ver}"
 
 
+def _microsoft_extra_install_target() -> str:
+    """Return the exact pinned ``securedact-mcp[microsoft]`` install target.
+
+    Uses the *running* securedact-mcp version (fail-closed, never ``latest``) so
+    the machine runtime installs the same version it is provisioning, plus the
+    declared Microsoft extra. The base package itself is already satisfied by the
+    primary install, so this second pip call resolves only the Microsoft extra's
+    dependencies (msal, requests) into the runtime.
+    """
+
+    ver = _validate_version_pin(_resolve_securedact_version())
+    return f"securedact-mcp[{MICROSOFT_EXTRA}]=={ver}"
+
+
+def _runtime_has_microsoft_imports(runtime_path: Path, runner: CommandRunner) -> bool:
+    """True only when the machine runtime can import the Microsoft provider deps.
+
+    Guards against the exact real-Windows defect where the scheduled agent raised
+    ``agent_execution_error`` because ``msal`` / ``requests`` were absent from the
+    machine runtime. The probe runs through the injected runner so it exercises the
+    actual runtime interpreter.
+    """
+
+    python = resolve_runtime_python(Path(runtime_path))
+    probe = "import " + ", ".join(MICROSOFT_RUNTIME_IMPORTS)
+    try:
+        result = runner([str(python), "-c", probe], RunInput())
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
+def _runtime_supports_microsoft_auth(runtime_path: Path, runner: CommandRunner) -> bool:
+    """True only when the runtime's bootstrap really carries the Microsoft OAuth command.
+
+    Guards the stale-distribution defect: the machine runtime is a separately
+    installed package, so it can import ``runtime_bootstrap`` (the existing probe)
+    while lacking the ``microsoft-auth`` subcommand the wizard is about to invoke. This
+    probe asserts the capability inside the runtime interpreter itself, so a stale
+    runtime is re-provisioned instead of failing later during authorization.
+    """
+
+    python = resolve_runtime_python(Path(runtime_path))
+    try:
+        result = runner([str(python), "-c", MICROSOFT_AUTH_CAPABILITY_CHECK], RunInput())
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
+def _microsoft_runtime_deps_ready(
+    runtime_python: Path | None,
+    command_runner: CommandRunner | None,
+) -> bool:
+    """Readiness gate: the machine runtime can actually perform Microsoft 365 work.
+
+    ``runtime_python`` is the interpreter resolved by
+    :func:`resolve_machine_runtime_python` — i.e. *exactly* the interpreter that
+    :func:`_authorize_microsoft_machine` will use. Probing anything else is what made
+    setup report "Microsoft dependencies: available" while authorization died with
+    ``No module named 'msal'`` in a different interpreter.
+
+    Both the provider imports *and* the runtime's ``microsoft-auth`` bootstrap
+    capability must hold. When there is no runtime interpreter at all there is
+    nothing to probe (the provisioning gate owns that case), so it does not block.
+    """
+
+    if runtime_python is None:
+        return True
+    runtime = _runtime_root_for_python(Path(runtime_python))
+    runner = command_runner or _default_runner
+    return _runtime_has_microsoft_imports(runtime, runner) and _runtime_supports_microsoft_auth(
+        runtime, runner
+    )
+
+
 # Bounded wait (seconds) for a running scheduled agent to release the runtime
-# files it holds open (notably ``runtime\Scripts\python.exe``) before we rebuild
-# the machine-owned runtime. A release that overruns this window fails closed: we
-# refuse to overwrite a runtime that is still being executed (the exact
-# RC-development "Permission denied" defect seen when reprovisioning over a live
-# managed agent).
-_AGENT_STOP_WAIT_SECONDS = 30.0
 
 
 def _default_agent_control(action: str) -> bool:
@@ -1312,6 +1420,7 @@ def provision_machine_runtime(
     wheel_builder: Callable[[Path], Path] | None = None,
     dev_digest_fn: DevDigestFn | None = None,
     google_enabled: bool = False,
+    microsoft_enabled: bool = False,
     _agent_control: Callable[[str], bool] | None = None,
 ) -> ProvisionResult:
     """Create / verify the admin-owned machine runtime for the service.
@@ -1492,6 +1601,40 @@ def provision_machine_runtime(
                 f"or enable dev/local validation mode ({_DEV_WHEEL_ENV}=1) to build "
                 "and install a controlled local wheel from this checkout."
             )
+    # When Microsoft 365 support is selected, install the declared Microsoft extra
+    # into the same machine runtime (never every optional extra unconditionally),
+    # then fail closed if the provider's required imports are not importable.
+    if microsoft_enabled:
+        microsoft_target = _microsoft_extra_install_target()
+        microsoft_cmd = [
+            str(runtime_python),
+            "-m",
+            "pip",
+            "install",
+            "--no-input",
+            microsoft_target,
+        ]
+        mres = runner(microsoft_cmd, RunInput())
+        if mres.returncode != 0:
+            raise AgentError(
+                f"failed to install Microsoft connector dependencies into machine "
+                f"runtime: {mres.stderr}"
+            )
+        if not _runtime_has_microsoft_imports(runtime, runner):
+            raise AgentError(
+                "Microsoft connector dependencies failed to import from the machine "
+                "runtime after install; refusing to finish provisioning"
+            )
+        if not _runtime_supports_microsoft_auth(runtime, runner):
+            raise AgentError(
+                "the machine runtime's securedact_mcp.agent.runtime_bootstrap does "
+                "not expose the machine-local Microsoft authorization command; the "
+                "installed runtime distribution is stale relative to the running "
+                "managed-agent code. Re-run setup from a released securedact-mcp "
+                f"wheel that contains it, or enable dev/local validation mode "
+                f"({_DEV_WHEEL_ENV}=1) to build and install a controlled local "
+                "wheel from this checkout."
+            )
     # Persist the dev-wheel digest so a future same-version rerun can prove the
     # runtime is byte-for-byte identical to the current checkout (idempotent skip).
     if dev_local and current_dev_digest is not None:
@@ -1647,6 +1790,7 @@ def install_service_from_runtime(
     installing_user: str | None = None,
     dev_local: bool = False,
     google_enabled: bool = False,
+    microsoft_enabled: bool = False,
 ) -> dict[str, object]:
     """Provision the machine runtime (idempotent) and install+start the task.
 
@@ -1657,7 +1801,7 @@ def install_service_from_runtime(
     When ``token`` is supplied the agent is registered (the one-time token is
     consumed in-memory only, never on the task command line, in the environment,
     or on disk). When ``token`` is ``None`` an existing valid registration is
-    reused and only the scheduled task is (re)created — no new token is consumed.
+    reused and only the scheduled task is (re)created -- no new token is consumed.
     """
 
     provisioned = provision_machine_runtime(
@@ -1671,6 +1815,7 @@ def install_service_from_runtime(
         include_service_acl=False,
         dev_local=dev_local,
         google_enabled=google_enabled,
+        microsoft_enabled=microsoft_enabled,
     )
     runtime_python = provisioned.runtime_python
     resolved_data = service.resolve_service_data_dir(data_dir)
@@ -1752,6 +1897,7 @@ def upgrade_runtime(
     force: bool = False,
     dev_local: bool = False,
     google_enabled: bool = False,
+    microsoft_enabled: bool = False,
 ) -> dict[str, object]:
     """Securely upgrade the machine runtime, preserving all agent state.
 
@@ -1788,6 +1934,7 @@ def upgrade_runtime(
         include_service_acl=True,
         dev_local=dev_local,
         google_enabled=google_enabled,
+        microsoft_enabled=microsoft_enabled,
     )
 
     # Post-upgrade security re-validation (fail-closed).
@@ -2429,6 +2576,9 @@ def run_managed_agent_module(
     google: str | None = None,
     google_integration_id: str | None = None,
     google_byo: bool | None = None,
+    microsoft: str | None = None,
+    microsoft_integration_id: str | None = None,
+    microsoft_byo: bool | None = None,
     authorize_google_fn: Callable[..., bool] | None = None,
     bind_google_fn: Callable[..., Any] | None = None,
     apply_google_env_fn: Callable[..., None] | None = None,
@@ -2436,17 +2586,24 @@ def run_managed_agent_module(
     google_client_config_fn: Callable[..., bool] | None = None,
     google_deps_ready_fn: Callable[[], bool] | None = None,
     google_selection_fn: Callable[..., bool] | None = None,
+    authorize_microsoft_fn: Callable[..., bool] | None = None,
+    bind_microsoft_fn: Callable[..., Any] | None = None,
+    apply_microsoft_env_fn: Callable[..., None] | None = None,
+    verify_microsoft_binding_fn: Callable[..., bool] | None = None,
+    microsoft_client_config_fn: Callable[..., bool] | None = None,
+    microsoft_deps_ready_fn: Callable[[], bool] | None = None,
+    microsoft_selection_fn: Callable[..., bool] | None = None,
 ) -> int:
     """Orchestrate the Managed Agent setup step inside ``securedact-mcp setup``.
 
     Returns 0 when the agent is installed, skipped safely, or unsupported; 2 on a
     hard failure. The registration token is never echoed or persisted.
 
-    When Google Workspace managed scanning is selected (explicitly, by detected
-    machine configuration, or by the interactive question) the module performs the
-    full machine onboarding -- Google deps, machine-local OAuth, and the
+    When Google Workspace or Microsoft 365 managed scanning is selected (explicitly,
+    by detected machine configuration, or by the interactive question) the module
+    performs the full machine onboarding -- deps, machine-local OAuth, and the
     machine-local connector binding -- and refuses to report the Managed Agent as
-    ready until all three exist.
+    ready until all pre-conditions are satisfied.
     """
 
     import getpass
@@ -2551,6 +2708,9 @@ def run_managed_agent_module(
                     google=google,
                     google_integration_id=google_integration_id,
                     google_byo=google_byo if google_byo is not None else False,
+                    microsoft=microsoft,
+                    microsoft_integration_id=microsoft_integration_id,
+                    microsoft_byo=microsoft_byo if microsoft_byo is not None else False,
                 ),
             ]
             code = handler(list(rerun_argv) if rerun_argv is not None else target)
@@ -2621,8 +2781,39 @@ def run_managed_agent_module(
     # customers never have to create their own Google Cloud project.
     byo = google_byo if google_byo is not None else os.getenv(google_setup.GOOGLE_BYO_ENV) == "1"
 
-    # Provision secure runtime + install + start. Google deps are installed into
-    # the machine runtime here when selected (never every optional extra). The
+    # Microsoft 365 onboarding selection. If Google was explicitly enabled/disabled and
+    # Microsoft was not explicitly mentioned, default Microsoft to "no" to avoid
+    # an unwanted interactive prompt when the user only intended to configure Google.
+    if google in {"yes", "no"} and microsoft is None:
+        microsoft = "no"
+
+    # Microsoft 365 onboarding selection. The wizard itself decides -- an
+    # explicit ``--microsoft`` choice (including one forwarded across the UAC
+    # boundary), the non-secret ``SECUREDACT_MICROSOFT_ENABLED`` override, detected
+    # machine-local Microsoft configuration, or a plain interactive question. An
+    # operator never has to know a hidden environment flag, and Microsoft is never
+    # forced on a machine where it is not configured/selected.
+    from .microsoft_setup import resolve_microsoft_selection
+
+    _select_microsoft = microsoft_selection_fn or resolve_microsoft_selection
+    microsoft_enabled = bool(
+        _select_microsoft(
+            machine_data_dir,
+            microsoft=microsoft,
+            non_interactive=non_interactive,
+            input_fn=input_fn,
+            output=output,
+        )
+    )
+    # BYO (bring-your-own Microsoft Entra app) is an explicit advanced/enterprise
+    # option. The default production path is the SecuRedact-managed app, so normal
+    # customers never have to create their own Entra app.
+    microsoft_byo_flag = (
+        microsoft_byo if microsoft_byo is not None else os.getenv(MICROSOFT_BYO_ENV) == "1"
+    )
+
+    # Provision secure runtime + install + start. Google/Microsoft deps are installed
+    # into the machine runtime here when selected (never every optional extra). The
     # authoritative machine data root is threaded through so registration is written
     # directly there (never to the interactive user's profile).
     _dev_local = dev_local if dev_local is not None else dev_local_wheel_requested()
@@ -2636,6 +2827,7 @@ def run_managed_agent_module(
             command_runner=command_runner,
             dev_local=_dev_local,
             google_enabled=google_enabled,
+            microsoft_enabled=microsoft_enabled,
         )
     except AgentError as exc:
         print(f"Managed Agent install failed safely: {scrub(str(exc))}", file=output)
@@ -2736,6 +2928,58 @@ def run_managed_agent_module(
             print(
                 "  Finish it with: securedact-mcp setup --agent --google yes "
                 "--google-integration-id <dashboard integration ID>",
+                file=output,
+            )
+            return 2
+
+    # --- Microsoft 365 onboarding (only when configured/selected) -----------
+    resolved_data = machine_data_dir
+    microsoft_outcome = MicrosoftOnboardingOutcome(selected=microsoft_enabled)
+    if microsoft_enabled:
+        microsoft_outcome = run_microsoft_machine_onboarding(
+            data_dir=resolved_data,
+            output=output,
+            input_fn=input_fn,
+            secret_input_fn=_secret_input,
+            non_interactive=non_interactive,
+            microsoft_integration_id=microsoft_integration_id,
+            runtime_path=resolved_runtime_path,
+            command_runner=command_runner,
+            microsoft_byo=microsoft_byo,
+            authorize_microsoft_fn=authorize_microsoft_fn,
+            bind_microsoft_fn=bind_microsoft_fn,
+            apply_microsoft_env_fn=apply_microsoft_env_fn,
+            verify_binding_fn=verify_microsoft_binding_fn,
+            client_config_fn=microsoft_client_config_fn,
+            deps_ready_fn=microsoft_deps_ready_fn,
+            microsoft_selection_fn=microsoft_selection_fn,
+        )
+        if not microsoft_outcome.ready:
+            # Fail closed: the Managed Agent must NOT be reported as ready while a
+            # required Microsoft pre-condition is missing.
+            print(file=output)
+            print(
+                "Managed Agent: NOT ready - Microsoft 365 was selected but the "
+                "machine-local Microsoft onboarding is incomplete.",
+                file=output,
+            )
+            print(
+                f"  Microsoft dependencies: {'available' if microsoft_outcome.deps_ready else 'missing'}",
+                file=output,
+            )
+            print(
+                f"  Machine-local Microsoft OAuth: "
+                f"{'valid' if microsoft_outcome.authorized else 'not authorized'}",
+                file=output,
+            )
+            print(
+                "  Machine connector binding: "
+                f"{'present' if microsoft_outcome.binding_verified else 'missing'}",
+                file=output,
+            )
+            print(
+                "  Finish it with: securedact-mcp setup --agent --microsoft yes "
+                "--microsoft-integration-id <dashboard integration ID>",
                 file=output,
             )
             return 2

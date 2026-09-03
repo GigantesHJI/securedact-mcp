@@ -27,7 +27,13 @@ _MAX_RETRIES = 3
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 # Microsoft Graph ``reason`` tokens that are safe to retry even on a 4xx.
 _RETRYABLE_REASONS = frozenset(
-    {"rateLimitExceeded", "throttledRequests", "serviceUnavailable", "backendError", "internalError"}
+    {
+        "rateLimitExceeded",
+        "throttledRequests",
+        "serviceUnavailable",
+        "backendError",
+        "internalError",
+    }
 )
 
 
@@ -87,7 +93,13 @@ def _extract_reason(response: Any) -> str | None:
 class MicrosoftGraphTransport:
     """REST implementation of :class:`MicrosoftGraphTransport` using MSAL + requests."""
 
-    def __init__(self, credentials: dict[str, Any], *, user_id: str | None = None, tenant_id: str | None = None) -> None:
+    def __init__(
+        self,
+        credentials: dict[str, Any],
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> None:
         # Lazy import: msal and requests are optional dependencies.
         import requests
 
@@ -186,7 +198,9 @@ class MicrosoftGraphTransport:
                     safe_endpoint,
                 )
             if status in _RETRYABLE_STATUS:
-                last_error = self._error("Microsoft Graph temporarily unavailable", response, safe_endpoint)
+                last_error = self._error(
+                    "Microsoft Graph temporarily unavailable", response, safe_endpoint
+                )
                 logger.debug("Graph retryable status %d (attempt %d)", status, attempt)
                 # Check for Retry-After header
                 retry_after = response.headers.get("Retry-After")

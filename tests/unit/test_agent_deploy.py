@@ -558,18 +558,34 @@ def test_managed_agent_non_windows_unsupported_message(tmp_path: Path, monkeypat
 
 def test_managed_agent_module_reports_online(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(deploy.sys, "platform", "win32")
-    monkeypatch.setattr(
-        deploy,
-        "install_service_from_runtime",
-        lambda **k: {
+    machine_data = tmp_path / "data"
+    machine_data.mkdir(parents=True)
+
+    def mock_install_service_from_runtime(*, data_dir, **kwargs):
+        # Simulate registration by creating agent.json
+        from securedact_mcp.agent.config import AgentConfig, AgentFiles, save_config
+
+        files = AgentFiles.resolve(root=Path(data_dir) / "agent")
+        files.ensure()
+        config = AgentConfig.create(
+            control_plane_url="https://www.securedact.com",
+            agent_id="agent-1",
+            display_name="test-agent",
+            runtime_platform="win32",
+            agent_version="0.1.0",
+        )
+        save_config(config, files)
+
+        return {
             "installed": True,
             "service_name": "SecuredactAgent",
-            "data_dir": "C:\\ProgramData\\Securedact",
+            "data_dir": str(data_dir),
             "account": r"NT SERVICE\SecuredactAgent",
             "running": True,
             "agent_id": "agent-1",
-        },
-    )
+        }
+
+    monkeypatch.setattr(deploy, "install_service_from_runtime", mock_install_service_from_runtime)
     monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
     output = __import__("io").StringIO()
     rc = deploy.run_managed_agent_module(
@@ -579,8 +595,9 @@ def test_managed_agent_module_reports_online(tmp_path: Path, monkeypatch) -> Non
         agent="yes",
         # Hermetic: pin the machine root to tmp and decline Google explicitly so
         # this elevation/heartbeat test never reads the real ProgramData state.
-        data_dir=tmp_path / "data",
+        data_dir=machine_data,
         google="no",
+        microsoft="no",
         elevated_check=lambda: True,
     )
     assert rc == 0

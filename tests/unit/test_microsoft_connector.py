@@ -7,6 +7,7 @@ Tests use a fake in-memory transport; no real Microsoft tenant is contacted.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from securedact_core import SecuredactEngine
 from securedact_core.connectors import (
@@ -19,25 +20,20 @@ from securedact_core.connectors import (
     validate_resource_identifier,
 )
 from securedact_core.connectors.microsoft import (
-    MicrosoftGraphBrowser,
-    MicrosoftGraphItem,
-    MicrosoftDrive,
-    MicrosoftSite,
-    DriveScanSummary,
-    MicrosoftApiError,
-    MicrosoftAuthError,
     CANONICAL_GRAPH_BASE,
+    FILE_MIME_TYPES,
+    FOLDER_MIME_TYPE,
     MICROSOFT_365_PLATFORM,
     SOURCE_TYPE_ONEDRIVE,
     SOURCE_TYPE_SHAREPOINT_DRIVE,
-    FILE_MIME_TYPES,
-    FOLDER_MIME_TYPE,
+    MicrosoftApiError,
+    MicrosoftGraphBrowser,
+    build_graph_scopes,
     default_connector_scopes,
     has_write_scope,
-    build_graph_scopes,
     safe_diagnostic,
 )
-from securedact_core.connectors.scan import ScanErrorCode, ScanResult, ScanSeverity, ScanStatus
+from securedact_core.connectors.scan import ScanErrorCode, ScanSeverity, ScanStatus
 from securedact_core.production import build_production_engine
 from tests.unit.microsoft_transport_fake import FakeMicrosoftTransport
 
@@ -92,11 +88,11 @@ def test_resource_serialization_round_trip() -> None:
 
 
 def test_invalid_resource_identifier_rejected() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         _resource(resource_id="../evil")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         _resource(org_id="bad id with space")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         _resource(tenant_id="<script>")
 
 
@@ -115,8 +111,9 @@ def test_scan_request_and_result_serialization() -> None:
 
 
 def test_importing_connector_contracts_does_not_pull_microsoft() -> None:
-    import securedact_core.connectors as connectors
     import sys
+
+    import securedact_core.connectors as connectors
 
     assert connectors is not None
     # Only check for Microsoft-specific SDKs, not general HTTP libraries
@@ -179,7 +176,7 @@ def test_build_graph_scopes() -> None:
     assert "User.Read" in scopes
     assert "Files.Read" in scopes
     assert "Sites.Read.All" in scopes
-    
+
     write_scopes = build_graph_scopes({ConnectorCapability.WRITE})
     assert "Files.ReadWrite" in write_scopes
 
@@ -209,14 +206,38 @@ class TestMicrosoftGraphBrowser:
             webUrl="https://contoso.sharepoint.com/sites/team",
         )
         # Add items
-        self.transport.add_item("drive-1", id="root", name="Root", folder={}, parentReference={}, size=0)
-        self.transport.add_item("drive-1", id="file-1", name="notes.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=100)
-        self.transport.add_item("drive-1", id="folder-1", name="Documents", folder={}, parentReference={"id": "root", "driveId": "drive-1"}, size=0)
-        self.transport.add_item("drive-1", id="file-2", name="report.txt", file={"mimeType": "text/plain"}, parentReference={"id": "folder-1", "driveId": "drive-1"}, size=200)
+        self.transport.add_item(
+            "drive-1", id="root", name="Root", folder={}, parentReference={}, size=0
+        )
+        self.transport.add_item(
+            "drive-1",
+            id="file-1",
+            name="notes.txt",
+            file={"mimeType": "text/plain"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=100,
+        )
+        self.transport.add_item(
+            "drive-1",
+            id="folder-1",
+            name="Documents",
+            folder={},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=0,
+        )
+        self.transport.add_item(
+            "drive-1",
+            id="file-2",
+            name="report.txt",
+            file={"mimeType": "text/plain"},
+            parentReference={"id": "folder-1", "driveId": "drive-1"},
+            size=200,
+        )
         self.transport.set_content("drive-1", "file-1", b"Contact jane@example.com")
         self.transport.set_content("drive-1", "file-2", b"IBAN NL91ABNA0417164300")
 
         from securedact_core.connectors.contracts import ConnectorIdentity
+
         identity = ConnectorIdentity(
             org_id="microsoft",
             integration_id="microsoft365",
@@ -283,6 +304,7 @@ class TestMicrosoftGraphBrowser:
 
     def test_scan_file(self):
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         result = self.browser.select_and_scan("drive-1", "file-1", scanner)
         assert result.status == ScanStatus.COMPLETED
@@ -291,9 +313,17 @@ class TestMicrosoftGraphBrowser:
 
     def test_scan_file_unsupported_format(self):
         # Use a binary mime type that's not in FILE_MIME_TYPES
-        self.transport.add_item("drive-1", id="binary-1", name="data.bin", file={"mimeType": "application/octet-stream"}, parentReference={"id": "root", "driveId": "drive-1"}, size=100)
+        self.transport.add_item(
+            "drive-1",
+            id="binary-1",
+            name="data.bin",
+            file={"mimeType": "application/octet-stream"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=100,
+        )
         self.transport.set_content("drive-1", "binary-1", b"\x00\x01\x02")
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         result = self.browser.select_and_scan("drive-1", "binary-1", scanner)
         assert result.status == ScanStatus.ERROR
@@ -311,16 +341,47 @@ class TestDriveScanSummary:
             name="My Drive",
             driveType="personal",
         )
-        self.transport.add_item("drive-1", id="root", name="Root", folder={}, parentReference={}, size=0)
-        self.transport.add_item("drive-1", id="file-1", name="a.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=50)
-        self.transport.add_item("drive-1", id="file-2", name="b.pdf", file={"mimeType": "application/pdf"}, parentReference={"id": "root", "driveId": "drive-1"}, size=50)
-        self.transport.add_item("drive-1", id="clean", name="clean.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=50)
-        self.transport.add_item("drive-1", id="pii", name="pii.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=50)
+        self.transport.add_item(
+            "drive-1", id="root", name="Root", folder={}, parentReference={}, size=0
+        )
+        self.transport.add_item(
+            "drive-1",
+            id="file-1",
+            name="a.txt",
+            file={"mimeType": "text/plain"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=50,
+        )
+        self.transport.add_item(
+            "drive-1",
+            id="file-2",
+            name="b.pdf",
+            file={"mimeType": "application/pdf"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=50,
+        )
+        self.transport.add_item(
+            "drive-1",
+            id="clean",
+            name="clean.txt",
+            file={"mimeType": "text/plain"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=50,
+        )
+        self.transport.add_item(
+            "drive-1",
+            id="pii",
+            name="pii.txt",
+            file={"mimeType": "text/plain"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=50,
+        )
         self.transport.set_content("drive-1", "file-1", b"mail jane@example.com")
         self.transport.set_content("drive-1", "clean", b"nothing to see")
         self.transport.set_content("drive-1", "pii", b"IBAN NL91ABNA0417164300 phone +31612345678")
 
         from securedact_core.connectors.contracts import ConnectorIdentity
+
         identity = ConnectorIdentity(
             org_id="microsoft",
             integration_id="microsoft365",
@@ -332,6 +393,7 @@ class TestDriveScanSummary:
 
     def test_scan_folder_aggregates(self):
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         summary = self.browser.scan_folder("drive-1", "root", scanner)
 
@@ -351,6 +413,7 @@ class TestDriveScanSummary:
 
     def test_scan_drive(self):
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         summary = self.browser.scan_drive("drive-1", scanner)
 
@@ -369,10 +432,18 @@ class TestHeartbeat:
         transport.add_item("drive-1", id="root", name="Root", folder={}, parentReference={}, size=0)
         for i in range(30):
             fid = f"f{i}"
-            transport.add_item("drive-1", id=fid, name=f"{fid}.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=50)
+            transport.add_item(
+                "drive-1",
+                id=fid,
+                name=f"{fid}.txt",
+                file={"mimeType": "text/plain"},
+                parentReference={"id": "root", "driveId": "drive-1"},
+                size=50,
+            )
             transport.set_content("drive-1", fid, b"nothing to see")
 
         from securedact_core.connectors.contracts import ConnectorIdentity
+
         identity = ConnectorIdentity(
             org_id="microsoft",
             integration_id="microsoft365",
@@ -383,11 +454,15 @@ class TestHeartbeat:
         browser = MicrosoftGraphBrowser(identity, transport)
 
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         calls: list[int] = []
 
         from securedact_core.connectors.contracts import ScanContext
-        summary = browser.scan_folder("drive-1", "root", scanner, ScanContext(), heartbeat=lambda: calls.append(1))
+
+        browser.scan_folder(
+            "drive-1", "root", scanner, ScanContext(), heartbeat=lambda: calls.append(1)
+        )
 
         # Heartbeat must fire at least once at the provider boundary and again inside
         # the recursive walk, so a long scan cannot silently lose its lease.
@@ -401,10 +476,20 @@ class TestPrivacyBoundary:
         transport = FakeMicrosoftTransport()
         transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
         transport.add_item("drive-1", id="root", name="Root", folder={}, parentReference={}, size=0)
-        transport.add_item("drive-1", id="file-1", name="report.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=200)
-        transport.set_content("drive-1", "file-1", b"Contact Jane Example at jane@example.com IBAN NL91ABNA0417164300")
+        transport.add_item(
+            "drive-1",
+            id="file-1",
+            name="report.txt",
+            file={"mimeType": "text/plain"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=200,
+        )
+        transport.set_content(
+            "drive-1", "file-1", b"Contact Jane Example at jane@example.com IBAN NL91ABNA0417164300"
+        )
 
         from securedact_core.connectors.contracts import ConnectorIdentity
+
         identity = ConnectorIdentity(
             org_id="microsoft",
             integration_id="microsoft365",
@@ -415,10 +500,12 @@ class TestPrivacyBoundary:
         browser = MicrosoftGraphBrowser(identity, transport)
 
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         result = browser.select_and_scan("drive-1", "file-1", scanner)
 
         import json
+
         blob = json.dumps(result.model_dump(mode="json"), sort_keys=True)
         for forbidden in (
             "Jane Example",
@@ -432,10 +519,18 @@ class TestPrivacyBoundary:
         transport = FakeMicrosoftTransport(user_id="ya29.fake-access-token")
         transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
         transport.add_item("drive-1", id="root", name="Root", folder={}, parentReference={}, size=0)
-        transport.add_item("drive-1", id="file-1", name="report.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=200)
+        transport.add_item(
+            "drive-1",
+            id="file-1",
+            name="report.txt",
+            file={"mimeType": "text/plain"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=200,
+        )
         transport.set_content("drive-1", "file-1", b"test content")
 
         from securedact_core.connectors.contracts import ConnectorIdentity
+
         identity = ConnectorIdentity(
             org_id="microsoft",
             integration_id="microsoft365",
@@ -446,10 +541,12 @@ class TestPrivacyBoundary:
         browser = MicrosoftGraphBrowser(identity, transport)
 
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         result = browser.select_and_scan("drive-1", "file-1", scanner)
 
         import json
+
         blob = json.dumps(result.model_dump(mode="json"), sort_keys=True)
         assert "ya29." not in blob
         assert "1//" not in blob
@@ -465,6 +562,7 @@ class TestErrorHandling:
         transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
 
         from securedact_core.connectors.contracts import ConnectorIdentity
+
         identity = ConnectorIdentity(
             org_id="microsoft",
             integration_id="microsoft365",
@@ -475,6 +573,7 @@ class TestErrorHandling:
         browser = MicrosoftGraphBrowser(identity, transport)
 
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         result = browser.select_and_scan("drive-1", "nonexistent", scanner)
 
@@ -490,14 +589,15 @@ class TestErrorHandling:
             base_url = CANONICAL_GRAPH_BASE
             user_id = "user-123"
             tenant_id = "tenant-456"
-            
+
             def get_json(self, path: str):
                 failing_get_json(path)
-            
+
             def get_content(self, path: str, *, max_bytes: int | None = None):
                 raise MicrosoftApiError("forbidden", status_code=403)
 
         from securedact_core.connectors.contracts import ConnectorIdentity
+
         identity = ConnectorIdentity(
             org_id="microsoft",
             integration_id="microsoft365",
@@ -508,6 +608,7 @@ class TestErrorHandling:
         browser = MicrosoftGraphBrowser(identity, FailingTransport())
 
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         result = browser.select_and_scan("drive-1", "file-1", scanner)
 
@@ -523,14 +624,15 @@ class TestErrorHandling:
             base_url = CANONICAL_GRAPH_BASE
             user_id = "user-123"
             tenant_id = "tenant-456"
-            
+
             def get_json(self, path: str):
                 failing_get_json(path)
-            
+
             def get_content(self, path: str, *, max_bytes: int | None = None):
                 raise MicrosoftApiError("rate limited", status_code=429)
 
         from securedact_core.connectors.contracts import ConnectorIdentity
+
         identity = ConnectorIdentity(
             org_id="microsoft",
             integration_id="microsoft365",
@@ -541,6 +643,7 @@ class TestErrorHandling:
         browser = MicrosoftGraphBrowser(identity, FailingTransport())
 
         from securedact_core.connectors import ConnectorScanner
+
         scanner = ConnectorScanner(_engine())
         result = browser.select_and_scan("drive-1", "file-1", scanner)
 

@@ -91,9 +91,7 @@ def cmd_setup(
 
     if not tenant_id:
         try:
-            raw = input_fn(
-                "Microsoft Entra tenant id (press Enter for 'common'): "
-            ).strip()
+            raw = input_fn("Microsoft Entra tenant id (press Enter for 'common'): ").strip()
         except EOFError:
             raw = ""
         tenant_id = raw or "common"
@@ -166,8 +164,7 @@ def cmd_auth(
     if not outcome.authorized:
         return 2
     print(
-        "Microsoft authorization stored securely. Next: "
-        "securedact-mcp microsoft status",
+        "Microsoft authorization stored securely. Next: securedact-mcp microsoft status",
         file=output,
     )
     return 0
@@ -230,14 +227,18 @@ def cmd_list(
             children = [c.model_dump() for c in client.list_children(drive_id, folder_id)]
         if site_id:
             site_drive = client.get_site_drive(site_id)
-            children = [c.model_dump() for c in client.list_children(site_drive.drive_id, folder_id)]
+            children = [
+                c.model_dump() for c in client.list_children(site_drive.drive_id, folder_id)
+            ]
     except MicrosoftApiError as exc:
         print(json.dumps(safe_diagnostic(exc)), file=output)
         return 2
     except Exception as exc:
         print(json.dumps({"error": str(exc)}), file=output)
         return 2
-    print(json.dumps({"drives": drives, "sites": sites, "children": children}, indent=2), file=output)
+    print(
+        json.dumps({"drives": drives, "sites": sites, "children": children}, indent=2), file=output
+    )
     return 0
 
 
@@ -278,7 +279,14 @@ def cmd_scan(
                 max_files=max_files,
             )
         else:
-            print(json.dumps({"error": "specify --drive-id (and optionally --item-id, --folder-id, --site-id)"}), file=output)
+            print(
+                json.dumps(
+                    {
+                        "error": "specify --drive-id (and optionally --item-id, --folder-id, --site-id)"
+                    }
+                ),
+                file=output,
+            )
             return 2
     except MicrosoftApiError as exc:
         print(json.dumps(safe_diagnostic(exc)), file=output)
@@ -304,9 +312,7 @@ def cmd_targets_list(
 
     from securedact_core.app_paths import SecuredactPaths
 
-    store = microsoft_targets_registry.TargetRegistryStore(
-        SecuredactPaths.resolve().root
-    )
+    store = microsoft_targets_registry.TargetRegistryStore(SecuredactPaths.resolve().root)
     try:
         items = store.list(integration_id=integration_id)
     except Exception as exc:
@@ -396,9 +402,7 @@ def cmd_targets_add(
         )
         return 2
 
-    store = microsoft_targets_registry.TargetRegistryStore(
-        SecuredactPaths.resolve().root
-    )
+    store = microsoft_targets_registry.TargetRegistryStore(SecuredactPaths.resolve().root)
     record = microsoft_targets_registry.LocalTargetRecord.new_one_drive_folder(
         integration_id=integration_id,
         drive_id=drive_id,
@@ -439,9 +443,7 @@ def cmd_targets_remove(
 ) -> int:
     from securedact_core.app_paths import SecuredactPaths
 
-    store = microsoft_targets_registry.TargetRegistryStore(
-        SecuredactPaths.resolve().root
-    )
+    store = microsoft_targets_registry.TargetRegistryStore(SecuredactPaths.resolve().root)
     removed = store.remove(target_id)
     print(json.dumps({"removed": removed, "target_id": target_id}, indent=2), file=output)
     return 0 if removed else 2
@@ -461,7 +463,6 @@ def _find_folder_by_name(
     Returns the matching :class:`MicrosoftGraphItem` or ``None``. The walk is
     bounded so a single discovery call cannot walk unbounded customer data.
     """
-
 
     seen: set[str] = set()
     queue: list[tuple[str | None, int]] = [(None, 0)]
@@ -507,7 +508,9 @@ def build_microsoft_parser(subparsers: Any) -> None:
         "setup", help="store Microsoft Entra client config encrypted on this machine"
     )
     setup.add_argument("--client-id", help="Entra client (application) id")
-    setup.add_argument("--client-secret", help="Entra client secret (omit for public-client / PKCE)")
+    setup.add_argument(
+        "--client-secret", help="Entra client secret (omit for public-client / PKCE)"
+    )
     setup.add_argument("--tenant-id", help="Entra tenant id (defaults to 'common')")
     setup.add_argument(
         "--no-secret",
@@ -554,7 +557,9 @@ def build_microsoft_parser(subparsers: Any) -> None:
         help="restrict to a single control-plane integration_id",
     )
 
-    t_add = targets_cmds.add_parser("add", help="register a Microsoft target and obtain its opaque id")
+    t_add = targets_cmds.add_parser(
+        "add", help="register a Microsoft target and obtain its opaque id"
+    )
     t_add.add_argument("--integration-id", required=True)
     t_add.add_argument("--drive-id", help="Drive id (OneDrive or SharePoint library)")
     t_add.add_argument("--folder-id", help="folder item id")

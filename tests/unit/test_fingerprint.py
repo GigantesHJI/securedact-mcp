@@ -11,7 +11,6 @@ import pytest
 from securedact_core.connectors.fingerprint import (
     EncryptedFingerprintKeyStore,
     FingerprintConfig,
-    ResourceType,
     _derive_fingerprint_key,
     compute_resource_fingerprint,
     verify_fingerprint,
@@ -230,7 +229,9 @@ class TestFingerprintInScanResults:
             provider="microsoft365",
             tenant_id="tenant-1",
         )
-        fingerprints = [compute_resource_fingerprint(config, "driveItem", "item-123") for _ in range(100)]
+        fingerprints = [
+            compute_resource_fingerprint(config, "driveItem", "item-123") for _ in range(100)
+        ]
         assert len(set(fingerprints)) == 1
 
 

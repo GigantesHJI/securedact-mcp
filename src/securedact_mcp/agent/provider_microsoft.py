@@ -48,7 +48,12 @@ class _MicrosoftConnectorClient(Protocol):
     """Narrow structural boundary for the optional Microsoft connector client."""
 
     def scan_file(
-        self, drive_id: str, item_id: str, context: ScanContext, *, integration_id: str | None = None
+        self,
+        drive_id: str,
+        item_id: str,
+        context: ScanContext,
+        *,
+        integration_id: str | None = None,
     ) -> ScanResult: ...
     def scan_folder(
         self,
@@ -76,13 +81,20 @@ class _MicrosoftClientModule(Protocol):
 
     MicrosoftConfigError: type[Exception]
 
-    def build_client(self, config: object, engine: SecuredactEngine, fingerprint_config: FingerprintConfig | None = None) -> _MicrosoftConnectorClient: ...
+    def build_client(
+        self,
+        config: object,
+        engine: SecuredactEngine,
+        fingerprint_config: FingerprintConfig | None = None,
+    ) -> _MicrosoftConnectorClient: ...
 
 
 class _MicrosoftConfigModule(Protocol):
     """Narrow structural boundary for the optional Microsoft connector config module."""
 
-    def load_microsoft_config(self, *, require_enabled: bool = ..., profile: str = ...) -> object: ...
+    def load_microsoft_config(
+        self, *, require_enabled: bool = ..., profile: str = ...
+    ) -> object: ...
 
 
 class _MicrosoftTargetRegistryModule(Protocol):
@@ -111,7 +123,9 @@ def _compute_aggregate_fingerprint(
     return "aggregate"
 
 
-def _summary_to_result(summary: object, fingerprint_config: FingerprintConfig | None = None) -> ScanResult:
+def _summary_to_result(
+    summary: object, fingerprint_config: FingerprintConfig | None = None
+) -> ScanResult:
     """Reduce a bulk :class:`DriveScanSummary` to one aggregate, safe ScanResult.
 
     Bulk folder/drive scans report aggregate file counts and per-category finding
@@ -163,8 +177,12 @@ def _summary_to_result(summary: object, fingerprint_config: FingerprintConfig | 
             "findings_total": findings_total,
             "source_type": source,
             # Include fingerprints for longitudinal tracking, not raw IDs
-            "drive_fingerprint": compute_resource_fingerprint(fingerprint_config, "drive", drive_id) if fingerprint_config and drive_id else None,
-            "site_fingerprint": compute_resource_fingerprint(fingerprint_config, "site", site_id) if fingerprint_config and site_id else None,
+            "drive_fingerprint": compute_resource_fingerprint(fingerprint_config, "drive", drive_id)
+            if fingerprint_config and drive_id
+            else None,
+            "site_fingerprint": compute_resource_fingerprint(fingerprint_config, "site", site_id)
+            if fingerprint_config and site_id
+            else None,
         },
         correlation_id=None,
     )
@@ -280,14 +298,10 @@ class MicrosoftScanProvider:
         try:
             registry_module = cast(
                 _MicrosoftTargetRegistryModule,
-                importlib.import_module(
-                    "securedact_mcp.connectors.microsoft.target_registry"
-                ),
+                importlib.import_module("securedact_mcp.connectors.microsoft.target_registry"),
             )
         except ModuleNotFoundError as exc:
-            raise JobExecutionError(
-                f"microsoft target registry unavailable: {exc}"
-            ) from exc
+            raise JobExecutionError(f"microsoft target registry unavailable: {exc}") from exc
 
         if not target.target_ref:
             raise JobExecutionError(
@@ -299,8 +313,7 @@ class MicrosoftScanProvider:
         integration_id = target.integration_id
         if not integration_id:
             raise JobExecutionError(
-                "microsoft365 scans require an integration_id to resolve the "
-                "opaque target_ref"
+                "microsoft365 scans require an integration_id to resolve the opaque target_ref"
             )
 
         store = self._target_registry_factory(SecuredactPaths.resolve().root)
@@ -308,8 +321,7 @@ class MicrosoftScanProvider:
             record = store.get(target.target_ref, integration_id=integration_id)
         except registry_module.TargetRegistryError as exc:
             raise JobExecutionError(
-                f"microsoft365 target registry rejected target_ref "
-                f"{target.target_ref!r}: {exc}"
+                f"microsoft365 target registry rejected target_ref {target.target_ref!r}: {exc}"
             ) from exc
 
         if target.target_type in (TARGET_FOLDER, TARGET_SITE):

@@ -189,12 +189,28 @@ def test_agent_elevated_reaches_resumed_flow_once(
 
     monkeypatch.delenv(deploy.AGENT_ELEVATED_ENV, raising=False)
     monkeypatch.setattr(deploy, "is_elevated", lambda: False)
+    machine_data = tmp_path / "data"
+    machine_data.mkdir(parents=True)
 
-    def _install(**_k: object) -> dict[str, object]:
+    def _install(*, data_dir, **_k: object) -> dict[str, object]:
+        # Simulate registration by creating agent.json
+        from securedact_mcp.agent.config import AgentConfig, AgentFiles, save_config
+
+        files = AgentFiles.resolve(root=Path(data_dir) / "agent")
+        files.ensure()
+        config = AgentConfig.create(
+            control_plane_url="https://www.securedact.com",
+            agent_id="agent-1",
+            display_name="test-agent",
+            runtime_platform="win32",
+            agent_version="0.1.0",
+        )
+        save_config(config, files)
+
         return {
             "installed": True,
             "service_name": "SecuRedact Managed Agent",
-            "data_dir": str(tmp_path / "data"),
+            "data_dir": str(data_dir),
             "account": "SYSTEM",
             "running": True,
             "agent_id": "agent-1",
@@ -210,10 +226,11 @@ def test_agent_elevated_reaches_resumed_flow_once(
         output=output,
         agent="yes",
         agent_elevated=True,
-        data_dir=tmp_path / "data",
+        data_dir=machine_data,
         # Elevation-resume coverage only; decline Google explicitly so the test
         # never reads/writes machine-local Google state.
         google="no",
+        microsoft="no",
         elevated_check=lambda: False,
         elevate=lambda a: elevate.append(list(a)) or 0,
         secret_input_fn=lambda _p: "srr_dummy_token",

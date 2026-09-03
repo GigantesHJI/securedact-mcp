@@ -221,7 +221,9 @@ class AgentControlPlaneIntegrationSource:
         from .client import ControlPlaneClient
         from .credentials import AgentCredentialStore
 
-        store = AgentCredentialStore(self._config.agent_id, root=self._files.root if self._files else None)
+        store = AgentCredentialStore(
+            self._config.agent_id, root=self._files.root if self._files else None
+        )
         client = ControlPlaneClient(self._config.control_plane_url, credential_provider=store.get)
         raw = client.list_eligible_google_integrations()
         return [

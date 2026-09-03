@@ -195,15 +195,14 @@ def test_provider_scan_uses_resolved_profile(tmp_path, monkeypatch):
         # Return a dummy credential object
         class FakeCreds:
             pass
+
         return FakeCreds()
 
     config_mod = types.SimpleNamespace(
         GoogleConfigError=GoogleConfigError, load_google_config=fake_load
     )
 
-    auth_mod = types.SimpleNamespace(
-        load_credentials=fake_load_credentials
-    )
+    auth_mod = types.SimpleNamespace(load_credentials=fake_load_credentials)
 
     def fake_import(name, *args, **kwargs):
         if name.endswith(".client"):
@@ -252,15 +251,14 @@ def test_bound_profile_config_invalid_fails_closed(tmp_path, monkeypatch):
     def fake_load_credentials(config):
         class FakeCreds:
             pass
+
         return FakeCreds()
 
     config_mod = types.SimpleNamespace(
         GoogleConfigError=GoogleConfigError, load_google_config=fake_load
     )
 
-    auth_mod = types.SimpleNamespace(
-        load_credentials=fake_load_credentials
-    )
+    auth_mod = types.SimpleNamespace(load_credentials=fake_load_credentials)
 
     def fake_import(name, *args, **kwargs):
         if name.endswith(".client"):
@@ -308,12 +306,15 @@ def test_default_profile_token_path_unchanged(monkeypatch):
     assert config.token_path == expected
 
 
-def test_non_default_profile_isolated_token_path(monkeypatch):
+def test_non_default_profile_isolated_token_path(monkeypatch, tmp_path):
     monkeypatch.delenv("SECUREDACT_GOOGLE_TOKEN_PATH", raising=False)
-    from securedact_core.app_paths import SecuredactPaths
+    monkeypatch.setattr(
+        "securedact_core.app_paths.SecuredactPaths.resolve",
+        lambda override=None: type("Obj", (), {"root": tmp_path})(),
+    )
 
-    config = load_google_config(profile="work")
-    expected = SecuredactPaths.resolve().root / "google" / "profiles" / "work" / "token.json.enc"
+    config = load_google_config(profile="work", data_dir=tmp_path)
+    expected = tmp_path / "google" / "profiles" / "work" / "token.json.enc"
     assert config.token_path == expected
 
 

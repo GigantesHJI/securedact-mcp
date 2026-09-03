@@ -17,6 +17,7 @@ truth for "Microsoft 365 onboarding" UX.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from collections.abc import Callable, Mapping
@@ -29,12 +30,10 @@ from ..connectors.microsoft import config as microsoft_config
 from ..connectors.microsoft.config import MicrosoftConfigError
 from ..connectors.microsoft.managed import (
     MANAGED_MICROSOFT_CLIENT_ID_ENV,
-    get_managed_microsoft_config,
     is_managed_microsoft_available,
-    resolve_managed_microsoft_client_id,
 )
 from .agent_runner import bind_connector
-from .config import AgentFiles
+from .config import AgentConfig, AgentFiles
 from .connectors import ConnectorBinding, ConnectorBindingStore
 from .errors import AgentError
 from .google_setup import _set_machine_env_var, machine_agent_files, normalize_integration_id
@@ -75,9 +74,7 @@ BYO_MICROSOFT_LABEL = "Use your own Microsoft Entra application"
 # One-line prompt shown in the main setup wizard when Microsoft 365 is not yet
 # configured. The default is "no" so an accidental Enter during a quick setup
 # run does not silently turn the connector on.
-MICROSOFT_SELECTION_PROMPT = (
-    "Configure Microsoft 365 (OneDrive and SharePoint) now? [y/N] "
-)
+MICROSOFT_SELECTION_PROMPT = "Configure Microsoft 365 (OneDrive and SharePoint) now? [y/N] "
 
 # Hint shown when the wizard needs the user to paste an integration id from the
 # dashboard. Kept as a single constant so the message is identical across paths.
@@ -105,6 +102,7 @@ class _MicrosoftConfigModule(Protocol):
     def load_microsoft_config(
         self, *, require_enabled: bool = ..., profile: str = ..., data_dir: Any = ...
     ) -> Any: ...
+
     MicrosoftConfigError: type[Exception]
 
 
@@ -138,11 +136,7 @@ class MicrosoftMachineState:
     def configured(self) -> bool:
         """True when this machine already carries Microsoft configuration."""
 
-        return bool(
-            self.client_configured
-            or self.token_present
-            or self.binding_integration_id
-        )
+        return bool(self.client_configured or self.token_present or self.binding_integration_id)
 
 
 def inspect_microsoft_machine(
@@ -392,9 +386,7 @@ def prompt_microsoft_client_config(
                 MicrosoftClientConfigStore,
             )
 
-            MicrosoftClientConfigStore(root).save(
-                client_id, client_secret, tenant_id=tenant_id
-            )
+            MicrosoftClientConfigStore(root).save(client_id, client_secret, tenant_id=tenant_id)
     except Exception as exc:
         print(f"Could not persist Microsoft client config: {scrub(str(exc))}", file=output)
         return False
@@ -625,9 +617,7 @@ def verify_microsoft_authorization_runtime(data_dir: Path | str) -> dict[str, An
         payload["loopback_bound"] = True
         payload["loopback_host"] = microsoft_auth.LOOPBACK_HOST
         payload["loopback_port"] = int(server.port)
-        loopback_config = dataclasses.replace(
-            config, redirect_uri=server.redirect_uri
-        )
+        loopback_config = dataclasses.replace(config, redirect_uri=server.redirect_uri)
         try:
             url, state = microsoft_auth.build_authorization_url(loopback_config, pkce=True)
         except Exception as exc:
@@ -637,15 +627,11 @@ def verify_microsoft_authorization_runtime(data_dir: Path | str) -> dict[str, An
         microsoft_auth._FLOW_STATE.pop(state, None)  # type: ignore[attr-defined]
     finally:
         if server is not None:
-            try:
+            with contextlib.suppress(Exception):
                 server.shutdown()
-            except Exception:
-                pass
 
     payload["verified"] = bool(
-        payload["client_configured"]
-        and payload["loopback_bound"]
-        and payload["oauth_url_built"]
+        payload["client_configured"] and payload["loopback_bound"] and payload["oauth_url_built"]
     )
     return payload
 
@@ -675,10 +661,7 @@ class MicrosoftOnboardingOutcome:
         if not self.selected:
             return True
         return bool(
-            self.deps_ready
-            and self.authorized
-            and self.integration_id
-            and self.binding_verified
+            self.deps_ready and self.authorized and self.integration_id and self.binding_verified
         )
 
 
@@ -720,7 +703,9 @@ def run_microsoft_machine_onboarding(
 
     _apply_env = apply_microsoft_env_fn or apply_microsoft_machine_env
     _verify = verify_binding_fn or verify_microsoft_binding
-    _client_config = client_config_fn or (lambda **kwargs: prompt_microsoft_client_config(**kwargs, byo=microsoft_byo))
+    _client_config = client_config_fn or (
+        lambda **kwargs: prompt_microsoft_client_config(**kwargs, byo=microsoft_byo)
+    )
     _bind = bind_microsoft_fn or bind_microsoft_machine
     _deps_ready = deps_ready_fn or _default_microsoft_deps_ready
     _select_microsoft = microsoft_selection_fn or resolve_microsoft_selection
@@ -749,6 +734,7 @@ def run_microsoft_machine_onboarding(
 
     # Resolve the runtime python inside this function to avoid circular imports
     from .deploy import resolve_machine_runtime_python
+
     runtime_python = resolve_machine_runtime_python(runtime_path)
     outcome = MicrosoftOnboardingOutcome(
         selected=True,
@@ -770,21 +756,25 @@ def run_microsoft_machine_onboarding(
         print(f"Microsoft machine env not applied: {scrub(str(exc))}", file=output)
 
     print("Authorizing Microsoft 365 locally against the machine data root...", file=output)
-    auth_ok = bool(
-        authorize_microsoft_fn
-        and authorize_microsoft_fn(
+    auth_ok = (
+        bool(
+            authorize_microsoft_fn
+            and authorize_microsoft_fn(
+                data_dir,
+                input_fn=input_fn,
+                output=output,
+                non_interactive=non_interactive,
+                require_enabled=False,
+            )
+        )
+        if authorize_microsoft_fn is not None
+        else authorize_microsoft_machine(
             data_dir,
             input_fn=input_fn,
             output=output,
             non_interactive=non_interactive,
             require_enabled=False,
         )
-    ) if authorize_microsoft_fn is not None else authorize_microsoft_machine(
-        data_dir,
-        input_fn=input_fn,
-        output=output,
-        non_interactive=non_interactive,
-        require_enabled=False,
     )
     if not auth_ok and microsoft_byo:
         collected = bool(
@@ -797,20 +787,24 @@ def run_microsoft_machine_onboarding(
             )
         )
         if collected:
-            auth_ok = bool(
-                authorize_microsoft_fn(
+            auth_ok = (
+                bool(
+                    authorize_microsoft_fn(
+                        data_dir,
+                        input_fn=input_fn,
+                        output=output,
+                        non_interactive=non_interactive,
+                        require_enabled=False,
+                    )
+                )
+                if authorize_microsoft_fn is not None
+                else authorize_microsoft_machine(
                     data_dir,
                     input_fn=input_fn,
                     output=output,
                     non_interactive=non_interactive,
                     require_enabled=False,
                 )
-            ) if authorize_microsoft_fn is not None else authorize_microsoft_machine(
-                data_dir,
-                input_fn=input_fn,
-                output=output,
-                non_interactive=non_interactive,
-                require_enabled=False,
             )
     outcome = MicrosoftOnboardingOutcome(
         selected=True,
@@ -930,6 +924,13 @@ def _default_microsoft_deps_ready(runtime_python: Path | None = None) -> bool:
 
     if runtime_python is None:
         return True
+    from .deploy import (
+        _default_runner,
+        _runtime_has_microsoft_imports,
+        _runtime_root_for_python,
+        _runtime_supports_microsoft_auth,
+    )
+
     runtime = _runtime_root_for_python(Path(runtime_python))
     runner = _default_runner
     return _runtime_has_microsoft_imports(runtime, runner) and _runtime_supports_microsoft_auth(
@@ -967,6 +968,7 @@ def verify_microsoft_binding(
 
 __all__ = [
     "BYO_MICROSOFT_LABEL",
+    "MANAGED_MICROSOFT_CLIENT_ID_ENV",
     "MICROSOFT_BYO_ENV",
     "MICROSOFT_CLIENT_ID_ENV",
     "MICROSOFT_CLIENT_SECRET_ENV",
@@ -974,8 +976,6 @@ __all__ = [
     "MICROSOFT_DEFAULT_SCOPES",
     "MICROSOFT_ENABLED_ENV",
     "MICROSOFT_INTEGRATION_ID_ADVANCED_HINT",
-    "MICROSOFT_MANAGED_CLIENT_ID_ENV",
-    "MICROSOFT_MANAGED_CLIENT_SECRET_ENV",
     "MICROSOFT_SELECTION_PROMPT",
     "MICROSOFT_TENANT_ID_ENV",
     "NORMAL_MICROSOFT_LABEL",

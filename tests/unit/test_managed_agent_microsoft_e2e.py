@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 import tempfile
 import types
 from collections.abc import Callable
@@ -30,16 +29,11 @@ from pathlib import Path
 import pytest
 
 import securedact_mcp.agent.provider_microsoft as provider_microsoft
+import securedact_mcp.connectors.microsoft.auth as microsoft_auth
 import securedact_mcp.connectors.microsoft.client as microsoft_client_mod
 import securedact_mcp.connectors.microsoft.config as microsoft_config_mod
-import securedact_mcp.connectors.microsoft.auth as microsoft_auth
 from securedact_core import SecuredactEngine
 from securedact_core.connectors.fingerprint import EncryptedFingerprintKeyStore, FingerprintConfig
-from securedact_core.connectors.microsoft import (
-    CANONICAL_GRAPH_BASE,
-    MicrosoftApiError,
-)
-from securedact_mcp.connectors.microsoft.config import MicrosoftConnectorConfig
 from securedact_core.policies import STRICT_EXTERNAL_AI_POLICY
 from securedact_core.production import build_production_engine
 from securedact_mcp.agent.agent_runner import _failed_result, _submit_result
@@ -53,6 +47,7 @@ from securedact_mcp.agent.reducer import (
     validate_safe_result,
 )
 from securedact_mcp.connectors.microsoft.client import MicrosoftConnectorClient
+from securedact_mcp.connectors.microsoft.config import MicrosoftConnectorConfig
 from tests.unit.agent_helpers import FakeTransport, fake_claim
 from tests.unit.microsoft_transport_fake import FakeMicrosoftTransport
 
@@ -158,12 +153,12 @@ def microsoft_test_config(monkeypatch):
     # Use a unique temp dir per test to avoid conflicts
     temp_dir = Path(tempfile.mkdtemp(prefix="microsoft_test_"))
     temp_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create a minimal config for testing
     config = MicrosoftConnectorConfig(
         enabled=True,
         client_id="test-client-id",
-        client_secret="test-client-secret",
+        client_secret="test-client-secret",  # noqa: S106
         tenant_id="test-tenant",
         redirect_uri="http://localhost:8080/",
         scopes=["User.Read", "Files.Read", "Sites.Read.All", "offline_access"],
@@ -171,10 +166,15 @@ def microsoft_test_config(monkeypatch):
         key_path=temp_dir / "token.key",
         managed=False,
     )
-    
-    def fake_load_config(*, require_enabled: bool = False, profile: str = "default", data_dir: str | Path | None = None):
+
+    def fake_load_config(
+        *,
+        require_enabled: bool = False,
+        profile: str = "default",
+        data_dir: str | Path | None = None,
+    ):
         return config
-    
+
     monkeypatch.setattr(microsoft_config_mod, "load_microsoft_config", fake_load_config)
     return config
 
@@ -185,24 +185,26 @@ def microsoft_fingerprint_store(monkeypatch):
     # Use a unique temp dir per test
     temp_dir = Path(tempfile.mkdtemp(prefix="fingerprint_test_"))
     temp_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create a test fingerprint store with the temp dir
     test_store = EncryptedFingerprintKeyStore(temp_dir)
-    
+
     # Create a deterministic fingerprint config for testing
     test_config = FingerprintConfig(
         key=b"test-key-for-testing-" + b"x" * 12,  # 32 bytes
         provider="microsoft365",
         tenant_id="int-1",
     )
-    
+
     def fake_create_config(self, provider: str, tenant_id: str):
         if provider == "microsoft365" and tenant_id == "int-1":
             return test_config
         return EncryptedFingerprintKeyStore.create_config(self, provider, tenant_id)
-    
+
     # Patch at module level
-    monkeypatch.setattr(provider_microsoft, "EncryptedFingerprintKeyStore", lambda *a, **k: test_store)
+    monkeypatch.setattr(
+        provider_microsoft, "EncryptedFingerprintKeyStore", lambda *a, **k: test_store
+    )
     monkeypatch.setattr(EncryptedFingerprintKeyStore, "create_config", fake_create_config)
     return test_store
 
@@ -217,9 +219,13 @@ def microsoft_credentials(monkeypatch):
         "expires_in": 3600,
         "scope": "User.Read Files.Read Sites.Read.All offline_access",
     }
-    monkeypatch.setattr(microsoft_auth, "require_valid_credentials", lambda config: fake_credentials)
+    monkeypatch.setattr(
+        microsoft_auth, "require_valid_credentials", lambda config: fake_credentials
+    )
     # Also patch in the client module where it's imported
-    monkeypatch.setattr(microsoft_client_mod, "require_valid_credentials", lambda config: fake_credentials)
+    monkeypatch.setattr(
+        microsoft_client_mod, "require_valid_credentials", lambda config: fake_credentials
+    )
     return fake_credentials
 
 
@@ -253,8 +259,17 @@ def _patch_microsoft_client(monkeypatch, transport):
 
     captured = transport
 
-    def fake_build(config, eng, *, transport=None, user_id=None, tenant_id=None, fingerprint_config=None):
-        return MicrosoftConnectorClient(config, eng, transport=captured, user_id="user-123", tenant_id="tenant-456", fingerprint_config=fingerprint_config)
+    def fake_build(
+        config, eng, *, transport=None, user_id=None, tenant_id=None, fingerprint_config=None
+    ):
+        return MicrosoftConnectorClient(
+            config,
+            eng,
+            transport=captured,
+            user_id="user-123",
+            tenant_id="tenant-456",
+            fingerprint_config=fingerprint_config,
+        )
 
     monkeypatch.setattr(microsoft_client_mod, "build_client", fake_build)
     return transport
@@ -263,10 +278,19 @@ def _patch_microsoft_client(monkeypatch, transport):
 # --- 1. Single-file end-to-end ------------------------------------------------
 
 
-def test_single_file_microsoft_scan_submits_only_safe_metadata(monkeypatch, engine, microsoft_target_registry):
+def test_single_file_microsoft_scan_submits_only_safe_metadata(
+    monkeypatch, engine, microsoft_target_registry
+):
     transport = FakeMicrosoftTransport()
     transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
-    transport.add_item("drive-1", id="file-1", name="Report", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=200)
+    transport.add_item(
+        "drive-1",
+        id="file-1",
+        name="Report",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "drive-1"},
+        size=200,
+    )
     transport.set_content("drive-1", "file-1", SYNTHETIC_DOC.encode("utf-8"))
     _patch_microsoft_client(monkeypatch, transport)
 
@@ -307,14 +331,44 @@ def test_single_file_microsoft_scan_submits_only_safe_metadata(monkeypatch, engi
 # --- 2. Folder / aggregate end-to-end ----------------------------------------
 
 
-def test_folder_microsoft_scan_aggregates_categories_and_resources(monkeypatch, engine, microsoft_target_registry):
+def test_folder_microsoft_scan_aggregates_categories_and_resources(
+    monkeypatch, engine, microsoft_target_registry
+):
     transport = FakeMicrosoftTransport()
     transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
     transport.add_item("drive-1", id="root", name="Root", folder={}, parentReference={}, size=0)
-    transport.add_item("drive-1", id="file-1", name="a.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=200)
-    transport.add_item("drive-1", id="file-2", name="b.pdf", file={"mimeType": "application/pdf"}, parentReference={"id": "root", "driveId": "drive-1"}, size=200)
-    transport.add_item("drive-1", id="clean", name="clean.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=50)
-    transport.add_item("drive-1", id="pii", name="pii.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=200)
+    transport.add_item(
+        "drive-1",
+        id="file-1",
+        name="a.txt",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "drive-1"},
+        size=200,
+    )
+    transport.add_item(
+        "drive-1",
+        id="file-2",
+        name="b.pdf",
+        file={"mimeType": "application/pdf"},
+        parentReference={"id": "root", "driveId": "drive-1"},
+        size=200,
+    )
+    transport.add_item(
+        "drive-1",
+        id="clean",
+        name="clean.txt",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "drive-1"},
+        size=50,
+    )
+    transport.add_item(
+        "drive-1",
+        id="pii",
+        name="pii.txt",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "drive-1"},
+        size=200,
+    )
     transport.set_content("drive-1", "file-1", b"mail jane@example.com")
     transport.set_content("drive-1", "clean", b"nothing to see")
     transport.set_content("drive-1", "pii", b"IBAN NL91ABNA0417164300 phone +31612345678")
@@ -322,7 +376,9 @@ def test_folder_microsoft_scan_aggregates_categories_and_resources(monkeypatch, 
 
     target_id = microsoft_target_registry.register(drive_id="drive-1", folder_id="root")
     claim = JobClaim.from_claim(
-        fake_claim(job_id="job-folder", platform="microsoft365", target_type="folder", target_ref=target_id)
+        fake_claim(
+            job_id="job-folder", platform="microsoft365", target_type="folder", target_ref=target_id
+        )
     )
     provider = provider_microsoft.MicrosoftScanProvider()
     exe = execute_job(claim, engine, provider, _resolved_policy())
@@ -344,13 +400,22 @@ def test_folder_microsoft_scan_aggregates_categories_and_resources(monkeypatch, 
 # --- 2b. Lease heartbeat during local scan -----------------------------------
 
 
-def test_folder_scan_keeps_lease_alive_via_heartbeat(monkeypatch, engine, microsoft_target_registry):
+def test_folder_scan_keeps_lease_alive_via_heartbeat(
+    monkeypatch, engine, microsoft_target_registry
+):
     transport = FakeMicrosoftTransport()
     transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
     transport.add_item("drive-1", id="root", name="Root", folder={}, parentReference={}, size=0)
     for i in range(30):
         fid = f"f{i}"
-        transport.add_item("drive-1", id=fid, name=f"{fid}.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=50)
+        transport.add_item(
+            "drive-1",
+            id=fid,
+            name=f"{fid}.txt",
+            file={"mimeType": "text/plain"},
+            parentReference={"id": "root", "driveId": "drive-1"},
+            size=50,
+        )
         transport.set_content("drive-1", fid, b"nothing to see")
     _patch_microsoft_client(monkeypatch, transport)
 
@@ -377,13 +442,22 @@ def test_folder_scan_keeps_lease_alive_via_heartbeat(monkeypatch, engine, micros
 def test_pii_never_reaches_control_plane(monkeypatch, engine, microsoft_target_registry):
     transport = FakeMicrosoftTransport()
     transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
-    transport.add_item("drive-1", id="file-1", name="Report", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=200)
+    transport.add_item(
+        "drive-1",
+        id="file-1",
+        name="Report",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "drive-1"},
+        size=200,
+    )
     transport.set_content("drive-1", "file-1", SYNTHETIC_DOC.encode("utf-8"))
     _patch_microsoft_client(monkeypatch, transport)
 
     target_id = microsoft_target_registry.register(drive_id="drive-1", folder_id="file-1")
     claim = JobClaim.from_claim(
-        fake_claim(job_id="job-pii", platform="microsoft365", target_type="resource", target_ref=target_id)
+        fake_claim(
+            job_id="job-pii", platform="microsoft365", target_type="resource", target_ref=target_id
+        )
     )
     provider = provider_microsoft.MicrosoftScanProvider()
     exe = execute_job(claim, engine, provider, _resolved_policy())
@@ -417,13 +491,25 @@ def test_pii_never_reaches_control_plane(monkeypatch, engine, microsoft_target_r
 def test_oauth_tokens_never_leak(monkeypatch, engine, microsoft_target_registry):
     transport = FakeMicrosoftTransport(user_id="ya29.fake-access-token")
     transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
-    transport.add_item("drive-1", id="file-1", name="Report", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=200)
+    transport.add_item(
+        "drive-1",
+        id="file-1",
+        name="Report",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "drive-1"},
+        size=200,
+    )
     transport.set_content("drive-1", "file-1", SYNTHETIC_DOC.encode("utf-8"))
     _patch_microsoft_client(monkeypatch, transport)
 
     target_id = microsoft_target_registry.register(drive_id="drive-1", folder_id="file-1")
     claim = JobClaim.from_claim(
-        fake_claim(job_id="job-token", platform="microsoft365", target_type="resource", target_ref=target_id)
+        fake_claim(
+            job_id="job-token",
+            platform="microsoft365",
+            target_type="resource",
+            target_ref=target_id,
+        )
     )
     provider = provider_microsoft.MicrosoftScanProvider()
     exe = execute_job(claim, engine, provider, _resolved_policy())
@@ -523,9 +609,18 @@ def test_provider_unavailable_maps_to_connector_unavailable(engine):
 def test_sharepoint_site_scan(monkeypatch, engine, microsoft_target_registry):
     transport = FakeMicrosoftTransport()
     transport.add_drive(id="drive-sp-1", name="Documents", driveType="documentLibrary")
-    transport.add_site(id="site-1", displayName="Team Site", webUrl="https://contoso.sharepoint.com/sites/team")
+    transport.add_site(
+        id="site-1", displayName="Team Site", webUrl="https://contoso.sharepoint.com/sites/team"
+    )
     transport.add_item("drive-sp-1", id="root", name="Root", folder={}, parentReference={}, size=0)
-    transport.add_item("drive-sp-1", id="file-1", name="report.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-sp-1"}, size=200)
+    transport.add_item(
+        "drive-sp-1",
+        id="file-1",
+        name="report.txt",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "drive-sp-1"},
+        size=200,
+    )
     transport.set_content("drive-sp-1", "file-1", b"Contact john@contoso.com")
     _patch_microsoft_client(monkeypatch, transport)
 
@@ -533,7 +628,9 @@ def test_sharepoint_site_scan(monkeypatch, engine, microsoft_target_registry):
         drive_id="drive-sp-1", folder_id="root", site_id="site-1"
     )
     claim = JobClaim.from_claim(
-        fake_claim(job_id="job-sp", platform="microsoft365", target_type="folder", target_ref=target_id)
+        fake_claim(
+            job_id="job-sp", platform="microsoft365", target_type="folder", target_ref=target_id
+        )
     )
     provider = provider_microsoft.MicrosoftScanProvider()
     exe = execute_job(claim, engine, provider, _resolved_policy())
@@ -552,7 +649,14 @@ def test_drive_scan(monkeypatch, engine, microsoft_target_registry):
     transport = FakeMicrosoftTransport()
     transport.add_drive(id="drive-1", name="My Drive", driveType="personal")
     transport.add_item("drive-1", id="root", name="Root", folder={}, parentReference={}, size=0)
-    transport.add_item("drive-1", id="file-1", name="notes.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "drive-1"}, size=100)
+    transport.add_item(
+        "drive-1",
+        id="file-1",
+        name="notes.txt",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "drive-1"},
+        size=100,
+    )
     transport.set_content("drive-1", "file-1", b"test@example.com")
     _patch_microsoft_client(monkeypatch, transport)
 
@@ -565,7 +669,12 @@ def test_drive_scan(monkeypatch, engine, microsoft_target_registry):
     )
     microsoft_target_registry.store.add(record)
     claim = JobClaim.from_claim(
-        fake_claim(job_id="job-drive", platform="microsoft365", target_type="drive", target_ref=record.target_id)
+        fake_claim(
+            job_id="job-drive",
+            platform="microsoft365",
+            target_type="drive",
+            target_ref=record.target_id,
+        )
     )
     provider = provider_microsoft.MicrosoftScanProvider()
     exe = execute_job(claim, engine, provider, _resolved_policy())
@@ -583,12 +692,21 @@ def test_integration_target_scan(monkeypatch, engine):
     # Add a "me" drive which is the default for integration target
     transport.add_drive(id="me", name="My Drive", driveType="personal")
     transport.add_item("me", id="root", name="Root", folder={}, parentReference={}, size=0)
-    transport.add_item("me", id="file-1", name="notes.txt", file={"mimeType": "text/plain"}, parentReference={"id": "root", "driveId": "me"}, size=100)
+    transport.add_item(
+        "me",
+        id="file-1",
+        name="notes.txt",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": "me"},
+        size=100,
+    )
     transport.set_content("me", "file-1", b"test@example.com")
     _patch_microsoft_client(monkeypatch, transport)
 
     claim = JobClaim.from_claim(
-        fake_claim(job_id="job-int", platform="microsoft365", target_type="integration", target_ref="")
+        fake_claim(
+            job_id="job-int", platform="microsoft365", target_type="integration", target_ref=""
+        )
     )
     provider = provider_microsoft.MicrosoftScanProvider()
     exe = execute_job(claim, engine, provider, _resolved_policy())
@@ -607,11 +725,17 @@ def test_unsupported_target_type_fails_closed(monkeypatch, engine):
     _patch_microsoft_client(monkeypatch, transport)
 
     claim = JobClaim.from_claim(
-        fake_claim(job_id="job-bad", platform="microsoft365", target_type="unknown_type", target_ref="drive-1")
+        fake_claim(
+            job_id="job-bad",
+            platform="microsoft365",
+            target_type="unknown_type",
+            target_ref="drive-1",
+        )
     )
     provider = provider_microsoft.MicrosoftScanProvider()
 
     from securedact_mcp.agent.errors import JobExecutionError
+
     with pytest.raises(JobExecutionError) as exc_info:
         execute_job(claim, engine, provider, _resolved_policy())
     assert "unsupported microsoft365 target_type" in str(exc_info.value)

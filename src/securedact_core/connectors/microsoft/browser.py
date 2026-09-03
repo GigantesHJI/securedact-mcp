@@ -54,15 +54,17 @@ SOURCE_TYPE_SHAREPOINT_SITE = "microsoft_sharepoint_site"
 FOLDER_MIME_TYPE = "folder"
 
 # Common text-based MIME types supported for scanning
-FILE_MIME_TYPES = frozenset({
-    "text/plain",
-    "text/markdown",
-    "text/csv",
-    "application/json",
-    "text/html",
-    "application/xml",
-    "text/xml",
-})
+FILE_MIME_TYPES = frozenset(
+    {
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "application/json",
+        "text/html",
+        "application/xml",
+        "text/xml",
+    }
+)
 
 # OAuth scopes (least privilege for this milestone)
 USER_READ_SCOPE = "User.Read"
@@ -89,7 +91,9 @@ _HEARTBEAT_EVERY_FILES = 25
 DEFAULT_MAX_DOWNLOAD_BYTES = MAX_INSPECTION_TEXT_CHARS * 4
 
 # Graph fields to select for drive items
-_SELECT_FIELDS = "id,name,file,folder,size,parentReference,webUrl,@microsoft.graph.downloadUrl,fileSystemInfo"
+_SELECT_FIELDS = (
+    "id,name,file,folder,size,parentReference,webUrl,@microsoft.graph.downloadUrl,fileSystemInfo"
+)
 
 
 class MicrosoftApiError(Exception):
@@ -264,12 +268,12 @@ def has_write_scope(scopes: list[str]) -> bool:
     Used to fail closed if a configuration requests more than read-only.
     """
 
-    return bool(
-        {_FILES_READ_WRITE_SCOPE, _SITES_READ_WRITE_ALL_SCOPE} & set(scopes)
-    )
+    return bool({_FILES_READ_WRITE_SCOPE, _SITES_READ_WRITE_ALL_SCOPE} & set(scopes))
 
 
-def _parse_item(item: dict[str, Any], *, source_type: str = SOURCE_TYPE_ONEDRIVE) -> MicrosoftGraphItem:
+def _parse_item(
+    item: dict[str, Any], *, source_type: str = SOURCE_TYPE_ONEDRIVE
+) -> MicrosoftGraphItem:
     """Map a Graph ``driveItem`` JSON object into a :class:`MicrosoftGraphItem`."""
 
     item_id = str(item.get("id", ""))
@@ -707,7 +711,9 @@ class MicrosoftGraphBrowser:
                 )
                 continue
 
-            result = self._scan_one(drive_id, child.item_id, scanner, context, integration_id, user_id)
+            result = self._scan_one(
+                drive_id, child.item_id, scanner, context, integration_id, user_id
+            )
             self._accumulate(summary, result)
             if heartbeat is not None and summary.files_discovered % _HEARTBEAT_EVERY_FILES == 0:
                 heartbeat()
@@ -851,7 +857,9 @@ class MicrosoftGraphBrowser:
         )
         return _parse_item(data)
 
-    def _compute_fingerprint(self, resource_type: ResourceType, resource_id: str | None) -> str | None:
+    def _compute_fingerprint(
+        self, resource_type: ResourceType, resource_id: str | None
+    ) -> str | None:
         """Compute a privacy-safe fingerprint for a resource.
 
         Returns None if fingerprinting is not configured or resource_id is None.
@@ -866,9 +874,17 @@ class MicrosoftGraphBrowser:
         self._emit_access(item)
         # Use privacy-safe fingerprint as resource_id instead of raw Graph ID
         resource_fingerprint = self._compute_fingerprint("driveItem", item.item_id)
-        parent_fingerprint = self._compute_fingerprint("folder", item.parent_id) if item.parent_id else None
-        drive_fingerprint = self._compute_fingerprint("drive", item.drive_id) if item.drive_id else None
-        site_fingerprint = self._compute_fingerprint("site", getattr(self, "_current_site_id", None)) if getattr(self, "_current_site_id", None) else None
+        parent_fingerprint = (
+            self._compute_fingerprint("folder", item.parent_id) if item.parent_id else None
+        )
+        drive_fingerprint = (
+            self._compute_fingerprint("drive", item.drive_id) if item.drive_id else None
+        )
+        site_fingerprint = (
+            self._compute_fingerprint("site", getattr(self, "_current_site_id", None))
+            if getattr(self, "_current_site_id", None)
+            else None
+        )
 
         return ConnectorResource(
             resource_id=resource_fingerprint or item.item_id,
@@ -915,7 +931,9 @@ class MicrosoftGraphBrowser:
                     "tenant_id": self._identity.tenant_id,
                     "resource_kind": ResourceKind.FILE.value,
                     "source_type": item.source_type,
-                    "drive_fingerprint": self._compute_fingerprint("drive", item.drive_id) if item.drive_id else None,
+                    "drive_fingerprint": self._compute_fingerprint("drive", item.drive_id)
+                    if item.drive_id
+                    else None,
                 },
             )
         )
@@ -928,7 +946,7 @@ class MicrosoftGraphBrowser:
             return None
         # Convert absolute URL to relative path
         if next_link.startswith(CANONICAL_GRAPH_BASE):
-            return next_link[len(CANONICAL_GRAPH_BASE) + 1:]
+            return next_link[len(CANONICAL_GRAPH_BASE) + 1 :]
         return None
 
     @property

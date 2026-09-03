@@ -71,9 +71,7 @@ SYNTHETIC_FILES = {
 
 
 @pytest.fixture
-def machine_data_dir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Path:
+def machine_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Simulate the Windows service install publishing the machine-wide root.
 
     Sets ``SECUREDACT_APP_DATA_DIR`` to a temp dir and patches
@@ -124,9 +122,7 @@ def microsoft_config_for_machine(
         managed=False,
     )
 
-    monkeypatch.setattr(
-        microsoft_config_mod, "load_microsoft_config", lambda **kw: config
-    )
+    monkeypatch.setattr(microsoft_config_mod, "load_microsoft_config", lambda **kw: config)
     return config
 
 
@@ -225,9 +221,7 @@ def test_service_runtime_sees_interactively_written_microsoft_state(
     )
     assert rc == 0
     client_config_path = machine_data_dir / "microsoft" / "client_config.json.enc"
-    assert client_config_path.exists(), (
-        "microsoft setup must write to the machine-wide data root"
-    )
+    assert client_config_path.exists(), "microsoft setup must write to the machine-wide data root"
 
     # The encrypted file must not contain the secret in cleartext.
     blob = client_config_path.read_bytes()
@@ -268,15 +262,9 @@ def test_service_runtime_sees_interactively_written_microsoft_state(
     # The agent CLI writes via ConnectorBindingStore (rooted in
     # SecuredactPaths.resolve().root, which is the machine data dir).
     binding_store.bind(
-        ConnectorBinding(
-            integration_id="int-1", platform="microsoft365", local_profile="default"
-        )
+        ConnectorBinding(integration_id="int-1", platform="microsoft365", local_profile="default")
     )
-    bindings_path = (
-        machine_data_dir
-        / "agent"
-        / "connector-bindings.json"
-    )
+    bindings_path = machine_data_dir / "agent" / "connector-bindings.json"
     assert bindings_path.exists()
     bindings_blob = bindings_path.read_text(encoding="utf-8")
     parsed = json.loads(bindings_blob)
@@ -296,8 +284,7 @@ def test_service_runtime_sees_interactively_written_microsoft_state(
     real_AgentFiles = AgentFiles
     files_svc = real_AgentFiles.resolve()
     assert files_svc.root.parent == machine_data_dir.resolve(), (
-        f"agent files root must live under the machine data dir; "
-        f"got {files_svc.root}"
+        f"agent files root must live under the machine data dir; got {files_svc.root}"
     )
 
     # Build a fresh fake transport for the service to use.

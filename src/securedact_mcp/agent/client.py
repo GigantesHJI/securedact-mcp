@@ -251,7 +251,10 @@ class ControlPlaneClient:
         """
         resp = self._transport.get(
             f"{self._base}/v1/agents/integrations/eligible",
-            headers={"User-Agent": self._user_agent, "Authorization": self._credential_provider().authorization_header},
+            headers={
+                "User-Agent": self._user_agent,
+                "Authorization": self._credential_provider().authorization_header,
+            },
         )
         if resp.status == 401:
             raise AgentCredentialError("agent credential invalid")

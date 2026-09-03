@@ -19,10 +19,8 @@ from securedact_core.connectors.microsoft import default_connector_scopes, has_w
 
 from .client_config_store import MicrosoftClientConfigStore
 from .managed import (
-    MANAGED_MICROSOFT_CLIENT_ID_ENV,
     get_managed_microsoft_config,
     is_managed_microsoft_available,
-    resolve_managed_microsoft_client_id,
 )
 from .storage import MicrosoftCredentialStore
 
@@ -121,7 +119,9 @@ def load_microsoft_config(
 
     enabled = os.getenv("SECUREDACT_MICROSOFT_ENABLED", "0") == "1"
     if require_enabled and not enabled:
-        raise MicrosoftConfigError("Microsoft connector is not enabled. Set SECUREDACT_MICROSOFT_ENABLED=1.")
+        raise MicrosoftConfigError(
+            "Microsoft connector is not enabled. Set SECUREDACT_MICROSOFT_ENABLED=1."
+        )
 
     client_id = os.getenv("MICROSOFT_ENTRA_CLIENT_ID") or None
     client_secret = os.getenv("MICROSOFT_ENTRA_CLIENT_SECRET") or None

@@ -197,7 +197,9 @@ class GoogleScanProvider:
                 importlib.import_module("securedact_mcp.connectors.google.auth"),
             )
         except ModuleNotFoundError as exc:
-            raise JobExecutionError("google provider unavailable: google_not_configured", code="google_not_configured") from exc
+            raise JobExecutionError(
+                "google provider unavailable: google_not_configured", code="google_not_configured"
+            ) from exc
 
         # Resolve the managed-agent integration binding to the exact local
         # profile, then load THAT profile's configuration/OAuth material. This

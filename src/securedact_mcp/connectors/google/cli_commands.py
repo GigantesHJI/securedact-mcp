@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, TextIO
 
 from securedact_core import SecuredactEngine
@@ -111,21 +112,18 @@ def cmd_status(
     # This is a lightweight check - just try to import the modules
     agent_healthy = False
     try:
+        import google_auth_oauthlib.flow  # noqa: F401
+        import requests  # noqa: F401
+
         import google.auth
-        import google.oauth2.credentials
-        import google_auth_oauthlib.flow
-        import requests
+        import google.oauth2.credentials  # noqa: F401
+
         agent_healthy = True
     except ImportError:
         agent_healthy = False
 
     user_authorized = creds is not None
-    ready_to_scan = (
-        config.enabled
-        and oauth_client_configured
-        and user_authorized
-        and agent_healthy
-    )
+    ready_to_scan = config.enabled and oauth_client_configured and user_authorized and agent_healthy
 
     status = {
         "provider_enabled": config.enabled,
@@ -234,8 +232,12 @@ def build_google_parser(subparsers: Any) -> None:
     auth.add_argument("--revoke", action="store_true", help="revoke and forget tokens")
 
     status_parser = google_commands.add_parser("status", help="show Google connector status")
-    status_parser.add_argument("--profile", default="default", help="OAuth token profile (default: default)")
-    status_parser.add_argument("--data-dir", help="machine data directory (default: SECUREDACT_APP_DATA_DIR)")
+    status_parser.add_argument(
+        "--profile", default="default", help="OAuth token profile (default: default)"
+    )
+    status_parser.add_argument(
+        "--data-dir", help="machine data directory (default: SECUREDACT_APP_DATA_DIR)"
+    )
 
     list_cmd = google_commands.add_parser("list", help="list Shared Drives and Drive items")
     list_cmd.add_argument("--drive-id", help="Shared Drive id")

@@ -87,7 +87,9 @@ class MicrosoftConnectorClient:
             user_id=user_id,
         )
         self._transport = transport
-        self._browser = MicrosoftGraphBrowser(identity, transport, fingerprint_config=self._fingerprint_config)
+        self._browser = MicrosoftGraphBrowser(
+            identity, transport, fingerprint_config=self._fingerprint_config
+        )
         return self._browser
 
     def capabilities(self) -> frozenset[ConnectorCapability]:
@@ -190,7 +192,14 @@ def build_client(
     tenant_id: str | None = None,
     fingerprint_config: FingerprintConfig | None = None,
 ) -> MicrosoftConnectorClient:
-    return MicrosoftConnectorClient(config, engine, transport=transport, user_id=user_id, tenant_id=tenant_id, fingerprint_config=fingerprint_config)
+    return MicrosoftConnectorClient(
+        config,
+        engine,
+        transport=transport,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        fingerprint_config=fingerprint_config,
+    )
 
 
 __all__ = [

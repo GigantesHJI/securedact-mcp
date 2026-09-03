@@ -190,18 +190,34 @@ def test_resumed_continuation_does_not_re_elevate(
 ) -> None:
     # Simulate the already-elevated child (marker inherited from the parent).
     monkeypatch.setenv(deploy.AGENT_ELEVATED_ENV, "1")
-    monkeypatch.setattr(
-        deploy,
-        "install_service_from_runtime",
-        lambda **k: {
+    machine_data = tmp_path / "data"
+    machine_data.mkdir(parents=True)
+
+    def mock_install_service_from_runtime(*, data_dir, **kwargs):
+        # Simulate registration by creating agent.json
+        from securedact_mcp.agent.config import AgentConfig, AgentFiles, save_config
+
+        files = AgentFiles.resolve(root=Path(data_dir) / "agent")
+        files.ensure()
+        config = AgentConfig.create(
+            control_plane_url="https://www.securedact.com",
+            agent_id="agent-1",
+            display_name="test-agent",
+            runtime_platform="win32",
+            agent_version="0.1.0",
+        )
+        save_config(config, files)
+
+        return {
             "installed": True,
             "service_name": "SecuRedact Managed Agent",
-            "data_dir": str(tmp_path / "data"),
+            "data_dir": str(data_dir),
             "account": "SYSTEM",
             "running": True,
             "agent_id": "agent-1",
-        },
-    )
+        }
+
+    monkeypatch.setattr(deploy, "install_service_from_runtime", mock_install_service_from_runtime)
     monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
     elevate = _RecordingElevate()
     output = __import__("io").StringIO()
@@ -209,10 +225,11 @@ def test_resumed_continuation_does_not_re_elevate(
         input_fn=lambda _p: "y",
         output=output,
         agent="yes",
-        data_dir=tmp_path / "data",
+        data_dir=machine_data,
         # This test covers elevation only; decline Google explicitly so it never
         # depends on (or touches) machine-local Google state.
         google="no",
+        microsoft="no",
         elevated_check=lambda: True,
         elevate=elevate,
         secret_input_fn=lambda _p: "srr_tok",

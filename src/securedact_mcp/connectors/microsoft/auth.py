@@ -38,7 +38,7 @@ LOOPBACK_STAGE_CALLBACK = "callback"
 LOOPBACK_STAGE_STATE_VALIDATION = "state_validation"
 LOOPBACK_STAGE_CALLBACK_ERROR = "callback_error"
 LOOPBACK_STAGE_MISSING_CODE = "missing_code"
-LOOPBACK_STAGE_TOKEN_EXCHANGE = "token_exchange"
+LOOPBACK_STAGE_TOKEN_EXCHANGE = "token_exchange"  # noqa: S105
 LOOPBACK_STAGE_PERSISTENCE = "persistence"
 LOOPBACK_STAGE_COMPLETE = "complete"
 LOOPBACK_STAGE_PRE_AUTHORIZATION = "pre_authorization"
@@ -47,11 +47,11 @@ LOOPBACK_STAGE_PRE_AUTHORIZATION = "pre_authorization"
 ERR_STATE_MISMATCH = "microsoft_loopback_state_mismatch"
 ERR_GOOGLE_CALLBACK_ERROR = "microsoft_callback_error"
 ERR_MISSING_CODE = "microsoft_loopback_missing_code"
-ERR_TOKEN_EXCHANGE_FAILED = "microsoft_token_exchange_failed"
+ERR_TOKEN_EXCHANGE_FAILED = "microsoft_token_exchange_failed"  # noqa: S105
 ERR_PERSISTENCE_FAILED = "microsoft_token_persistence_failed"
 ERR_UNEXPECTED = "microsoft_loopback_unexpected_error"
 ERR_CONFIG_MISSING = "microsoft_config_missing"
-ERR_MANAGED_CLIENT_SECRET_MISSING = "microsoft_managed_client_secret_missing"
+ERR_MANAGED_CLIENT_SECRET_MISSING = "microsoft_managed_client_secret_missing"  # noqa: S105
 
 # Local (pre-network) structural defects in the token exchange.
 ERR_LOCAL_REDIRECT_URI_MISMATCH = "microsoft_local_redirect_uri_mismatch"
@@ -219,11 +219,13 @@ def _loopback_failure(
 
 # Microsoft Entra endpoints
 MICROSOFT_AUTH_URI = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize"
-MICROSOFT_TOKEN_URI = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+MICROSOFT_TOKEN_URI = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"  # noqa: S105
 GRANT_TYPE_AUTHORIZATION_CODE = "authorization_code"
 
 
-def build_authorization_url(config: MicrosoftConnectorConfig, *, pkce: bool = True) -> tuple[str, str]:
+def build_authorization_url(
+    config: MicrosoftConnectorConfig, *, pkce: bool = True
+) -> tuple[str, str]:
     """Return the consent-screen URL and CSRF ``state`` for the flow."""
 
     from msal import ConfidentialClientApplication, PublicClientApplication
@@ -253,7 +255,9 @@ def build_authorization_url(config: MicrosoftConnectorConfig, *, pkce: bool = Tr
         import hashlib
         import secrets
 
-        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
+        code_verifier = (
+            base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
+        )
         digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
         code_challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
@@ -270,6 +274,7 @@ def build_authorization_url(config: MicrosoftConnectorConfig, *, pkce: bool = Tr
 
     # Generate our own state for CSRF
     import secrets
+
     state = secrets.token_urlsafe(32)
 
     # Store the pending authorization
@@ -405,14 +410,18 @@ def _exchange_token_only(
     return result
 
 
-def _persist_credentials(config: MicrosoftConnectorConfig, credentials: dict[str, Any]) -> dict[str, Any]:
+def _persist_credentials(
+    config: MicrosoftConnectorConfig, credentials: dict[str, Any]
+) -> dict[str, Any]:
     """Encrypt and persist credentials, raising on any storage failure."""
 
     store: MicrosoftCredentialStore = config.credential_store()
     try:
         store.save_token(credentials)
     except Exception as exc:
-        raise MicrosoftAuthError(f"Microsoft token persistence failed: {type(exc).__name__}") from exc
+        raise MicrosoftAuthError(
+            f"Microsoft token persistence failed: {type(exc).__name__}"
+        ) from exc
     return credentials
 
 
@@ -631,14 +640,10 @@ class LoopbackOAuthServer:
         """Close the listener (idempotent)."""
 
         if getattr(self, "_serving", False):
-            try:
+            with contextlib.suppress(Exception):
                 self._httpd.shutdown()
-            except Exception:
-                pass
-        try:
+        with contextlib.suppress(Exception):
             self._httpd.server_close()
-        except Exception:
-            pass
 
 
 def run_local_oauth(
@@ -699,10 +704,8 @@ def _run_local_oauth_after_authorize(
     if _browser_open is not None:
         _browser_open(url)
     elif open_browser:
-        try:
+        with contextlib.suppress(Exception):
             webbrowser.open(url)
-        except Exception:
-            pass
 
     try:
         result = server.wait_for_callback()

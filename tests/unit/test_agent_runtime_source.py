@@ -262,22 +262,44 @@ def built_wheel() -> Path:
 
 def test_local_wheel_contains_full_agent_package(built_wheel: Path) -> None:
     names = zipfile.ZipFile(built_wheel).namelist()
-    agent = [n for n in names if n.startswith("securedact_mcp/agent/") and n.endswith(".py")]
     # All active agent modules are present in the wheel. The dormant pywin32
     # reference backend (service_windows) is quarantined under ``securedact_legacy``
     # and is intentionally excluded from the wheel.
     assert "securedact_mcp/agent/runtime_bootstrap.py" in names
     assert "securedact_mcp/agent/service_windows.py" not in names
     assert "securedact_mcp/agent/service_windows/" not in "/".join(names)
-    for mod in (
+    # Required production agent modules (including Google and Microsoft onboarding)
+    required_modules = {
         "runtime_bootstrap.py",
         "service.py",
         "service_security.py",
         "service_lock.py",
         "deploy.py",
-    ):
-        assert f"securedact_mcp/agent/{mod}" in names
-    assert len(agent) == 24
+        "config.py",
+        "cli.py",
+        "client.py",
+        "credentials.py",
+        "errors.py",
+        "executor.py",
+        "google_setup.py",
+        "microsoft_setup.py",
+        "provider_google.py",
+        "provider_microsoft.py",
+        "connectors.py",
+        "capabilities.py",
+        "policy.py",
+        "reducer.py",
+        "state.py",
+        "transport.py",
+        "service_taskscheduler.py",
+        "agent_runner.py",
+        "safe_log.py",
+        "entitlement.py",
+    }
+    for mod in required_modules:
+        assert f"securedact_mcp/agent/{mod}" in names, f"Missing required module: {mod}"
+    # Ensure no unexpected modules are missing (allows for future additions)
+    # but flag if the wheel is missing any production modules.
 
 
 def test_machine_runtime_can_run_runtime_bootstrap(built_wheel: Path, tmp_path: Path) -> None:

@@ -113,7 +113,6 @@ def test_scan_request_and_result_serialization() -> None:
 
 def test_importing_connector_contracts_does_not_pull_microsoft() -> None:
     import securedact_core.connectors as connectors
-    import sys
 
     assert connectors is not None
     # Only check for Microsoft-specific SDKs, not general HTTP/OAuth libraries

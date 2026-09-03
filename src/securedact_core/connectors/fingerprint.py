@@ -29,7 +29,6 @@ from typing import Literal
 
 from cryptography.fernet import Fernet, InvalidToken
 
-
 # Fingerprint version for key rotation support
 FINGERPRINT_VERSION = 1
 FINGERPRINT_PREFIX = f"fp{FINGERPRINT_VERSION}_"
@@ -54,14 +53,12 @@ class FingerprintConfig:
     tenant_id: str
 
 
-def _derive_fingerprint_key(
-    master_key: bytes, provider: str, tenant_id: str
-) -> bytes:
+def _derive_fingerprint_key(master_key: bytes, provider: str, tenant_id: str) -> bytes:
     """Derive a provider/tenant-scoped fingerprint key from a master key.
 
     Uses HKDF-like derivation: HMAC-SHA256(master_key, provider + "|" + tenant_id)
     """
-    info = f"{provider}|{tenant_id}".encode("utf-8")
+    info = f"{provider}|{tenant_id}".encode()
     return hmac.new(master_key, info, hashlib.sha256).digest()
 
 
@@ -87,7 +84,7 @@ def compute_resource_fingerprint(
         raise FingerprintError("stable_resource_id must not be empty")
 
     # Domain-separated input: provider|resource_type|resource_id
-    message = f"{config.provider}|{resource_type}|{stable_resource_id}".encode("utf-8")
+    message = f"{config.provider}|{resource_type}|{stable_resource_id}".encode()
     digest = hmac.new(config.key, message, hashlib.sha256).digest()
     # Use first 16 bytes (128 bits) for compactness while maintaining security
     fingerprint = digest[:16].hex()
@@ -163,6 +160,7 @@ class FingerprintKeyStore:
 
 
 # --- Integration with existing encrypted storage ---
+
 
 class EncryptedFingerprintKeyStore:
     """Fingerprint key store that encrypts the master key at rest.

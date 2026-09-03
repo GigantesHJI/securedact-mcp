@@ -13,10 +13,6 @@ from typing import Any
 from securedact_core.connectors.microsoft import (
     CANONICAL_GRAPH_BASE,
     MicrosoftApiError,
-    MicrosoftGraphItem,
-    MicrosoftDrive,
-    MicrosoftSite,
-    MicrosoftGraphTransport,
 )
 
 
@@ -61,42 +57,40 @@ class FakeMicrosoftTransport:
 
     def get_json(self, path: str) -> dict[str, Any]:
         path = urllib.parse.unquote(path)
-        
+
         # me endpoint
         if path == "me" or path.startswith("me?"):
             return {
                 "id": self.user_id,
                 "userPrincipalName": "test@example.com",
             }
-        
+
         # organization endpoint
         if path == "organization" or path.startswith("organization?"):
-            return {
-                "value": [{"id": self.tenant_id}]
-            }
-        
+            return {"value": [{"id": self.tenant_id}]}
+
         # drives
         if path == "drives" or path.startswith("drives?"):
             return {"value": list(self.drives.values())}
-        
+
         m = re.match(r"drives/([^?/]+)(?:\?(.*))?$", path)
         if m:
             drive_id = m.group(1)
             if drive_id not in self.drives:
                 raise MicrosoftApiError("not found", status_code=404)
             return self.drives[drive_id]
-        
+
         # sites
         if path == "sites" or path.startswith("sites?"):
             return {"value": list(self.sites.values())}
-        
+
         m = re.match(r"sites/([^?/]+)(?:\?(.*))?$", path)
         if m:
             site_id = m.group(1)
             if site_id not in self.sites:
                 raise MicrosoftApiError("not found", status_code=404)
             return self.sites[site_id]
-        
+
         # site drive - return mapped drive or first documentLibrary
         m = re.match(r"sites/([^/]+)/drive(?:\?(.*))?$", path)
         if m:
@@ -111,28 +105,32 @@ class FakeMicrosoftTransport:
                 if drive.get("driveType") == "documentLibrary":
                     return drive
             raise MicrosoftApiError("not found", status_code=404)
-        
+
         # drive children - root
         m = re.match(r"drives/([^/]+)/root/children(?:\?(.*))?$", path)
         if m:
             drive_id = m.group(1)
             items = [
-                it for k, it in self.items.items()
-                if k.startswith(f"{drive_id}:") and it.get("parentReference", {}).get("id") == "root"
+                it
+                for k, it in self.items.items()
+                if k.startswith(f"{drive_id}:")
+                and it.get("parentReference", {}).get("id") == "root"
             ]
             return {"value": items}
-        
+
         # drive children - folder
         m = re.match(r"drives/([^/]+)/items/([^/]+)/children(?:\?(.*))?$", path)
         if m:
             drive_id = m.group(1)
             folder_id = m.group(2)
             items = [
-                it for k, it in self.items.items()
-                if k.startswith(f"{drive_id}:") and it.get("parentReference", {}).get("id") == folder_id
+                it
+                for k, it in self.items.items()
+                if k.startswith(f"{drive_id}:")
+                and it.get("parentReference", {}).get("id") == folder_id
             ]
             return {"value": items}
-        
+
         # drive item by id
         m = re.match(r"drives/([^/]+)/items/([^?/]+)(?:\?(.*))?$", path)
         if m:
@@ -143,7 +141,7 @@ class FakeMicrosoftTransport:
             if item is None:
                 raise MicrosoftApiError("not found", status_code=404)
             return item
-        
+
         raise MicrosoftApiError("unexpected path", status_code=400)
 
     def get_content(self, path: str, *, max_bytes: int | None = None) -> bytes:
@@ -151,7 +149,7 @@ class FakeMicrosoftTransport:
         if path.startswith("http"):
             # Extract item info from download URL if possible
             pass
-        
+
         m = re.match(r"drives/([^/]+)/items/([^?/]+)/content", path)
         if m:
             drive_id = m.group(1)
@@ -166,5 +164,5 @@ class FakeMicrosoftTransport:
                     status_code=413,
                 )
             return data
-        
+
         raise MicrosoftApiError("unexpected content path", status_code=400)

@@ -33,8 +33,8 @@ from .target_registry import LocalTargetRecord, TargetRegistryStore
 from .transport import MicrosoftGraphTransport
 
 __all__ = [
-    "LocalTargetRecord",
     "MANAGED_MICROSOFT_CLIENT_ID_ENV",
+    "LocalTargetRecord",
     "MicrosoftClientConfigStore",
     "MicrosoftConfigError",
     "MicrosoftConnectorClient",

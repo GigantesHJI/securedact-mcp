@@ -45,7 +45,9 @@ class _MicrosoftCliCommands(Protocol):
     """Structural type for the optional Microsoft connector CLI module."""
 
     def build_microsoft_parser(self, subparsers: object) -> None: ...
-    def run_microsoft(self, arguments: object, *, input_fn: InputFunction, output: TextIO) -> int: ...
+    def run_microsoft(
+        self, arguments: object, *, input_fn: InputFunction, output: TextIO
+    ) -> int: ...
 
 
 def _load_google_cli_commands() -> _GoogleCliCommands | None:

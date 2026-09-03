@@ -87,7 +87,6 @@ def get_managed_microsoft_config() -> Any:
     # and the redirect URI registered in the Entra app registration.
     # This mirrors the Google managed app pattern but with Microsoft-specific
     # endpoints and no client secret.
-    from .managed_config import ManagedMicrosoftConfig, packaged_managed_microsoft_config
 
     base = packaged_managed_microsoft_config()
     return ManagedMicrosoftConfig(

@@ -65,7 +65,7 @@ from typing import Any, cast
 
 from ..connectors.google import managed as google_managed
 from . import google_setup, service, service_security
-from .config import AgentFiles
+from .config import AgentConfig, AgentFiles
 from .errors import AgentError
 from .microsoft_setup import (
     MICROSOFT_BYO_ENV,
@@ -140,10 +140,7 @@ MICROSOFT_RUNTIME_IMPORTS = (
 )
 
 MICROSOFT_RUNTIME_OK_MARKER = "MICROSOFT RUNTIME OK"
-MICROSOFT_RUNTIME_IMPORT_CHECK = (
-    "import msal, requests; "
-    f"print({MICROSOFT_RUNTIME_OK_MARKER!r})"
-)
+MICROSOFT_RUNTIME_IMPORT_CHECK = f"import msal, requests; print({MICROSOFT_RUNTIME_OK_MARKER!r})"
 
 MICROSOFT_AUTH_CAPABILITIES = ("microsoft-auth", "microsoft-auth-loopback", "microsoft-auth-verify")
 MICROSOFT_AUTH_CAPABILITY_CHECK = (
@@ -152,6 +149,9 @@ MICROSOFT_AUTH_CAPABILITY_CHECK = (
     + ", ".join(repr(cap) for cap in MICROSOFT_AUTH_CAPABILITIES)
     + ") else 1)"
 )
+
+# Bounded wait (seconds) for a running scheduled agent to release the runtime
+_AGENT_STOP_WAIT_SECONDS = 30.0
 
 
 def default_runtime_path() -> Path:
@@ -2848,9 +2848,10 @@ def run_managed_agent_module(
     resolved_runtime_path = cast("Path | str | None", result.get("runtime_path") or runtime_path)
 
     # Load agent config for Google onboarding (needed for control-plane integration discovery)
-    from .config import load_config, AgentFiles
-    config = load_config()
+    from .config import AgentFiles, load_config
+
     files = AgentFiles.resolve(root=machine_data_dir / "agent")
+    config = load_config(files)
 
     # --- Google Workspace onboarding (only when configured/selected) -----------
     resolved_data = machine_data_dir
@@ -2945,7 +2946,7 @@ def run_managed_agent_module(
             microsoft_integration_id=microsoft_integration_id,
             runtime_path=resolved_runtime_path,
             command_runner=command_runner,
-            microsoft_byo=microsoft_byo,
+            microsoft_byo=microsoft_byo_flag,
             authorize_microsoft_fn=authorize_microsoft_fn,
             bind_microsoft_fn=bind_microsoft_fn,
             apply_microsoft_env_fn=apply_microsoft_env_fn,

@@ -1136,18 +1136,32 @@ def _setup_google_module(
 
 def _patch_install_and_heartbeat(monkeypatch, machine: Path) -> None:
     monkeypatch.setattr(deploy.sys, "platform", "win32")
-    monkeypatch.setattr(
-        deploy,
-        "install_service_from_runtime",
-        lambda **k: {
+
+    def mock_install_service_from_runtime(*, data_dir, **kwargs):
+        # Simulate registration by creating agent.json
+        from securedact_mcp.agent.config import AgentConfig, AgentFiles, save_config
+
+        files = AgentFiles.resolve(root=Path(data_dir) / "agent")
+        files.ensure()
+        config = AgentConfig.create(
+            control_plane_url="https://www.securedact.com",
+            agent_id="agent-1",
+            display_name="test-agent",
+            runtime_platform="win32",
+            agent_version="0.1.0",
+        )
+        save_config(config, files)
+
+        return {
             "installed": True,
             "service_name": "SecuredactAgent",
-            "data_dir": str(machine),
+            "data_dir": str(data_dir),
             "account": r"NT SERVICE\SecuredactAgent",
             "running": True,
             "agent_id": "agent-1",
-        },
-    )
+        }
+
+    monkeypatch.setattr(deploy, "install_service_from_runtime", mock_install_service_from_runtime)
     monkeypatch.setattr(deploy, "verify_heartbeat", lambda **k: True)
 
 
@@ -1161,8 +1175,9 @@ def test_normal_setup_without_binding_prompts_no_raw_id(tmp_path, monkeypatch) -
     # The old "Find the integration ID in your SecuRedact dashboard" prompt is gone.
     assert "Find the integration ID" not in text
     assert "Dashboard -> Integrations -> Google Workspace -> integration ID" not in text
-    # Instead it reports automatic resolution unavailable + the advanced escape hatch.
-    assert "could not automatically determine which dashboard Google Workspace integration" in text
+    # Instead it reports automatic resolution unavailable (control plane lookup failed)
+    # + the advanced escape hatch.
+    assert "Could not look up eligible integrations" in text
     assert "securedact-mcp setup --agent --google yes --google-integration-id <id>" in text
     assert "NOT ready" in text
     # And it never asked the operator for a raw integration id.

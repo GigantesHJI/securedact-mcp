@@ -74,7 +74,9 @@ def data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def fingerprint_store(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> EncryptedFingerprintKeyStore:
+def fingerprint_store(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> EncryptedFingerprintKeyStore:
     store = EncryptedFingerprintKeyStore(data_dir)
 
     cfg = FingerprintConfig(
@@ -112,9 +114,7 @@ def microsoft_config(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> Microso
         key_path=data_dir / "microsoft" / "token.key",
         managed=False,
     )
-    monkeypatch.setattr(
-        microsoft_config_mod, "load_microsoft_config", lambda **kw: config
-    )
+    monkeypatch.setattr(microsoft_config_mod, "load_microsoft_config", lambda **kw: config)
     return config
 
 
@@ -227,9 +227,7 @@ def _smoke_test_transport() -> FakeMicrosoftTransport:
             parentReference={"id": "smoke", "driveId": "drive-1"},
             size=len(content),
         )
-        transport.set_content(
-            "drive-1", filename.replace(".", "_"), content
-        )
+        transport.set_content("drive-1", filename.replace(".", "_"), content)
     return transport
 
 
@@ -268,7 +266,9 @@ def test_setup_does_not_echo_client_secret(
         assert forbidden not in captured
 
 
-def test_setup_persists_encrypted_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+def test_setup_persists_encrypted_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
     """``microsoft setup`` writes the client id encrypted (not plaintext)."""
 
     out = io.StringIO()

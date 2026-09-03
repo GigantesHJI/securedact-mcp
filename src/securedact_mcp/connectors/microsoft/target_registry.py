@@ -329,9 +329,7 @@ class TargetRegistryStore:
     def _save(self, records: list[LocalTargetRecord]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         cipher = Fernet(self._load_or_create_key())
-        body = json.dumps([r.to_dict() for r in records], separators=(",", ":")).encode(
-            "utf-8"
-        )
+        body = json.dumps([r.to_dict() for r in records], separators=(",", ":")).encode("utf-8")
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_bytes(cipher.encrypt(body))
         try:
@@ -390,9 +388,7 @@ def _compute_fingerprints(
             from securedact_core.app_paths import SecuredactPaths
 
             store = EncryptedFingerprintKeyStore(SecuredactPaths.resolve().root)
-            fingerprint_config = store.create_config(
-                "microsoft365", tenant_id="local"
-            )
+            fingerprint_config = store.create_config("microsoft365", tenant_id="local")
         except Exception:
             fingerprint_config = None
 
@@ -401,9 +397,11 @@ def _compute_fingerprints(
         # caller can still operate without fingerprints (results won't
         # contain a fingerprint, but the raw Graph id never crosses the
         # boundary because the registry itself is encrypted).
-        return _placeholder(drive_id), (
-            _placeholder(folder_id) if folder_id else None
-        ), (_placeholder(site_id) if site_id else None)
+        return (
+            _placeholder(drive_id),
+            (_placeholder(folder_id) if folder_id else None),
+            (_placeholder(site_id) if site_id else None),
+        )
 
     return (
         compute_resource_fingerprint(fingerprint_config, _RESOURCE_TYPE_DRIVE, drive_id),

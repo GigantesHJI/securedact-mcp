@@ -52,7 +52,9 @@ MANAGED_MICROSOFT_REDIRECT_URI = "http://localhost"
 
 # Microsoft Entra application (client) metadata (informational only).
 MANAGED_MICROSOFT_APP_DISPLAY_NAME = "SecuRedact Managed Connector"
-MANAGED_MICROSOFT_TENANT_ID = "securedact"  # Informational: the tenant that owns the app registration
+MANAGED_MICROSOFT_TENANT_ID = (
+    "securedact"  # Informational: the tenant that owns the app registration
+)
 
 
 @dataclass(frozen=True, slots=True)

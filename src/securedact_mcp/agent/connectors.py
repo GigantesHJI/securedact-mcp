@@ -2,11 +2,10 @@
 """Local connector bindings (AGENT-010).
 
 A connector binding records that a control-plane integration (e.g. a Google
-Workspace integration) has been bound locally, so the agent may use the
-customer's locally-stored OAuth token to scan that integration's content. The
-binding stores only non-secret metadata; the actual OAuth token lives in the
-Google credential store. Microsoft 365 has no local Graph transport yet, so
-binding it is rejected until that transport lands (see :mod:`capabilities`).
+Workspace integration or Microsoft 365) has been bound locally, so the agent
+may use the customer's locally-stored OAuth token to scan that integration's
+content. The binding stores only non-secret metadata; the actual OAuth token
+lives in the platform's credential store.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from typing import Any
 from .config import AgentFiles
 from .errors import ConnectorBindingError
 
-SUPPORTED_BINDING_PLATFORMS = frozenset({"google_workspace"})
+SUPPORTED_BINDING_PLATFORMS = frozenset({"google_workspace", "microsoft365"})
 
 
 @dataclass(slots=True)

@@ -5,11 +5,6 @@ Capabilities are the agent's advertised *technical* abilities. They are never
 entitlements and can never grant commercial permission (control-plane protocol
 §10/§12). The agent must only advertise platforms it can genuinely execute
 locally, because the control plane uses the advertisement to dispatch jobs.
-
-Microsoft 365 local execution would require a Graph transport that is not yet
-present in this managed-agent runtime, so ``microsoft365`` is deliberately **not**
-advertised until that transport lands. Advertising a platform the agent cannot
-serve would let the control plane dispatch unreachable work and fail closed.
 """
 
 from __future__ import annotations
@@ -27,11 +22,11 @@ REQUIRED_CAPABILITIES = frozenset({"job_protocol_v1", "policy_snapshot_v1"})
 # control-plane PLATFORM_CAPABILITY map so capability matching succeeds).
 PLATFORM_CAPABILITY = {
     "google_workspace": "google_drive",
+    "microsoft365": "microsoft_graph",
 }
 
-# Platforms this runtime can genuinely execute locally. ``microsoft365`` is
-# intentionally absent: no concrete Graph transport exists in the agent package.
-SUPPORTED_PLATFORMS = frozenset({"google_workspace"})
+# Platforms this runtime can genuinely execute locally.
+SUPPORTED_PLATFORMS = frozenset({"google_workspace", "microsoft365"})
 
 _CAPABILITY_RE = re.compile(r"^[a-z0-9_]+$")
 _MAX_CAPABILITY_LEN = 64

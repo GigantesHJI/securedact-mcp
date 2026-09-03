@@ -22,9 +22,9 @@ local securedact-mcp managed agent
         ▼
 agent claims job (lease secret + generation)
         ▼
-resolves LOCAL Google connector binding (integration_id -> local profile)
+resolves LOCAL connector binding (integration_id -> local profile)
         ▼
-Google content fetched LOCALLY via the customer's local OAuth token
+Platform content fetched LOCALLY via the customer's local OAuth token
         ▼
 securedact_core scans LOCALLY (real detection pipeline)
         ▼
@@ -35,17 +35,18 @@ ONLY safe summary metadata
 SecuRedact.com job result endpoint
 ```
 
-Raw customer content — Google Docs/Sheets/Slides text, local connector responses,
-and `securedact_core` findings — **never** leaves the machine. The control plane
-may receive only: job id, agent id, schedule id, platform/target metadata,
-policy id/version/digest, status, severity, categories, counts,
-`review_required`, `policy_decision`, `supported_action`, bounded warning codes,
-safe error code, `resources_scanned`, `duration_ms`, and safe aggregate metadata.
+Raw customer content — Google Docs/Sheets/Slides text, Microsoft 365/SharePoint/OneDrive
+content, local connector responses, and `securedact_core` findings — **never** leaves
+the machine. The control plane may receive only: job id, agent id, schedule id,
+platform/target metadata, policy id/version/digest, status, severity, categories,
+counts, `review_required`, `policy_decision`, `supported_action`, bounded warning
+codes, safe error code, `resources_scanned`, `duration_ms`, and safe aggregate
+metadata.
 
 It must **never** receive: document text, redacted text, matched text, snippets,
 context, names, email addresses, phone numbers, IBAN values, OAuth access
 tokens, OAuth refresh tokens, `Authorization` headers, the agent credential,
-the lease secret inside the result object, or Google API raw error bodies.
+the lease secret inside the result object, or platform API raw error bodies.
 
 ## Registration (production flow)
 
@@ -101,19 +102,100 @@ The connector requests only `drive.readonly`. Any write/expanded scope in
 configuration fails closed. The OAuth token is refreshed locally when required;
 it is never sent to the control plane.
 
+## Microsoft 365 local setup
+
+> **Microsoft support ships in the base `securedact-mcp` package.** The
+> Microsoft connector package (`securedact_mcp.connectors.microsoft`,
+> `securedact_core.connectors.microsoft`) has no third-party dependencies that
+> are not already required by the core, so it is installed with the base wheel.
+> There is no separate `[microsoft]` pip extra and none is required.
+
+Microsoft content stays on the machine. Microsoft Graph resource identifiers
+(stable `driveId` / `folderId` / `siteId` / `driveItemId`) stay on the machine.
+The control plane receives only **opaque** `target_ref` values and bounded
+aggregate result metadata. See
+[Microsoft 365 target descriptor](#microsoft-365-target-descriptor).
+
+### Normal managed setup (recommended)
+
+The SecuRedact-managed Microsoft Entra public-client application is used by
+default. Normal customers do **not** need to create an Entra app, provide a
+client ID, client secret, or tenant ID.
+
+```powershell
+# 1) Enable the connector in this shell session.
+$env:SECUREDACT_MICROSOFT_ENABLED = "1"
+
+# 2) Authorize locally (browser opens the Microsoft consent screen; the
+#    loopback OAuth receiver captures the redirect and exchanges the code
+#    locally with PKCE). No client ID, tenant ID, or secret is required.
+securedact-mcp microsoft auth
+#   -> opens browser; after consent, the encrypted token is stored under
+#      %ProgramData%\Securedact\microsoft\token.json.enc
+
+# 3) Verify the local connector is enabled and has a token vault ready.
+securedact-mcp microsoft status
+```
+
+Configuration is machine-local (encrypted at rest under
+`<machine root>\microsoft\token.json.enc`, paired with a sibling Fernet
+key, chmod 0600). The token never leaves the machine; no Graph URL, filename, or
+PII is written to stdout.
+
+> **Why no `[microsoft]` extra?** `securedact_mcp.connectors.microsoft` and
+> `securedact_core.connectors.microsoft` use only `urllib` / `cryptography` /
+> `requests` / `msal`, which are already required by the core. The Microsoft
+> connector is therefore always available on the managed agent.
+
+### BYO (bring-your-own) Microsoft Entra app (advanced/enterprise)
+
+If you operate your own Microsoft Entra application instead of the SecuRedact
+managed app, pass `--microsoft-byo` during setup or run the standalone command:
+
+```powershell
+securedact-mcp microsoft setup --byo
+#   -> Microsoft Entra client (application) id: <paste your client id>
+#   -> Microsoft Entra tenant id (press Enter for 'common'): <tenant>
+#   -> Microsoft Entra client secret (Enter to skip for public-client / PKCE): <Enter or secret>
+```
+
+In BYO mode, a client secret is **not required** for the public-client / PKCE
+flow (the same PKCE protection applies). A secret is only needed if you
+registered a confidential-client app, which is rare for the managed-agent
+Desktop use case.
+
+> **Why no `[microsoft]` extra?** `securedact_mcp.connectors.microsoft` and
+> `securedact_core.connectors.microsoft` use only `urllib` / `cryptography` /
+> `requests` / `msal`, which are already required by the core. The Microsoft
+> connector is therefore always available on the managed agent.
+
 ## Connector binding
 
 A connector binding records that a control-plane integration has been bound
 locally so the agent may use the customer's locally-stored OAuth token. The
 binding stores only non-secret metadata (integration id, platform, local
-profile, display name). The OAuth token itself stays in the Google credential
+profile, display name). The OAuth token itself stays in the platform's credential
 store.
 
 ```powershell
-securedact-mcp agent connector bind google `
+# Google Workspace
+securedact-mcp agent connector bind google_workspace `
+    --integration-id <CONTROL_PLANE_INTEGRATION_ID> `
+    --profile default
+
+# Microsoft 365
+securedact-mcp agent connector bind microsoft365 `
     --integration-id <CONTROL_PLANE_INTEGRATION_ID> `
     --profile default
 ```
+
+The ``--platform`` argument's choices are derived from the canonical
+``SUPPORTED_BINDING_PLATFORMS`` constant (``google_workspace`` and
+``microsoft365``). Future providers cannot drift from this list — they are
+added by extending the constant and nothing else.
+
+Binding must not contain OAuth tokens. List bindings with
+`securedact-mcp agent connectors list`.
 
 Binding must not contain OAuth tokens. List bindings with
 `securedact-mcp agent connectors list`.
@@ -129,7 +211,9 @@ Binding must not contain OAuth tokens. List bindings with
 ## Control-plane target descriptor
 
 The claimed job supplies a target descriptor. The agent maps it cleanly to
-local Google connector calls:
+local platform connector calls:
+
+### Google Workspace
 
 | `target_type`        | Local action                                    |
 |----------------------|-------------------------------------------------|
@@ -140,7 +224,110 @@ local Google connector calls:
 | `resource_collection`| scan a single file (full category detail)       |
 | anything else        | fails closed (`unsupported_target`)             |
 
-Unknown target types fail closed; the agent never guesses.
+### Microsoft 365
+
+| `target_type`        | Local action                                    |
+|----------------------|-------------------------------------------------|
+| `integration`        | scan the whole bound integration (My Drive via `drive_id="me"`) |
+| `drive`              | scan a registered SharePoint drive              |
+| `folder`             | scan a single registered Drive folder recursively |
+| `site`               | scan a single registered Drive folder recursively (alias of `folder` for SharePoint) |
+| `resource`           | scan a single registered Drive file (full category detail) |
+| `resource_collection`| scan a single registered Drive file (full category detail) |
+| anything else        | fails closed (`unsupported_target`)             |
+
+#### Opaque `target_ref` (the documented Microsoft 365 workflow)
+
+For Microsoft 365, **`target_ref` is an opaque token** of the form
+``mtgt_<version>_<random>`` (e.g. ``mtgt_1_aBcDeF…``). It is **not** a raw
+Microsoft Graph identifier.
+
+* The opaque token is generated locally by
+  `securedact-mcp microsoft targets add` and stored encrypted in the
+  **machine-local target registry**.
+* The control plane only ever sees the opaque token.
+* The local agent resolves the opaque token back to the raw
+  ``driveId``/``folderId``/``siteId`` only inside the local scan, so the
+  Graph identifier never crosses the control-plane privacy boundary.
+* The agent rejects lookup under the wrong ``integration_id`` (fail-closed
+  cross-integration isolation).
+* The registry is encrypted at rest using Fernet under the machine data
+  root; writes are atomic and chmod 0600.
+
+The mapping is local-only. HMAC fingerprints in the result envelope are
+intentionally **non-reversible** and complement the opaque registry; the
+registry provides the reversible lookup the agent needs, and the fingerprint
+provides the privacy-safe identity the control plane sees.
+
+> **Removing a target:** `securedact-mcp microsoft targets remove --target-id <mtgt_...>`
+> deletes the local mapping. The control plane cannot remove a target it does
+> not know the opaque id of.
+
+#### Legacy raw composite form (deprecated, not for new schedules)
+
+> **Deprecated.** The previous contract accepted raw composite `target_ref`
+> strings (e.g. `driveId:folderId`). This is **rejected by default** in
+> version 0.5+ of the managed agent to keep raw Microsoft Graph identifiers
+> out of the control-plane privacy boundary. Existing schedules that still
+> send raw composite strings will fail closed at claim time with
+> `unsupported_target`. New schedules MUST use opaque `mtgt_…` tokens
+> registered locally via `securedact-mcp microsoft targets add`.
+
+If accepting legacy raw composite identifiers is temporarily required for an
+existing customer migration, the agent will only honor it when the
+``target_ref`` matches the form ``<driveId>:<folderId>`` AND the deployment
+explicitly re-enables the legacy path. New deployments must not enable the
+legacy path.
+
+#### Local target discovery (the operator workflow)
+
+```powershell
+# List OneDrive roots, the OneDrive children of a drive, or SharePoint sites:
+securedact-mcp microsoft list --drive-id <ONE_DRIVE_ID>
+
+# Register a folder by name (bounded local walk; no Graph /search needed):
+securedact-mcp microsoft targets add `
+    --integration-id <CONTROL_PLANE_INTEGRATION_ID> `
+    --drive-id <ONE_DRIVE_ID> `
+    --folder-name "SecuRedact-Smoke-Test" `
+    --label "SecuRedact-Smoke-Test"
+# -> { "target_id": "mtgt_1_...", "kind": "one_drive_folder", ... }
+# The CLI echoes ONLY the opaque target_id + label; raw driveId/folderId stay
+# in the encrypted local registry.
+
+# Or register a folder whose raw driveItem id was obtained locally:
+securedact-mcp microsoft targets add `
+    --integration-id <CONTROL_PLANE_INTEGRATION_ID> `
+    --drive-id <ONE_DRIVE_ID> `
+    --folder-id <FOLDER_ITEM_ID> `
+    --label "SecuRedact-Smoke-Test"
+
+# List registered targets:
+securedact-mcp microsoft targets list
+# -> { "targets": [{ "target_id": "mtgt_1_...", "kind": "one_drive_folder",
+#                    "label": "SecuRedact-Smoke-Test", ... }, ...] }
+
+# Register a SharePoint drive target (no folder):
+securedact-mcp microsoft targets add `
+    --integration-id <CONTROL_PLANE_INTEGRATION_ID> `
+    --site-id <SITE_ID> `
+    --drive-id <SITE_DRIVE_ID> `
+    --label "Team Documents"
+```
+
+After registration, the only thing the control plane needs to schedule that
+folder is the opaque ``target_id``. Schedule the scan through the dashboard
+with:
+
+```text
+platform          = "microsoft365"
+integration_id    = <CONTROL_PLANE_INTEGRATION_ID>
+target_type       = "folder"
+target_ref        = "mtgt_1_..."
+```
+
+The control plane does not need to know the driveId, folderId, siteId, or
+filename.
 
 ## Agent run loop
 
@@ -457,27 +644,35 @@ introduced here).
 - Entitlement activation requires the control plane at least once; afterwards a
   cached, locally-verified token is used until `refresh_after`.
 - Registration requires the control plane.
-- The Google scan itself requires only the local credential and Google's API
-  (over TLS). The control plane is not involved in detection.
+- The platform scan itself requires only the local credential and the platform's
+  API (Google Drive API or Microsoft Graph API, over TLS). The control plane is
+  not involved in detection.
 
 ## Troubleshooting
 
 - **`No valid Google authorization found`** — run `securedact-mcp google auth`.
+- **`No valid Microsoft authorization found`** — run `securedact-mcp microsoft auth`.
 - **`google provider unavailable`** — the optional Google connector package is
   not installed. Install the `google` extra (`pip install "securedact-mcp[google]"`
   via uv) and re-run. The base agent continues to run and other job types are
   unaffected; a Google job then fails safely with `connector_unavailable`
   (never a `ModuleNotFoundError` leak).
+- **`microsoft provider unavailable`** — the optional Microsoft connector package is
+  not installed. Install the `microsoft` extra (`pip install "securedact-mcp[microsoft]"`
+  via uv) and re-run. The base agent continues to run and other job types are
+  unaffected; a Microsoft job then fails safely with `connector_unavailable`
+  (never a `ModuleNotFoundError` leak).
 - **`policy_invalid`** — the claimed policy snapshot is not implemented by the
   local core. The job is reported safe-failed; no content is sent.
-- **`auth_required`** — the local Google token is missing/revoked. Re-run
-  `securedact-mcp google auth`.
+- **`auth_required`** — the local platform token is missing/revoked. Re-run
+  `securedact-mcp google auth` or `securedact-mcp microsoft auth`.
 
 ## Missing connector errors
 
-If the Google connector is unavailable, the base agent still runs, claim of a
-Google job fails safely (result `connector_unavailable` or `unsupported_target`),
-and no `ModuleNotFoundError` is leaked to the control plane or logs.
+If a platform connector is unavailable, the base agent still runs, claim of a
+job for that platform fails safely (result `connector_unavailable` or
+`unsupported_target`), and no `ModuleNotFoundError` is leaked to the control
+plane or logs.
 
 ## Reauthorization
 

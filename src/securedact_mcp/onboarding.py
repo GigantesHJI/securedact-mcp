@@ -342,6 +342,9 @@ def run_setup(
     google: str | None = None,
     google_integration_id: str | None = None,
     google_byo: bool = False,
+    microsoft: str | None = None,
+    microsoft_integration_id: str | None = None,
+    microsoft_byo: bool = False,
     managed_agent_runner: Callable[..., int] | None = None,
 ) -> int:
     """Run the unified SecuRedact setup wizard.
@@ -393,6 +396,9 @@ def run_setup(
                 google=google,
                 google_integration_id=google_integration_id,
                 google_byo=google_byo,
+                microsoft=microsoft,
+                microsoft_integration_id=microsoft_integration_id,
+                microsoft_byo=microsoft_byo,
                 agent_elevated=agent_elevated,
             )
         except agent_deploy._ElevationHandoff:
@@ -509,6 +515,9 @@ def run_setup(
             google=google,
             google_integration_id=google_integration_id,
             google_byo=google_byo,
+            microsoft=microsoft,
+            microsoft_integration_id=microsoft_integration_id,
+            microsoft_byo=microsoft_byo,
             agent_elevated=agent_elevated,
         )
     except agent_deploy._ElevationHandoff:

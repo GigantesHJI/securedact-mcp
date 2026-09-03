@@ -417,15 +417,15 @@ def test_missing_google_connector_fails_closed(monkeypatch, engine):
 # --- 6. Capability advertisement ---------------------------------------------
 
 
-def test_capability_advertises_google_not_microsoft():
+def test_capability_advertises_google_and_microsoft():
     from securedact_mcp.agent.capabilities import AgentCapabilities
 
     caps = AgentCapabilities.default()
     assert "google_drive" in caps.capabilities
     assert "google_workspace" in caps.supported_platforms
-    # Microsoft has no local Graph transport yet -> never advertised.
-    assert "microsoft365" not in caps.supported_platforms
-    assert "microsoft" not in caps.capabilities
+    # Microsoft now has a local Graph transport -> advertised.
+    assert "microsoft365" in caps.supported_platforms
+    assert "microsoft_graph" in caps.capabilities
 
 
 # --- 7. Optional-connector failure maps to safe connector_unavailable --------

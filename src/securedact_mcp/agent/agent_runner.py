@@ -47,6 +47,7 @@ from .errors import (
 from .executor import JobClaim, ScanProvider, execute_job
 from .policy import ResolvedPolicy, resolve_policy
 from .provider_google import GoogleScanProvider
+from .provider_microsoft import MicrosoftScanProvider
 from .reducer import (
     ExecutionResult,
     build_safe_result_dict,
@@ -65,6 +66,8 @@ def build_provider(platform: str, *, files: AgentFiles | None = None) -> ScanPro
 
     if platform == "google_workspace":
         return GoogleScanProvider(files=files)
+    if platform == "microsoft365":
+        return MicrosoftScanProvider(files=files)
     return None
 
 

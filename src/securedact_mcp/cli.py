@@ -41,6 +41,13 @@ class _GoogleCliCommands(Protocol):
     def run_google(self, arguments: object, *, input_fn: InputFunction, output: TextIO) -> int: ...
 
 
+class _MicrosoftCliCommands(Protocol):
+    """Structural type for the optional Microsoft connector CLI module."""
+
+    def build_microsoft_parser(self, subparsers: object) -> None: ...
+    def run_microsoft(self, arguments: object, *, input_fn: InputFunction, output: TextIO) -> int: ...
+
+
 def _load_google_cli_commands() -> _GoogleCliCommands | None:
     """Dynamically load the optional Google connector CLI module.
 
@@ -54,6 +61,15 @@ def _load_google_cli_commands() -> _GoogleCliCommands | None:
     except ModuleNotFoundError:
         return None
     return cast(_GoogleCliCommands, module)
+
+
+def _load_microsoft_cli_commands() -> _MicrosoftCliCommands | None:
+    """Dynamically load the optional Microsoft connector CLI module."""
+    try:
+        module = importlib.import_module("securedact_mcp.connectors.microsoft.cli_commands")
+    except ModuleNotFoundError:
+        return None
+    return cast(_MicrosoftCliCommands, module)
 
 
 def _default_installer_factory(
@@ -126,6 +142,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="(advanced/enterprise) use YOUR OWN Google Cloud OAuth app instead of "
         "the SecuRedact-managed app. Normal customers should not need this.",
     )
+    setup.add_argument(
+        "--microsoft",
+        choices=("yes", "no"),
+        default=None,
+        help="enable/disable Microsoft 365 onboarding during setup (default: "
+        "detect existing machine configuration, otherwise ask during the wizard)",
+    )
+    setup.add_argument(
+        "--microsoft-integration-id",
+        default=None,
+        help="(advanced/manual) bind a specific SecuRedact Microsoft 365 "
+        "integration by its internal ID instead of automatic resolution. Normal "
+        "customers should not need this.",
+    )
+    setup.add_argument(
+        "--microsoft-byo",
+        action="store_true",
+        help="(advanced/enterprise) use YOUR OWN Microsoft Entra application instead of "
+        "the SecuRedact-managed app. Normal customers should not need this.",
+    )
 
     models = commands.add_parser("models", help="inspect and maintain local contextual models")
     model_commands = models.add_subparsers(dest="model_command", required=True)
@@ -159,6 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
     google_cli_commands = _load_google_cli_commands()
     if google_cli_commands is not None:
         google_cli_commands.build_google_parser(commands)
+    microsoft_cli_commands = _load_microsoft_cli_commands()
+    if microsoft_cli_commands is not None:
+        microsoft_cli_commands.build_microsoft_parser(commands)
     agent_cli.build_agent_parser(commands)
     return parser
 
@@ -532,6 +571,9 @@ def main(
             google=getattr(arguments, "google", None),
             google_integration_id=getattr(arguments, "google_integration_id", None),
             google_byo=getattr(arguments, "google_byo", False),
+            microsoft=getattr(arguments, "microsoft", None),
+            microsoft_integration_id=getattr(arguments, "microsoft_integration_id", None),
+            microsoft_byo=getattr(arguments, "microsoft_byo", False),
         )
 
     diagnose_runtime = arguments.command == "diagnostics"
@@ -542,6 +584,13 @@ def main(
             print("The optional Google connector is not installed.", file=output)
             return 2
         return google_cli_commands.run_google(arguments, input_fn=input_fn, output=output)
+
+    if arguments.command == "microsoft":
+        microsoft_cli_commands = _load_microsoft_cli_commands()
+        if microsoft_cli_commands is None:
+            print("The optional Microsoft connector is not installed.", file=output)
+            return 2
+        return microsoft_cli_commands.run_microsoft(arguments, input_fn=input_fn, output=output)
 
     if arguments.command == "agent":
         return agent_cli.run_agent(arguments, input_fn=input_fn, output=output)

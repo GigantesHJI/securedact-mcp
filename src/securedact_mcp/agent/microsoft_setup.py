@@ -17,7 +17,6 @@ truth for "Microsoft 365 onboarding" UX.
 
 from __future__ import annotations
 
-import contextlib
 import os
 import sys
 from collections.abc import Callable, Mapping
@@ -571,74 +570,35 @@ def apply_microsoft_machine_env(
 
 
 # ---------------------------------------------------------------------------
-# Microsoft runtime verification (mirrors verify_google_authorization_runtime)
-# ---------------------------------------------------------------------------
-
-
-def verify_microsoft_authorization_runtime(data_dir: Path | str) -> dict[str, Any]:
-    """Prove *this* interpreter can perform the machine-local Microsoft OAuth flow.
-
-    Returns a JSON-safe dict whose ``verified`` flag is the fail-closed signal,
-    plus ``interpreter`` (``sys.executable``) so the operator can see exactly which
-    Python was proven. The client id, client secret, OAuth code/verifier/state,
-    and refresh token are never included in the payload.
-    """
-
-    import dataclasses
-
-    payload: dict[str, Any] = {
-        "verified": False,
-        "interpreter": sys.executable,
-        "data_dir": str(data_dir),
-        "client_configured": False,
-        "loopback_bound": False,
-        "loopback_host": None,
-        "loopback_port": None,
-        "oauth_url_built": False,
-        "token_required": False,
-    }
-
-    try:
-        config = microsoft_config.load_microsoft_config(
-            require_enabled=False, data_dir=Path(data_dir)
-        )
-    except Exception as exc:
-        payload["error"] = scrub(str(exc))
-        return payload
-    payload["client_configured"] = bool(config.client_id)
-
-    server: microsoft_auth.LoopbackOAuthServer | None = None
-    try:
-        server = microsoft_auth.LoopbackOAuthServer(expected_state="", timeout=0.01)
-    except Exception as exc:
-        payload["error"] = scrub(f"loopback bind failed: {exc}")
-        return payload
-    try:
-        payload["loopback_bound"] = True
-        payload["loopback_host"] = microsoft_auth.LOOPBACK_HOST
-        payload["loopback_port"] = int(server.port)
-        loopback_config = dataclasses.replace(config, redirect_uri=server.redirect_uri)
-        try:
-            url, state = microsoft_auth.build_authorization_url(loopback_config, pkce=True)
-        except Exception as exc:
-            payload["error"] = scrub(str(exc))
-            return payload
-        payload["oauth_url_built"] = bool(url) and bool(state)
-        microsoft_auth._FLOW_STATE.pop(state, None)
-    finally:
-        if server is not None:
-            with contextlib.suppress(Exception):
-                server.shutdown()
-
-    payload["verified"] = bool(
-        payload["client_configured"] and payload["loopback_bound"] and payload["oauth_url_built"]
-    )
-    return payload
-
-
-# ---------------------------------------------------------------------------
 # Microsoft onboarding outcome + orchestrator (mirrors Google)
 # ---------------------------------------------------------------------------
+#
+# ``MicrosoftMachineAuthResult`` mirrors :class:`google_setup.GoogleMachineAuthResult`
+# and carries the structured ``stage``/``error_code`` surfaced by the machine
+# runtime so the setup CLI can report an actionable, safe message.
+#
+
+
+@dataclass(frozen=True, slots=True)
+class MicrosoftMachineAuthResult:
+    """Bounded result of machine-local Microsoft authorization (no secret material).
+
+    Carries the structured ``stage``/``error_code`` surfaced by the machine
+    runtime so the setup CLI can report an actionable, safe message (and never
+    misreport a post-callback failure as "managed Microsoft Entra app unavailable").
+    """
+
+    authorized: bool
+    stage: str | None = None
+    error_code: str | None = None
+    error: str | None = None
+    # Microsoft's RFC 6749 ``error`` token from the token endpoint (e.g.
+    # ``invalid_grant``, ``redirect_uri_mismatch``), present only when Microsoft
+    # actually answered. This names the real rejection instead of the generic
+    # stage code.
+    oauth_error: str | None = None
+    # Bounded, credential-free rendering of Microsoft's ``error_description``.
+    error_description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -662,6 +622,50 @@ class MicrosoftOnboardingOutcome:
             return True
         return bool(
             self.deps_ready and self.authorized and self.integration_id and self.binding_verified
+        )
+
+
+# ---------------------------------------------------------------------------
+# Microsoft auth failure reporting (mirrors _report_google_auth_failure)
+# ---------------------------------------------------------------------------
+
+
+def _report_microsoft_auth_failure(
+    outcome: MicrosoftOnboardingOutcome, output: Any, microsoft_byo: bool
+) -> None:
+    """Report an actionable, safe message for a post-callback OAuth failure.
+
+    Mirrors :func:`_report_google_auth_failure`. ``outcome`` carries only a
+    bounded ``stage`` / ``error_code`` (never any token, code, verifier, or
+    secret). This is the exact path that must NOT print the managed-OAuth-
+    unavailable message: the managed public client was resolved and Microsoft
+    accepted the OAuth client, so the failure is downstream (state validation,
+    token exchange, or persistence).
+    """
+
+    stage = outcome.auth_stage
+    error_code = outcome.auth_error_code
+    if stage or error_code:
+        msg = "Microsoft authorization failed after the browser returned to SecuRedact"
+        if stage:
+            msg += f" (stage: {stage})"
+        if error_code:
+            msg += f" [code: {error_code}]"
+        msg += (
+            ". Finish the machine-local OAuth with 'securedact-mcp setup --agent --microsoft yes'."
+        )
+        if microsoft_byo:
+            msg += (
+                " For BYO, verify the Microsoft Entra OAuth client id/secret and the "
+                "authorized redirect URI."
+            )
+        print(msg, file=output)
+    else:
+        print(
+            "Microsoft authorization could not be completed locally. Re-run setup with "
+            "'securedact-mcp setup --agent --microsoft yes' (or --microsoft-byo for your own "
+            "Microsoft Entra OAuth app).",
+            file=output,
         )
 
 
@@ -727,15 +731,17 @@ def run_microsoft_machine_onboarding(
 
     print(file=output)
     print("[Microsoft 365]", file=output)
-    print(
-        "Machine runtime interpreter: " + sys.executable,
-        file=output,
-    )
 
-    # Resolve the runtime python inside this function to avoid circular imports
+    # Resolve the runtime python FIRST so we print the correct interpreter
     from .deploy import resolve_machine_runtime_python
 
     runtime_python = resolve_machine_runtime_python(runtime_path)
+    print(
+        "Machine runtime interpreter: "
+        + (str(runtime_python) if runtime_python is not None else "not available"),
+        file=output,
+    )
+
     outcome = MicrosoftOnboardingOutcome(
         selected=True,
         deps_ready=bool(_deps_ready(runtime_python)),
@@ -756,67 +762,85 @@ def run_microsoft_machine_onboarding(
         print(f"Microsoft machine env not applied: {scrub(str(exc))}", file=output)
 
     print("Authorizing Microsoft 365 locally against the machine data root...", file=output)
-    if authorize_microsoft_fn is not None:
-        auth_ok = bool(
-            authorize_microsoft_fn(
-                data_dir,
-                input_fn=input_fn,
-                output=output,
-                non_interactive=non_interactive,
-                require_enabled=False,
-            )
-        )
-    else:
-        auth_ok = authorize_microsoft_machine(
-            data_dir,
-            input_fn=input_fn,
-            output=output,
-            non_interactive=non_interactive,
-            require_enabled=False,
-        )
-    if not auth_ok and microsoft_byo:
-        collected = bool(
-            _client_config(
-                data_dir,
-                input_fn=input_fn,
-                secret_input_fn=secret_input_fn,
-                output=output,
-                non_interactive=non_interactive,
-            )
-        )
-        if collected:
-            auth_ok = (
-                bool(
-                    authorize_microsoft_fn(
-                        data_dir,
-                        input_fn=input_fn,
-                        output=output,
-                        non_interactive=non_interactive,
-                        require_enabled=False,
-                    )
-                )
-                if authorize_microsoft_fn is not None
-                else authorize_microsoft_machine(
-                    data_dir,
-                    input_fn=input_fn,
-                    output=output,
-                    non_interactive=non_interactive,
-                    require_enabled=False,
-                )
-            )
+
+    # Use the runtime-based authorization (mirrors Google's _authorize_google_machine).
+    # This runs the OAuth flow inside the machine-owned runtime interpreter so that
+    # the Microsoft extra (msal, requests) that the scheduled agent uses is the one
+    # that authorizes. The setup CLI's own interpreter (which lacks the Microsoft
+    # extra) is never used for the actual OAuth flow.
+    from .deploy import _authorize_microsoft_machine
+
+    auth_result = _authorize_microsoft_machine(
+        data_dir=data_dir,
+        runtime_python=runtime_python,
+        command_runner=command_runner,
+        input_fn=input_fn,
+        output=output,
+        non_interactive=non_interactive,
+        secret_input_fn=secret_input_fn,
+        authorize_microsoft_fn=authorize_microsoft_fn,
+        microsoft_byo=microsoft_byo,
+    )
     outcome = MicrosoftOnboardingOutcome(
         selected=True,
         deps_ready=outcome.deps_ready,
-        authorized=auth_ok,
+        authorized=auth_result.authorized,
+        auth_stage=auth_result.stage,
+        auth_error_code=auth_result.error_code,
+        auth_error=auth_result.error,
     )
     if not outcome.authorized:
-        print(
-            "Microsoft authorization was not completed. No Microsoft job can run until "
-            "it is (finish it with 'securedact-mcp setup --agent --microsoft yes', "
-            "or --microsoft-byo to use your own Microsoft Entra app).",
-            file=output,
-        )
-        return outcome
+        # On the normal (managed) path, only the genuine absence of a managed client
+        # warrants the "managed Microsoft Entra app unavailable" message. A failure that
+        # happens *after* the browser OAuth flow started (state validation, token
+        # exchange, or persistence) must never be misreported as managed-app absence.
+        # A normal released build always has the packaged managed app, so normal
+        # customers are never told to create an Entra app or set a machine
+        # environment variable.
+        if microsoft_byo:
+            collected = bool(
+                _client_config(
+                    data_dir,
+                    input_fn=input_fn,
+                    secret_input_fn=secret_input_fn,
+                    output=output,
+                    non_interactive=non_interactive,
+                )
+            )
+            if collected:
+                auth_result = _authorize_microsoft_machine(
+                    data_dir=data_dir,
+                    runtime_python=runtime_python,
+                    command_runner=command_runner,
+                    input_fn=input_fn,
+                    output=output,
+                    non_interactive=non_interactive,
+                    secret_input_fn=secret_input_fn,
+                    authorize_microsoft_fn=authorize_microsoft_fn,
+                    microsoft_byo=microsoft_byo,
+                )
+                outcome = MicrosoftOnboardingOutcome(
+                    selected=True,
+                    deps_ready=outcome.deps_ready,
+                    authorized=auth_result.authorized,
+                    auth_stage=auth_result.stage,
+                    auth_error_code=auth_result.error_code,
+                    auth_error=auth_result.error,
+                )
+        if not outcome.authorized:
+            if not microsoft_byo and not is_managed_microsoft_available():
+                from ..connectors.microsoft import managed as microsoft_managed
+
+                print(microsoft_managed.MANAGED_CLIENT_NOT_CONFIGURED_MSG, file=output)
+            else:
+                _report_microsoft_auth_failure(outcome, output, microsoft_byo)
+            print(
+                "Microsoft authorization was not completed. No Microsoft job can run until "
+                "it is (finish it with 'securedact-mcp setup --agent --microsoft yes', "
+                "or --microsoft-byo to use your own Microsoft Entra OAuth app).",
+                file=output,
+            )
+            return outcome
 
     # Resolve the dashboard integration id: reuse an existing binding if present,
     # otherwise the caller must supply it via --microsoft-integration-id (advanced).
@@ -941,6 +965,144 @@ def _default_microsoft_deps_ready(runtime_python: Path | None = None) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Microsoft runtime authorization verification (mirrors Google)
+# ---------------------------------------------------------------------------
+#
+# These functions are designed to be invoked inside the *machine-owned runtime*
+# interpreter via ``securedact_mcp.agent.runtime_bootstrap microsoft-auth``.
+# They run the exact same Microsoft auth flow as the in-process version, but
+# inside the interpreter that actually carries the ``microsoft`` extra (msal,
+# requests, etc.). This prevents the RC defect where the setup CLI's own Python
+# lacks the Microsoft extra and fails with ``No module named 'msal'`` while the
+# readiness probe (which defaults to ProgramData) reports "available".
+
+
+MICROSOFT_AUTH_RUNTIME_MODULES = (
+    "msal",
+    "requests",
+)
+
+
+def verify_microsoft_authorization_runtime(data_dir: Path | str) -> dict[str, Any]:
+    """Prove *this* interpreter can perform the machine-local Microsoft OAuth flow.
+
+    Mirrors :func:`google_setup.verify_google_authorization_runtime`. Executes
+    every step of the real loopback authorization except the two that need a
+    human/Microsoft: it does not open a browser, does not wait for a redirect,
+    and never obtains or stores a token. Concretely it:
+
+    1. imports the exact Microsoft modules the flow uses (``msal`` & friends)
+       **in this interpreter**;
+    2. resolves the machine-local Microsoft configuration from ``data_dir``;
+    3. binds the temporary ``127.0.0.1`` loopback listener on a random port; and
+    4. builds the PKCE consent URL for that redirect URI (pure local construction).
+
+    Returns a JSON-safe dict whose ``verified`` flag is the fail-closed signal,
+    plus ``interpreter`` (``sys.executable``) so the operator can see exactly
+    which Python was proven. The consent URL, OAuth state, client secret, and
+    token are never included in the payload.
+    """
+
+    import dataclasses
+    import importlib
+
+    payload: dict[str, Any] = {
+        "verified": False,
+        "interpreter": sys.executable,
+        "data_dir": str(data_dir),
+        "imports": {},
+        "imports_ok": False,
+        "client_configured": False,
+        "loopback_bound": False,
+        "loopback_host": None,
+        "loopback_port": None,
+        "consent_url_built": False,
+        "token_required": False,
+        "browser_opened": False,
+    }
+
+    # 1. Imports — the exact failure mode being regression-tested.
+    for module in MICROSOFT_AUTH_RUNTIME_MODULES:
+        try:
+            importlib.import_module(module)
+            payload["imports"][module] = True
+        except Exception as exc:
+            payload["imports"][module] = False
+            payload["error"] = scrub(f"{module}: {exc}")
+    payload["imports_ok"] = all(payload["imports"].values())
+    if not payload["imports_ok"]:
+        return payload
+
+    from ..connectors.microsoft import auth as default_auth
+    from ..connectors.microsoft import config as default_config
+
+    # 2. Machine-local configuration (managed app by default, BYO from the store).
+    try:
+        config = default_config.load_microsoft_config(
+            require_enabled=False, data_dir=Path(data_dir)
+        )
+    except Exception as exc:
+        payload["error"] = scrub(str(exc))
+        return payload
+    payload["client_configured"] = bool(config.client_id)
+
+    # 3./4. Loopback listener + PKCE consent URL, then release everything.
+    server = default_auth.LoopbackOAuthServer(expected_state="", timeout=0.01)
+    try:
+        payload["loopback_bound"] = True
+        payload["loopback_host"] = default_auth.LOOPBACK_HOST
+        payload["loopback_port"] = int(server.port)
+        loopback_config = dataclasses.replace(config, redirect_uri=server.redirect_uri)
+        try:
+            url, state = default_auth.build_authorization_url(loopback_config, pkce=True)
+        except Exception as exc:
+            payload["error"] = scrub(str(exc))
+            return payload
+        # Never emit the consent URL / CSRF state, and do not retain the pending
+        # flow (this is a verification, not an authorization).
+        payload["consent_url_built"] = bool(url) and bool(state)
+        default_auth._FLOW_STATE.pop(state, None)
+    finally:
+        server.shutdown()
+
+    payload["verified"] = True
+    return payload
+
+
+def run_microsoft_loopback_authorization(
+    data_dir: Path | str, *, byo: bool = False
+) -> dict[str, object]:
+    """Run the full local loopback OAuth flow inside the machine-owned runtime.
+
+    Mirrors :func:`google_setup.run_google_loopback_authorization`. Returns a
+    bounded, machine-readable result (``authorized`` plus a safe
+    ``stage``/``error_code`` on failure). No OAuth code/token/client secret/verifier
+    is ever placed on argv, in a command file, in the environment, or in logs.
+    When the managed client is genuinely absent the result carries
+    ``stage="config"`` with the safe ``microsoft_config_missing`` code (the only
+    correct place to report that).
+    """
+
+    from ..connectors.microsoft import auth as default_auth
+    from ..connectors.microsoft import config as default_config
+    from ..connectors.microsoft.config import MicrosoftConfigError
+
+    try:
+        config = default_config.load_microsoft_config(
+            require_enabled=False, data_dir=Path(data_dir)
+        )
+    except MicrosoftConfigError as exc:
+        return {
+            "authorized": False,
+            "stage": "config",
+            "error_code": "microsoft_config_missing",
+            "error": scrub(str(exc)),
+        }
+    outcome = default_auth.run_local_oauth(config)
+    return outcome.to_payload()
+
+
 def verify_microsoft_binding(
     data_dir: Path | str,
     integration_id: str,
@@ -982,6 +1144,7 @@ __all__ = [
     "MICROSOFT_SELECTION_PROMPT",
     "MICROSOFT_TENANT_ID_ENV",
     "NORMAL_MICROSOFT_LABEL",
+    "MicrosoftMachineAuthResult",
     "MicrosoftMachineState",
     "MicrosoftOnboardingOutcome",
     "apply_microsoft_machine_env",
@@ -990,6 +1153,7 @@ __all__ = [
     "inspect_microsoft_machine",
     "prompt_microsoft_client_config",
     "resolve_microsoft_selection",
+    "run_microsoft_loopback_authorization",
     "run_microsoft_machine_onboarding",
     "verify_microsoft_authorization_runtime",
     "verify_microsoft_binding",

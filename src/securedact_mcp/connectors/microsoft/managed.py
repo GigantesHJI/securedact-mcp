@@ -99,6 +99,32 @@ def get_managed_microsoft_config() -> Any:
     )
 
 
+# ---------------------------------------------------------------------------
+# Microsoft managed app constants
+# ---------------------------------------------------------------------------
+
+# Clear, customer-safe failure used when the managed app is not configured. Kept as
+# a single constant so the message is identical across the setup wizard, the
+# machine-runtime bootstrap, and the CLI. This only fires in a build that has no
+# managed app configured at all (neither env override nor packaged default); a
+# normal released build always has the packaged default, so normal customers never
+# see this. It intentionally does NOT instruct normal customers to create an Entra
+# app, set a machine environment variable, or paste OAuth credentials -- those are
+# packaging/supply concerns or advanced/enterprise (BYO) choices.
+MANAGED_CLIENT_NOT_CONFIGURED_MSG = (
+    "SecuRedact Microsoft 365 authorization is not available in this build: the "
+    "SecuRedact-managed Microsoft Entra application is not configured. This is a "
+    "packaging/supply issue, not something a customer configures. Install a released "
+    "SecuRedact build, or pass --microsoft-byo to use your own Microsoft Entra OAuth app "
+    "(advanced/enterprise)."
+)
+
+# The SecuRedact-managed Microsoft Entra app is a public/native Desktop client
+# that uses PKCE. No client_secret is required or used in the managed path; the
+# stale "managed client secret missing" check that previously blocked the
+# loopback flow has been removed.
+
+
 def is_managed_microsoft_available() -> bool:
     """Check if the managed Microsoft Entra client id is available.
 

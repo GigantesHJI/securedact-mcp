@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..connectors.google import managed as google_managed
-from . import google_setup, service, service_security
+from . import google_setup, microsoft_setup, service, service_security
 from .config import AgentConfig, AgentFiles
 from .errors import AgentError
 from .microsoft_setup import (
@@ -1906,6 +1906,10 @@ def upgrade_runtime(
     dir (agent.json, credential vault, OAuth vault, bindings, state) is never
     touched, so registration, credentials, and Google bindings survive with no
     re-registration and no Google re-auth unless a credential itself is invalid.
+
+    The upgrade verifies that the installed artifact actually changed (version or
+    content digest) before reporting success. A same-version reinstall without
+    content change is reported as "no change" rather than "upgraded".
     """
 
     if not is_elevated():
@@ -1918,8 +1922,12 @@ def upgrade_runtime(
     resolved_data = service.resolve_service_data_dir(data_dir)
     runner = command_runner or _default_runner
 
-    # Stop the service (best-effort) before touching its code.
-    _run_bootstrap(runner, runtime_python, ["stop"], data_dir=resolved_data)
+    # Capture pre-upgrade runtime fingerprint for change verification
+    pre_upgrade_fingerprint = _compute_runtime_fingerprint(runtime, runner)
+
+    # Stop the managed agent using the same bounded-wait control that
+    # provision_machine_runtime uses, so the runtime files are released.
+    _default_agent_control("stop")
 
     # Re-provision *code only*; state lives in the separate data dir. The service
     # already exists, so re-apply the service ACE during this hardening pass.
@@ -1948,13 +1956,55 @@ def upgrade_runtime(
         service_account=service_security.recommended_service_account(),
     )
 
+    # Verify the runtime artifact actually changed
+    post_upgrade_fingerprint = _compute_runtime_fingerprint(runtime, runner)
+    artifact_changed = pre_upgrade_fingerprint != post_upgrade_fingerprint
+
     started = _run_bootstrap(runner, runtime_python, ["start"], data_dir=resolved_data)
     return {
-        "upgraded": True,
+        "upgraded": artifact_changed,
+        "artifact_changed": artifact_changed,
         "runtime_path": str(runtime),
         "data_dir": str(resolved_data),
         "service_started": started.returncode == 0,
+        "pre_upgrade_fingerprint": pre_upgrade_fingerprint,
+        "post_upgrade_fingerprint": post_upgrade_fingerprint,
     }
+
+
+def _compute_runtime_fingerprint(runtime: Path, runner: CommandRunner) -> str:
+    """Compute a fingerprint of the installed securedact-mcp package in the runtime.
+
+    Returns a string that changes when the package version or content changes.
+    Uses the package metadata version + a hash of the securedact_mcp package
+    directory content for dev/local wheel detection.
+    """
+
+    runtime_python = resolve_runtime_python(runtime)
+    if not runtime_python.exists():
+        return "not-installed"
+
+    # Get package version and location
+    probe = (
+        "import securedact_mcp, json, hashlib, os, sys; "
+        "pkg_path = os.path.dirname(securedact_mcp.__file__); "
+        "h = hashlib.sha256(); "
+        "for root, dirs, files in os.walk(pkg_path): "
+        "  for f in sorted(files): "
+        "    if f.endswith('.py'): "
+        "      p = os.path.join(root, f); "
+        "      h.update(f.encode()); h.update(b'\\0'); "
+        "      try: h.update(open(p, 'rb').read()) "
+        "      except: pass; "
+        "print(json.dumps({'version': securedact_mcp.__version__, 'digest': h.hexdigest()[:32]}))"
+    )
+    try:
+        result = runner([str(runtime_python), "-c", probe], RunInput(timeout=30))
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception as exc:
+        _LOGGER.warning("runtime fingerprint probe failed: %s", scrub(str(exc)))
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -2289,6 +2339,255 @@ def _authorize_google_via_runtime(
             error_description=error_description,
         )
     return google_setup.GoogleMachineAuthResult(authorized=True, stage="complete")
+
+
+# ---------------------------------------------------------------------------
+# Microsoft machine-local authorization via the machine-owned runtime
+# (mirrors the Google flow)
+# ---------------------------------------------------------------------------
+
+
+def build_microsoft_auth_argv(
+    runtime_python: Path | str,
+    data_dir: Path | str,
+    *,
+    microsoft_byo: bool = False,
+    verify: bool = False,
+) -> list[str]:
+    """Return the exact argv used to run Microsoft OAuth inside the machine runtime.
+
+    Single source of truth for the command line, so the wizard, the verification
+    command, and the tests all assert the same thing:
+
+        <runtime python> -m securedact_mcp.agent.runtime_bootstrap microsoft-auth
+            --data-dir <machine root> --loopback [--microsoft-byo] [--verify]
+
+    No OAuth code/token/client secret is ever placed on this argv; ``--microsoft-byo``
+    is a non-secret selection marker only.
+    """
+
+    argv = [
+        str(runtime_python),
+        "-m",
+        "securedact_mcp.agent.runtime_bootstrap",
+        "microsoft-auth",
+        "--data-dir",
+        str(data_dir),
+        "--loopback",
+    ]
+    if microsoft_byo:
+        argv.append("--microsoft-byo")
+    if verify:
+        argv.append("--verify")
+    return argv
+
+
+def _authorize_microsoft_via_runtime(
+    runtime_python: Path,
+    data_dir: Path,
+    command_runner: CommandRunner | None,
+    output: Any,
+    microsoft_byo: bool = False,
+) -> microsoft_setup.MicrosoftMachineAuthResult:
+    """Authorize Microsoft using the machine-owned runtime interpreter via loopback.
+
+    The machine runtime opens the browser on 127.0.0.1, validates state, and
+    exchanges the code in-process. Running authorization *inside the machine
+    runtime* (which carries the Microsoft extra) means a missing ``msal`` in the
+    setup CLI's interpreter cannot break it, and we never ask the customer for an
+    OAuth client secret.
+    """
+
+    runner = command_runner or _default_runner
+    loopback_argv = build_microsoft_auth_argv(runtime_python, data_dir, microsoft_byo=microsoft_byo)
+    # Name the interpreter that performs the authorization, so the operator can see
+    # (and the retest can prove) that it is the machine-owned runtime and not the
+    # setup CLI's own Python.
+    print(f"Microsoft authorization interpreter: {runtime_python}", file=output)
+    try:
+        result = runner(loopback_argv, RunInput(env=_env_for(Path(data_dir))))
+    except Exception as exc:  # a runtime that cannot be launched is a hard stop
+        return microsoft_setup.MicrosoftMachineAuthResult(
+            authorized=False,
+            stage="runtime_launch",
+            error_code="microsoft_runtime_launch_failed",
+            error=scrub(str(exc)),
+        )
+
+    # The machine runtime always emits JSON on stdout and exits non-zero on any
+    # auth failure, so parse the payload even when the exit code is non-zero. A
+    # parse failure means the runtime did not produce the expected JSON (a genuine
+    # runtime/launch defect), which we fail closed on.
+    try:
+        payload = json.loads(result.stdout)
+    except Exception:
+        if result.returncode != 0:
+            return microsoft_setup.MicrosoftMachineAuthResult(
+                authorized=False,
+                stage="runtime_exit",
+                error_code="microsoft_runtime_exit_nonzero",
+                error=scrub(result.stderr or result.stdout),
+            )
+        return microsoft_setup.MicrosoftMachineAuthResult(
+            authorized=False,
+            stage="runtime_response",
+            error_code="microsoft_runtime_malformed_response",
+            error="malformed machine-runtime response",
+        )
+
+    if not payload.get("authorized"):
+        stage = payload.get("stage")
+        error_code = payload.get("error_code") or payload.get("error")
+        oauth_error = payload.get("oauth_error")
+        error_description = payload.get("error_description")
+        detail = f" (stage: {stage})" if stage else ""
+        if oauth_error:
+            detail += f" (microsoft error: {scrub(str(oauth_error))})"
+        if error_description:
+            detail += f" ({scrub(str(error_description))})"
+        # Surface the safe stage/code; never any OAuth secret/token/code.
+        print(
+            "Microsoft authorization failed"
+            + (f": {scrub(str(error_code))}" if error_code else "")
+            + detail,
+            file=output,
+        )
+        return microsoft_setup.MicrosoftMachineAuthResult(
+            authorized=False,
+            stage=stage,
+            error_code=error_code,
+            oauth_error=oauth_error,
+            error_description=error_description,
+        )
+    return microsoft_setup.MicrosoftMachineAuthResult(authorized=True, stage="complete")
+
+
+# ---------------------------------------------------------------------------
+# Microsoft machine-local authorization via the machine-owned runtime
+# (mirrors _authorize_google_machine)
+# ---------------------------------------------------------------------------
+
+
+NO_RUNTIME_FOR_MICROSOFT_AUTH_MSG = (
+    "Microsoft authorization requires the machine-owned runtime interpreter "
+    "({runtime_python}), which is not present. Microsoft was NOT authorized. Re-run "
+    "'securedact-mcp setup --agent --microsoft yes' from an elevated Administrator "
+    "PowerShell so the machine runtime is provisioned with the Microsoft extra "
+    "(verify it with 'securedact-mcp microsoft status')."
+)
+
+
+def _report_microsoft_auth_failure(
+    outcome: MicrosoftOnboardingOutcome, output: Any, microsoft_byo: bool
+) -> None:
+    """Report an actionable, safe message for a post-callback OAuth failure.
+
+    Mirrors :func:`_report_google_auth_failure`. ``outcome`` carries only a
+    bounded ``stage`` / ``error_code`` (never any token, code, verifier, or
+    secret). This is the exact path that must NOT print the managed-OAuth-
+    unavailable message: the managed client was resolved and Microsoft accepted
+    the OAuth client, so the failure is downstream (state validation, token
+    exchange, or persistence).
+    """
+
+    stage = outcome.auth_stage
+    error_code = outcome.auth_error_code
+    if stage or error_code:
+        msg = "Microsoft authorization failed after the browser returned to SecuRedact"
+        if stage:
+            msg += f" (stage: {stage})"
+        if error_code:
+            msg += f" [code: {error_code}]"
+        msg += (
+            ". Finish the machine-local OAuth with 'securedact-mcp setup --agent --microsoft yes'."
+        )
+        if microsoft_byo:
+            msg += (
+                " For BYO, verify the Microsoft Entra OAuth client id/secret and the "
+                "authorized redirect URI."
+            )
+        print(msg, file=output)
+    else:
+        print(
+            "Microsoft authorization could not be completed locally. Re-run setup with "
+            "'securedact-mcp setup --agent --microsoft yes' (or --microsoft-byo for your own "
+            "Microsoft Entra OAuth app).",
+            file=output,
+        )
+
+
+def _authorize_microsoft_machine(
+    *,
+    data_dir: Path,
+    runtime_python: Path | None,
+    command_runner: CommandRunner | None,
+    input_fn: Callable[[str], str],
+    output: Any,
+    non_interactive: bool,
+    secret_input_fn: Callable[[str], str],
+    authorize_microsoft_fn: Callable[..., bool] | None,
+    microsoft_byo: bool = False,
+) -> microsoft_setup.MicrosoftMachineAuthResult:
+    """Run machine-local Microsoft OAuth in the machine-owned runtime interpreter.
+
+    Mirrors :func:`_authorize_google_machine`. ``runtime_python`` is the
+    interpreter resolved once by :func:`resolve_machine_runtime_python`. When it
+    exists (the supported, secure path) the authorization executes *inside* it via
+    the local loopback flow, so the Microsoft extra that the scheduled agent uses
+    is the one that authorizes.
+
+    Returns a bounded :class:`~securedact_mcp.agent.microsoft_setup.MicrosoftMachineAuthResult`
+    (``authorized`` plus a safe ``stage``/``error_code`` on failure). When there is
+    no machine runtime interpreter and no injected ``authorize_microsoft_fn``:
+
+    * on Windows we FAIL CLOSED (importing Microsoft in the setup CLI's own
+      interpreter was the accidental fallback that produced the contradictory
+      "dependencies available / not authorized" pair);
+    * on non-Windows (dev only, where there is no machine runtime at all) the
+      in-process implementation remains available.
+    """
+
+    from .deploy import default_runtime_path, resolve_runtime_python
+
+    if runtime_python is not None:
+        return _authorize_microsoft_via_runtime(
+            runtime_python,
+            data_dir,
+            command_runner,
+            output,
+            microsoft_byo=microsoft_byo,
+        )
+    if authorize_microsoft_fn is not None:
+        ok = bool(
+            authorize_microsoft_fn(
+                data_dir,
+                input_fn=input_fn,
+                output=output,
+                non_interactive=non_interactive,
+                require_enabled=False,
+            )
+        )
+        return microsoft_setup.MicrosoftMachineAuthResult(authorized=ok)
+    if sys.platform == "win32":
+        print(
+            NO_RUNTIME_FOR_MICROSOFT_AUTH_MSG.format(
+                runtime_python=resolve_runtime_python(default_runtime_path())
+            ),
+            file=output,
+        )
+        return microsoft_setup.MicrosoftMachineAuthResult(
+            authorized=False, stage="no_runtime", error_code="microsoft_no_runtime"
+        )
+    ok = bool(
+        microsoft_setup.authorize_microsoft_machine(
+            data_dir,
+            input_fn=input_fn,
+            output=output,
+            non_interactive=non_interactive,
+            require_enabled=False,
+        )
+    )
+    return microsoft_setup.MicrosoftMachineAuthResult(authorized=ok)
 
 
 def run_google_machine_onboarding(

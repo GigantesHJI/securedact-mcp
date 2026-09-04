@@ -44,6 +44,10 @@ BOOTSTRAP_CAPABILITIES = frozenset(
         "google-auth-loopback",  # ... with the in-runtime loopback flow
         "google-auth-verify",  # ... and the no-browser/no-token verification mode
         "google-auth-byo",  # ... and it accepts the non-secret --google-byo flag
+        "microsoft-auth",  # the ``microsoft-auth`` subcommand exists
+        "microsoft-auth-loopback",  # ... with the in-runtime loopback flow
+        "microsoft-auth-verify",  # ... and the no-browser/no-token verification mode
+        "microsoft-auth-byo",  # ... and it accepts the non-secret --microsoft-byo flag
     }
 )
 
@@ -124,6 +128,30 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="verify this interpreter can authorize (no browser, no token, no network)",
     )
+    # Machine-local Microsoft OAuth authorization. Mirrors the Google auth command
+    # so the Microsoft loopback flow runs inside the machine-owned runtime (which
+    # carries the Microsoft extra). The operator's client id/secret/tenant are
+    # resolved from the encrypted machine-local client store / environment; never
+    # from argv. The --microsoft-byo flag is a non-secret selection marker only.
+    microsoft_auth_parser = sub.add_parser(
+        "microsoft-auth", help="machine-local Microsoft OAuth authorization (loopback or two-phase)"
+    )
+    microsoft_auth_parser.add_argument("--data-dir", required=True)
+    microsoft_auth_parser.add_argument(
+        "--loopback",
+        action="store_true",
+        help="run the full local loopback OAuth flow and store the token",
+    )
+    microsoft_auth_parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="verify this interpreter can authorize (no browser, no token, no network)",
+    )
+    microsoft_auth_parser.add_argument(
+        "--microsoft-byo",
+        action="store_true",
+        help="operator uses their own Microsoft Entra OAuth app (non-secret marker only)",
+    )
     return parser
 
 
@@ -154,6 +182,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if arguments.cmd == "google-auth":
         return _cmd_google_auth(arguments)
+
+    if arguments.cmd == "microsoft-auth":
+        return _cmd_microsoft_auth(arguments)
 
     handler = {
         "stop": service.stop_service,
@@ -217,6 +248,50 @@ def _cmd_google_auth(arguments: Any) -> int:
             "authorized": False,
             "stage": "google_auth_unexpected",
             "error_code": "google_auth_unexpected_error",
+            "error": scrub(str(exc)),
+            "interpreter": sys.executable,
+        }
+        if getattr(arguments, "verify", False):
+            payload["verified"] = False
+        print(json.dumps(payload))
+        return 2
+
+
+def _cmd_microsoft_auth(arguments: Any) -> int:
+    """Run a machine-local Microsoft OAuth step inside the machine-owned runtime.
+
+    Mirrors ``_cmd_google_auth``. ``--verify`` proves this interpreter can authorize
+    (imports + config + loopback bind + consent URL) and exits without a
+    browser/token. ``--loopback`` runs the real flow. Any failure is reported as a
+    safe JSON error; no secret/token is ever returned.
+    """
+
+    from . import microsoft_setup
+
+    try:
+        if getattr(arguments, "verify", False):
+            payload = microsoft_setup.verify_microsoft_authorization_runtime(arguments.data_dir)
+            print(json.dumps(payload))
+            return 0 if payload.get("verified") else 2
+        if arguments.loopback:
+            payload = microsoft_setup.run_microsoft_loopback_authorization(
+                arguments.data_dir, byo=arguments.microsoft_byo
+            )
+            print(json.dumps(payload))
+            return 0 if payload.get("authorized") else 2
+        # Two-phase flow not yet implemented for Microsoft; loopback is the
+        # production path. Fail closed if neither verify nor loopback is given.
+        print(
+            json.dumps(
+                {"authorized": False, "error": "no action specified (need --loopback or --verify)"}
+            )
+        )
+        return 2
+    except Exception as exc:  # fail closed; surface only a safe message
+        payload = {
+            "authorized": False,
+            "stage": "microsoft_auth_unexpected",
+            "error_code": "microsoft_auth_unexpected_error",
             "error": scrub(str(exc)),
             "interpreter": sys.executable,
         }

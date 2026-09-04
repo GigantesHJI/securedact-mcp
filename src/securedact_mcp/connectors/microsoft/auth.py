@@ -51,13 +51,20 @@ ERR_TOKEN_EXCHANGE_FAILED = "microsoft_token_exchange_failed"  # noqa: S105
 ERR_PERSISTENCE_FAILED = "microsoft_token_persistence_failed"
 ERR_UNEXPECTED = "microsoft_loopback_unexpected_error"
 ERR_CONFIG_MISSING = "microsoft_config_missing"
-ERR_MANAGED_CLIENT_SECRET_MISSING = "microsoft_managed_client_secret_missing"  # noqa: S105
 
 # Local (pre-network) structural defects in the token exchange.
 ERR_LOCAL_REDIRECT_URI_MISMATCH = "microsoft_local_redirect_uri_mismatch"
 ERR_LOCAL_CLIENT_ID_MISMATCH = "microsoft_local_client_id_mismatch"
 ERR_LOCAL_PKCE_MISMATCH = "microsoft_local_pkce_verifier_mismatch"
 ERR_LOCAL_PENDING_MISSING = "microsoft_local_pending_authorization_missing"
+ERR_LOCAL_STATE_MISMATCH = "microsoft_local_state_mismatch"
+ERR_LOCAL_CODE_MISSING = "microsoft_local_code_missing"
+ERR_LOCAL_EMPTY_RESULT = "microsoft_local_empty_result"
+# Contract violation: we passed wrong types to MSAL (e.g. bare code string
+# instead of an auth_response dict). This is a SecuRedact bug, not a Microsoft
+# response. Bounded code so the operator can distinguish it from a network/
+# auth failure.
+ERR_LOCAL_MSAL_CONTRACT = "microsoft_local_msal_contract_violation"
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +141,10 @@ _LOCAL_EXCHANGE_ERROR_CODES = {
     "LocalClientIdMismatch": ERR_LOCAL_CLIENT_ID_MISMATCH,
     "LocalPkceVerifierMismatch": ERR_LOCAL_PKCE_MISMATCH,
     "LocalPendingAuthorizationMissing": ERR_LOCAL_PENDING_MISSING,
+    "LocalStateMismatch": ERR_LOCAL_STATE_MISMATCH,
+    "LocalCodeMissing": ERR_LOCAL_CODE_MISSING,
+    "LocalEmptyResult": ERR_LOCAL_EMPTY_RESULT,
+    "AssertionError": ERR_LOCAL_MSAL_CONTRACT,
 }
 
 
@@ -222,11 +233,48 @@ MICROSOFT_AUTH_URI = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/
 MICROSOFT_TOKEN_URI = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"  # noqa: S105
 GRANT_TYPE_AUTHORIZATION_CODE = "authorization_code"
 
+# MSAL Python public-client reserved scopes. MSAL automatically appends these
+# OIDC scopes (``openid``, ``profile``) and ``offline_access`` (refresh-token)
+# to every authorization request. Passing them explicitly raises
+# ``ValueError: You cannot use any scope value that is reserved.`` from MSAL's
+# own scope validator. Strip them before handing the scope list to MSAL; MSAL
+# will re-add them as needed. This is the documented MSAL public-client
+# authorization behavior -- we follow it instead of trying to suppress it.
+_MSAL_RESERVED_SCOPES: frozenset[str] = frozenset({"offline_access", "openid", "profile"})
+
+
+def _msal_scopes(config_scopes: list[str] | tuple[str, ...]) -> list[str]:
+    """Return ``config_scopes`` with MSAL reserved scopes removed.
+
+    MSAL Python public clients automatically add ``offline_access``, ``openid``,
+    and ``profile`` to every authorization request. Passing any of them
+    explicitly raises ``ValueError("You cannot use any scope value that is
+    reserved")``. This helper is the single source of truth for sanitizing
+    scopes before they reach MSAL -- used by both the runtime-bootstrap verify
+    path and the production loopback authorization. The dedicated delegated
+    Graph permissions in ``config_scopes`` are preserved verbatim.
+    """
+
+    return [s for s in config_scopes if s not in _MSAL_RESERVED_SCOPES]
+
 
 def build_authorization_url(
     config: MicrosoftConnectorConfig, *, pkce: bool = True
 ) -> tuple[str, str]:
-    """Return the consent-screen URL and CSRF ``state`` for the flow."""
+    """Return the consent-screen URL and CSRF ``state`` for the flow.
+
+    Uses MSAL's ``initiate_auth_code_flow`` for the public-client PKCE path.
+    This is the supported MSAL API for a public/native Desktop client that
+    uses PKCE; the older ``get_authorization_request_url`` + manual PKCE
+    approach does not round-trip the ``code_verifier`` through the token
+    exchange (``acquire_token_by_authorization_code`` does not accept a
+    PKCE verifier).
+
+    Returns the consent-screen URL and the CSRF ``state`` to be checked
+    against the callback. The full MSAL flow dict (containing the
+    ``code_verifier``) is stored in ``_FLOW_STATE[state]`` for the later
+    exchange; it is never logged or returned to the caller.
+    """
 
     from msal import (  # type: ignore[import-not-found]
         ConfidentialClientApplication,
@@ -250,53 +298,47 @@ def build_authorization_url(
             authority=f"https://login.microsoftonline.com/{config.tenant_id}",
         )
 
-    # Generate PKCE code verifier if requested
-    code_verifier = None
-    code_challenge = None
-    if pkce:
-        import base64
-        import hashlib
-        import secrets
+    # Strip MSAL reserved scopes (``offline_access``, ``openid``, ``profile``)
+    # before handing the list to MSAL -- MSAL public clients add them
+    # automatically and reject explicit duplicates with
+    # ``ValueError("You cannot use any scope value that is reserved")``.
+    msal_scopes = _msal_scopes(config.scopes)
 
-        code_verifier = (
-            base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
-        )
-        digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
-        code_challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-
-    # Build auth URL
-    auth_url = app.get_authorization_request_url(
-        scopes=config.scopes,
+    # ``initiate_auth_code_flow`` is the supported MSAL API for a public-
+    # client PKCE flow. It generates the ``code_verifier`` internally, sends
+    # the ``code_challenge`` to Microsoft in the authorization request, and
+    # returns a flow dict that ``acquire_token_by_auth_code_flow`` consumes
+    # in the token exchange (so the verifier survives the round trip
+    # without our code touching MSAL private attributes).
+    flow = app.initiate_auth_code_flow(
+        scopes=msal_scopes,
         redirect_uri=config.redirect_uri,
-        response_type="code",
-        state=None,  # We'll generate our own
+        # Prompt=consent forces the consent screen even if the user has
+        # previously granted consent, which is the correct UX for a first
+        # bind of a machine-installed managed agent.
         prompt="consent",
-        code_challenge=code_challenge,
-        code_challenge_method="S256" if pkce else None,
     )
 
-    # Generate our own state for CSRF
-    import secrets
+    auth_uri = flow.get("auth_uri", "")
+    state = flow.get("state", "")
+    if not auth_uri or not state:
+        raise MicrosoftTokenExchangeError(
+            "MSAL initiate_auth_code_flow returned an empty auth_uri or state",
+            cause_type="LocalAuthFlowInitFailed",
+        )
 
-    state = secrets.token_urlsafe(32)
-
-    # Store the pending authorization
+    # Store the pending authorization. We keep the MSAL app reference so the
+    # exchange can call ``acquire_token_by_auth_code_flow`` on the same
+    # instance, and the flow dict so the verifier is preserved for PKCE.
     _FLOW_STATE[state] = _PendingAuthorization(
         app=app,
-        code_verifier=code_verifier,
+        auth_code_flow=flow,
         redirect_uri=config.redirect_uri,
         client_id=client_id,
         state=state,
     )
 
-    # Replace state in the URL
-    parsed = urllib.parse.urlparse(auth_url)
-    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-    query["state"] = [state]
-    new_query = urllib.parse.urlencode(query, doseq=True)
-    final_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
-
-    return final_url, state
+    return auth_uri, state
 
 
 # Module-level pending-authorization cache keyed by CSRF state (single-process use).
@@ -307,10 +349,17 @@ _FLOW_STATE: dict[str, Any] = {}
 
 @dataclasses.dataclass
 class _PendingAuthorization:
-    """One in-flight authorization transaction."""
+    """One in-flight authorization transaction.
+
+    Stores the MSAL app instance and the flow dict returned by
+    ``initiate_auth_code_flow``. The flow dict contains the PKCE
+    ``code_verifier``; we never read or write MSAL private attributes
+    (``_code_challenge`` etc.) which are not part of the public API and have
+    changed between MSAL versions.
+    """
 
     app: Any
-    code_verifier: str | None
+    auth_code_flow: dict[str, Any]
     redirect_uri: str
     client_id: str
     state: str
@@ -334,7 +383,33 @@ def exchange_code(
 def _exchange_token_only(
     config: MicrosoftConnectorConfig, code: str, *, state: str | None = None
 ) -> dict[str, Any]:
-    """Exchange the authorization code for credentials without persisting them."""
+    """Exchange the authorization code for credentials without persisting them.
+
+    The MSAL public-client PKCE API
+    (``PublicClientApplication.acquire_token_by_auth_code_flow``) requires
+    the callback response to be passed as a **dict** that mirrors the
+    authorization server's redirect query string, not as a bare code
+    string. The dict must include at least:
+
+    * ``code``: the authorization code returned by the auth server
+    * ``state``: the CSRF token returned by the auth server (which MSAL
+      will compare against the ``state`` stored in the pending flow)
+
+    Passing the bare code string violates MSAL's contract and triggers
+    ``AssertionError`` in ``oauth2cli.oauth2.Client.obtain_token_by_auth_code_flow``:
+
+        assert isinstance(auth_code_flow, dict) and isinstance(auth_response, dict)
+
+    This function:
+    1. Pops the pending flow from the in-memory state (single-use).
+    2. Validates ``state`` matches the stored state (CSRF).
+    3. Validates ``code`` is non-empty.
+    4. Builds the ``auth_response`` dict and calls
+       ``acquire_token_by_auth_code_flow``.
+
+    The ``code_verifier`` is never read or written by our code; it lives
+    inside the MSAL flow dict and is presented to Microsoft by MSAL itself.
+    """
 
     pending = _FLOW_STATE.pop(state, None) if state is not None else None
     if state is not None and pending is None:
@@ -345,8 +420,9 @@ def _exchange_token_only(
 
     if pending is not None:
         app = pending.app
-        code_verifier = pending.code_verifier
+        auth_code_flow = pending.auth_code_flow
         redirect_uri = pending.redirect_uri
+        expected_state = pending.state
 
         # Verify redirect_uri matches
         if redirect_uri != config.redirect_uri:
@@ -360,60 +436,76 @@ def _exchange_token_only(
                 "Microsoft token exchange client_id does not match the authorization request",
                 cause_type="LocalClientIdMismatch",
             )
-        # Verify PKCE
-        if code_verifier and pending.app._code_challenge:
-            import base64
-            import hashlib
-
-            digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
-            expected = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-            if expected != pending.app._code_challenge:
-                raise MicrosoftTokenExchangeError(
-                    "Microsoft token exchange PKCE verifier does not match the sent code_challenge",
-                    cause_type="LocalPkceVerifierMismatch",
-                )
     else:
-        # Legacy/no-state path: no challenge was recorded, so run without PKCE
-        from msal import ConfidentialClientApplication, PublicClientApplication
+        # Legacy/no-state path: no flow was recorded. We cannot satisfy PKCE
+        # without the code_verifier from the flow dict. Fail closed.
+        raise MicrosoftTokenExchangeError(
+            "Microsoft token exchange received no pending authorization flow; "
+            "re-run setup to start a fresh authorization",
+            cause_type="LocalPendingAuthorizationMissing",
+        )
 
-        client_id, client_secret = config.require_credentials()
-        if config.managed or not client_secret:
-            app = PublicClientApplication(
-                client_id=client_id,
-                authority=f"https://login.microsoftonline.com/{config.tenant_id}",
-            )
-        else:
-            app = ConfidentialClientApplication(
-                client_id=client_id,
-                client_credential=client_secret,
-                authority=f"https://login.microsoftonline.com/{config.tenant_id}",
-            )
-        code_verifier = None
+    # State validation (CSRF). The state returned by Microsoft must equal
+    # the state we stored in the pending flow. MSAL will also perform this
+    # check internally and raise ``ValueError`` on mismatch; we pre-check
+    # here so the failure mode is a clear, bounded diagnostic rather than
+    # an opaque MSAL ValueError.
+    if state != expected_state:
+        # Surface the mismatch as a clear CSRF failure. We do not include
+        # the actual state values in the error to avoid leaking CSRF tokens.
+        raise MicrosoftTokenExchangeError(
+            "Microsoft token exchange state does not match the pending "
+            "authorization; possible CSRF or replay",
+            cause_type="LocalStateMismatch",
+        )
 
-    client_id, client_secret = config.require_credentials()
+    # Code validation.
+    if not code:
+        raise MicrosoftTokenExchangeError(
+            "Microsoft token exchange called without an authorization code",
+            cause_type="LocalCodeMissing",
+        )
+
+    # Build the auth_response dict that MSAL expects. This is the
+    # callback query string as a mapping. MSAL will:
+    # 1. Compare ``auth_response["state"]`` against ``auth_code_flow["state"]``
+    #    (we already pre-checked above; this is a defense-in-depth check).
+    # 2. Use ``auth_response["code"]`` for the token request.
+    # 3. Read ``auth_code_flow["code_verifier"]`` (the PKCE proof) and
+    #    present it to Microsoft in the token request.
+    assert state is not None, "state must be non-None after validation"
+    auth_response: dict[str, str] = {"code": code, "state": state}
+
+    # Validate the config before the network call. ``require_credentials``
+    # raises if client_id (and, for confidential-client flows, client_secret)
+    # are missing.
+    config.require_credentials()
     try:
         with _suppress_oauth_debug_logging():
-            result = app.acquire_token_by_authorization_code(
-                code=code,
-                scopes=config.scopes,
-                redirect_uri=config.redirect_uri,
-                code_verifier=code_verifier,
+            result = app.acquire_token_by_auth_code_flow(
+                auth_code_flow=auth_code_flow,
+                auth_response=auth_response,
+                scopes=_msal_scopes(config.scopes),
             )
+    except MicrosoftTokenExchangeError:
+        # Already a bounded, safe diagnostic; re-raise unchanged.
+        raise
     except Exception as exc:
         raise _token_exchange_error(exc) from exc
 
+    if not isinstance(result, dict):
+        # MSAL can return a non-dict (e.g. ``None``) on a hard failure that
+        # did not raise. Surface a clear, bounded diagnostic.
+        raise MicrosoftTokenExchangeError(
+            "Microsoft token exchange returned no result",
+            cause_type="LocalEmptyResult",
+        )
     if "error" in result:
         raise MicrosoftTokenExchangeError(
             f"Microsoft token exchange failed: {result.get('error')}",
             oauth_error=result.get("error"),
             error_description=result.get("error_description"),
             reached_microsoft=True,
-        )
-
-    if not isinstance(result, dict):
-        raise MicrosoftTokenExchangeError(
-            "Microsoft token exchange returned unexpected type",
-            cause_type="UnexpectedResultType",
         )
     return result
 
@@ -467,7 +559,7 @@ def _refresh_if_needed(config: MicrosoftConnectorConfig, token: dict[str, Any]) 
     # Try to get a valid access token from cache
     accounts = app.get_accounts()
     if accounts:
-        result = app.acquire_token_silent(config.scopes, account=accounts[0])
+        result = app.acquire_token_silent(_msal_scopes(config.scopes), account=accounts[0])
         if result and "access_token" in result:
             if not isinstance(result, dict):
                 raise MicrosoftAuthError(
@@ -480,7 +572,10 @@ def _refresh_if_needed(config: MicrosoftConnectorConfig, token: dict[str, Any]) 
     if refresh_token:
         try:
             with _suppress_oauth_debug_logging():
-                result = app.acquire_token_by_refresh_token(refresh_token, scopes=config.scopes)
+                # Strip MSAL reserved scopes -- see ``_msal_scopes``.
+                result = app.acquire_token_by_refresh_token(
+                    refresh_token, scopes=_msal_scopes(config.scopes)
+                )
             if "error" in result:
                 raise MicrosoftAuthError("Microsoft refresh token was rejected or revoked")
             # Persist the refreshed token
@@ -534,6 +629,14 @@ def require_valid_credentials(config: MicrosoftConnectorConfig) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 LOOPBACK_HOST = "127.0.0.1"
+# The redirect URI host sent to Microsoft Entra. The SecuRedact-managed
+# Microsoft Entra app is registered with ``http://localhost`` (no port). The
+# Entra ``localhost`` matching rule allows an ephemeral port to be appended,
+# but the host must be the literal ``localhost`` -- ``127.0.0.1`` is a
+# different host and is rejected with AADSTS50011. We therefore bind the
+# loopback listener to the secure ``127.0.0.1`` interface but advertise
+# ``localhost`` to Microsoft in the redirect URI.
+REDIRECT_HOST = "localhost"
 LOOPBACK_CALLBACK_HTML = (
     "<html><body><h2>SecuRedact</h2>"
     "<p>Microsoft authorization received. Finishing setup locally...</p>"
@@ -553,9 +656,15 @@ def pick_loopback_port() -> int:
 
 
 def loopback_redirect_uri(port: int) -> str:
-    """Return the loopback redirect URI for ``port`` (Microsoft public client form)."""
+    """Return the loopback redirect URI for ``port`` (Microsoft public client form).
 
-    return f"http://{LOOPBACK_HOST}:{port}/"
+    Uses the literal ``localhost`` host because the SecuRedact-managed
+    Microsoft Entra app is registered with ``http://localhost`` and the
+    localhost matching rule allows an ephemeral port. ``127.0.0.1`` is
+    rejected with AADSTS50011 even though it is the same loopback interface.
+    """
+
+    return f"http://{REDIRECT_HOST}:{port}/"
 
 
 class LoopbackAuthError(Exception):
@@ -671,16 +780,15 @@ def run_local_oauth(
     _browser_open: Callable[[str], None] | None = None,
     _server_cls: type[LoopbackOAuthServer] | None = None,
 ) -> MicrosoftLoopbackOutcome:
-    """Perform the full local loopback OAuth flow and persist the token."""
+    """Perform the full local loopback OAuth flow and persist the token.
 
-    # Fail closed *before* any browser launch or Microsoft request: a managed
-    # Microsoft Entra client requires the SecuRedact-managed client secret at token
-    # exchange. If it is missing, opening the browser would only let the user
-    # authorize and then be rejected by Microsoft.
-    if config.managed and not config.client_secret:
-        return _loopback_failure(
-            LOOPBACK_STAGE_PRE_AUTHORIZATION, ERR_MANAGED_CLIENT_SECRET_MISSING
-        )
+    The SecuRedact-managed Microsoft Entra app is a public/native client that uses
+    PKCE -- no client_secret is required or used in the managed path. Only the
+    BYO confidential-client path may carry a client_secret; ``build_authorization_url``
+    routes to ``PublicClientApplication`` when ``config.managed`` is true (or
+    when no secret is present) and to ``ConfidentialClientApplication`` only for
+    BYO with a secret.
+    """
 
     server_cls = _server_cls or LoopbackOAuthServer
     server = server_cls(expected_state="", timeout=timeout_seconds)

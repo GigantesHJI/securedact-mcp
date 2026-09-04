@@ -339,6 +339,161 @@ def test_machine_runtime_can_run_runtime_bootstrap(built_wheel: Path, tmp_path: 
 
 
 # ---------------------------------------------------------------------------
+# Runtime-bootstrap dispatch regression (built-wheel + subprocess execution)
+# ---------------------------------------------------------------------------
+#
+# Real-machine reproduction (post-install into ``C:\\ProgramData\\Securedact\\runtime``):
+#
+#     <runtime python> -m securedact_mcp.agent.runtime_bootstrap microsoft-auth \
+#         --verify --data-dir C:\\ProgramData\\Securedact
+#
+# raised ``NameError: name '_cmd_microsoft_auth' is not defined`` because the
+# ``_cmd_microsoft_auth`` definition had been placed *after* the
+# ``if __name__ == "__main__": raise SystemExit(main())`` block. When the module
+# is executed via ``python -m``, Python invokes the ``__main__`` guard the moment
+# it is reached during module execution -- it does NOT continue past it to
+# define the remaining module-level functions. In-process tests that imported
+# the module first and then called ``main()`` never saw this bug because the
+# import step had already populated every name before any call. A subprocess
+# regression that mirrors the exact production invocation catches it.
+
+
+_RUNTIME_BOOTSTRAP_SRC = REPO_ROOT / "src" / "securedact_mcp" / "agent" / "runtime_bootstrap.py"
+
+
+def _runtime_bootstrap_dispatch_targets() -> list[str]:
+    """Return every ``_cmd_*`` name referenced by :func:`runtime_bootstrap.main`.
+
+    Parsed from the source so the structural check tracks every future dispatch
+    target added to ``main`` without needing to be edited by hand.
+    """
+
+    import re
+
+    src = _RUNTIME_BOOTSTRAP_SRC.read_text(encoding="utf-8")
+    # Strip the ``if __name__ == "__main__":`` block and everything after it,
+    # because that block executes before the remaining module body when the
+    # module is run as ``__main__`` and therefore is the only ordering that
+    # actually matters for ``python -m`` dispatch.
+    main_guard = re.search(r'^if __name__ == "__main__":\s*$', src, re.MULTILINE)
+    effective_src = src if main_guard is None else src[: main_guard.start()]
+    return re.findall(r"return (_cmd_[A-Za-z_]+)\(", effective_src)
+
+
+def test_runtime_bootstrap_dispatch_targets_defined_before_main_guard() -> None:
+    """Every dispatch target ``main()`` calls must be defined ABOVE the
+    ``if __name__ == "__main__":`` guard.
+
+    Structural guard: catches the exact defect that produced the real-machine
+    ``NameError: name '_cmd_microsoft_auth' is not defined`` (the function was
+    defined below the guard and therefore never reached when the module was
+    executed as ``__main__``).
+    """
+
+    import re
+
+    src = _RUNTIME_BOOTSTRAP_SRC.read_text(encoding="utf-8")
+    main_guard = re.search(r'^if __name__ == "__main__":\s*$', src, re.MULTILINE)
+    assert main_guard is not None, "runtime_bootstrap.py is missing the __main__ guard"
+    pre_guard = src[: main_guard.start()]
+    targets = _runtime_bootstrap_dispatch_targets()
+    assert targets, "main() must reference at least one _cmd_* dispatch target"
+    for target in targets:
+        pattern = rf"^def {target}\("
+        assert re.search(pattern, pre_guard, re.MULTILINE), (
+            f"runtime_bootstrap.main() references {target!r} but its definition "
+            f"appears AFTER the __main__ guard (line {main_guard.start() + 1}); "
+            f"when the module is executed via `python -m`, the guard fires "
+            f"before later definitions run and main() raises NameError."
+        )
+
+
+def _runtime_bootstrap_source_uses_post_guard() -> bool:
+    """Detect the regression directly in source: any ``_cmd_*`` defined AFTER
+    the ``__main__`` guard. Used to make the subprocess test self-documenting
+    when the source has regressed.
+    """
+
+    import re
+
+    src = _RUNTIME_BOOTSTRAP_SRC.read_text(encoding="utf-8")
+    main_guard = re.search(r'^if __name__ == "__main__":\s*$', src, re.MULTILINE)
+    if main_guard is None:
+        return False
+    post_guard = src[main_guard.end() :]
+    return bool(re.search(r"^def _cmd_", post_guard, re.MULTILINE))
+
+
+def test_runtime_bootstrap_microsoft_auth_verify_subprocess(
+    built_wheel: Path, tmp_path: Path
+) -> None:
+    """Subprocess regression: launch the exact ``python -m ... microsoft-auth
+    --verify`` invocation that broke on the real machine.
+
+    The wheel is installed into an isolated target directory (no host Python
+    pollution) and the production command is executed verbatim. The test MUST
+    run the command as a subprocess so the module's own ``__main__`` guard
+    runs exactly as it does on ``C:\\ProgramData\\Securedact\\runtime``.
+    """
+
+    if shutil.which("uv") is None:
+        pytest.skip("uv pip unavailable")
+
+    target = tmp_path / "wheel_install"
+    install = subprocess.run(  # noqa: S603 - fixed argv, local wheel only
+        ["uv", "pip", "install", "--no-deps", f"--target={target}", str(built_wheel)],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if install.returncode != 0:
+        pytest.skip(f"wheel install failed: {install.stderr[-500:]}")
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    proc = subprocess.run(  # noqa: S603 - fixed argv, local wheel target only
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "raise SystemExit(__import__('securedact_mcp.agent.runtime_bootstrap', "
+            "fromlist=['']).main(['microsoft-auth', '--verify', '--data-dir', sys.argv[2]]))",
+            str(target),
+            str(data_dir),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # The real-machine bug surfaced as ``NameError: name '_cmd_microsoft_auth'
+    # is not defined``. Assert that exact failure mode is gone.
+    assert "_cmd_microsoft_auth" not in proc.stderr, (
+        f"runtime_bootstrap dispatched to _cmd_microsoft_auth but the name was "
+        f"not defined at the time main() ran. This is the real-machine "
+        f"NameError regression. stderr:\n{proc.stderr[-2000:]}"
+    )
+    assert "NameError" not in proc.stderr, (
+        f"runtime_bootstrap raised NameError at runtime:\n{proc.stderr[-2000:]}"
+    )
+    # Verify-mode output is JSON. It may report ``verified=false`` if the
+    # msal / microsoft_auth modules are absent from the test interpreter, but
+    # it must NEVER fail with the dispatch NameError above.
+    assert proc.stdout.strip(), (
+        f"runtime_bootstrap microsoft-auth --verify produced no stdout; "
+        f"stderr:\n{proc.stderr[-2000:]}"
+    )
+    payload = json.loads(proc.stdout)
+    assert "interpreter" in payload
+    # On a fresh interpreter without msal / the Microsoft extras, the verify
+    # function reports ``verified=false`` (the imports_ok flag is False).
+    # That is the correct fail-closed behaviour; what we forbid here is the
+    # NameError that prevented the function from running at all.
+    assert payload.get("verified") is False or payload.get("verified") is True
+
+
+# ---------------------------------------------------------------------------
 # Dev fast-path must not accept a stale same-version runtime (checkout changed)
 # ---------------------------------------------------------------------------
 

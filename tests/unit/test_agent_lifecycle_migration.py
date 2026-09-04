@@ -20,6 +20,7 @@ by every install/upgrade so a machine can never have both active.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -866,6 +867,7 @@ RUNTIME_CMDLINE = (
 )
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows WMI-specific test")
 def test_find_agent_processes_matches_real_machine_pid_26520_shape() -> None:
     """Match the real-machine repro: PID 26520, runtime python.exe, command
     line invoking ``securedact_agent_loop.py run``."""
@@ -882,6 +884,7 @@ def test_find_agent_processes_matches_real_machine_pid_26520_shape() -> None:
     assert pids == [26520]
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows WMI-specific test")
 def test_find_agent_processes_running_true_in_status_when_process_present() -> None:
     """End-to-end: ``query_windows_service`` must report ``running=True`` when a
     matching agent process is present."""
@@ -918,8 +921,8 @@ def test_find_agent_processes_ignores_unrelated_python() -> None:
         # Developer interpreter running some unrelated tool
         _FakeWmiProc(
             1000,
-            r"C:\Users\User\AppData\Local\Programs\Python\Python312\python.exe",
-            r"C:\Users\User\projects\mything\something.py",
+            r"C:\Python312\python.exe",
+            r"C:\projects\mything\something.py",
         ),
         # CI helper
         _FakeWmiProc(

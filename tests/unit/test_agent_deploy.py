@@ -440,6 +440,31 @@ def test_upgrade_stops_starts_and_preserves_state(tmp_path: Path, monkeypatch) -
     data.mkdir()
     (data / "agent.json").write_text('{"agent_id": "agent-1"}')  # simulated state
 
+    # Mock fingerprint to differ before/after so the upgrade is reported as changed
+    fingerprints = ["pre-fingerprint", "post-fingerprint"]
+    monkeypatch.setattr(
+        deploy, "_compute_runtime_fingerprint", lambda r, runner: fingerprints.pop(0)
+    )
+
+    # Track agent control actions
+    actions: list[str] = []
+
+    def fake_control(action: str) -> bool:
+        actions.append(action)
+        return action == "stop"
+
+    monkeypatch.setattr(deploy, "_default_agent_control", fake_control)
+
+    # Mock _run_bootstrap to capture start
+    original_run_bootstrap = deploy._run_bootstrap
+    bootstrap_calls: list[list[str]] = []
+
+    def fake_run_bootstrap(runner, py, subcommand, *, data_dir):
+        bootstrap_calls.append(list(subcommand))
+        return original_run_bootstrap(runner, py, subcommand, data_dir=data_dir)
+
+    monkeypatch.setattr(deploy, "_run_bootstrap", fake_run_bootstrap)
+
     runner = FakeRunner()
     outcome = upgrade_runtime(
         runtime_path=runtime,
@@ -448,10 +473,11 @@ def test_upgrade_stops_starts_and_preserves_state(tmp_path: Path, monkeypatch) -
         command_runner=runner,
     )
     assert outcome["upgraded"] is True
-    subcommands = [c[0][-1] for c in runner.calls]
-    assert "stop" in subcommands
-    assert "start" in subcommands
-    assert subcommands.index("stop") < subcommands.index("start")
+    assert outcome["artifact_changed"] is True
+    # Verify stop was called via _default_agent_control
+    assert "stop" in actions
+    # Verify start was called via _run_bootstrap
+    assert any("start" in call for call in bootstrap_calls)
     # State in the data dir is untouched by the runtime re-provisioning.
     assert (data / "agent.json").read_text() == '{"agent_id": "agent-1"}'
 

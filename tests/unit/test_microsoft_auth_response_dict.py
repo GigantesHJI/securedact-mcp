@@ -39,10 +39,12 @@ These tests guard:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import zipfile
 from pathlib import Path
@@ -53,6 +55,11 @@ from securedact_mcp.connectors.microsoft import auth as microsoft_auth
 from securedact_mcp.connectors.microsoft import managed as microsoft_managed
 from securedact_mcp.connectors.microsoft.config import MicrosoftConnectorConfig
 
+# msal is only required by the tests that actually inspect the real MSAL API.
+# Those tests skip cleanly when the optional ``microsoft`` extra is not installed.
+_HAS_MICROSOFT = importlib.util.find_spec("msal") is not None
+requires_microsoft = pytest.mark.skipif(not _HAS_MICROSOFT, reason="microsoft extra not installed")
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -61,6 +68,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 
 
+@requires_microsoft
 def test_msal_auth_response_must_be_dict() -> None:
     """MSAL's obtain_token_by_auth_code_flow asserts auth_response is a dict."""
 
@@ -74,6 +82,7 @@ def test_msal_auth_response_must_be_dict() -> None:
     )
 
 
+@requires_microsoft
 def test_msal_auth_response_documented_as_dict() -> None:
     """The MSAL docstring for ``acquire_token_by_auth_code_flow`` documents
     ``auth_response`` as a dict, not a string."""
@@ -89,6 +98,7 @@ def test_msal_auth_response_documented_as_dict() -> None:
     )
 
 
+@requires_microsoft
 def test_msal_state_mismatch_raises_value_error() -> None:
     """MSAL raises ``ValueError`` when ``auth_response["state"]`` does not
     match ``auth_code_flow["state"]``.
@@ -151,7 +161,7 @@ class _StrictMsalApp:
 
 
 def _work_dir(name: str) -> Path:
-    work = Path(r"C:\Users\User\AppData\Local\Temp\kilo\m365_auth_response_tests")
+    work = Path(tempfile.gettempdir()) / "securedact_mcp_tests" / "m365_auth_response_tests"
     if not work.is_dir():
         work.mkdir(parents=True, exist_ok=True)
     d = work / name
@@ -372,7 +382,7 @@ def test_built_wheel_runtime_bootstrap_auth_response_dict_subprocess() -> None:
     uv_exe = shutil.which("uv")
     assert uv_exe is not None
 
-    work = Path(r"C:\Users\User\AppData\Local\Temp\kilo") / "m365_auth_response_subprocess"
+    work = Path(tempfile.gettempdir()) / "securedact_mcp_tests" / "m365_auth_response_subprocess"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)

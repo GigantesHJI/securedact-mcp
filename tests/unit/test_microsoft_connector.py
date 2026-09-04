@@ -111,14 +111,35 @@ def test_scan_request_and_result_serialization() -> None:
 
 
 def test_importing_connector_contracts_does_not_pull_microsoft() -> None:
-    import sys
+    import ast
+    from pathlib import Path
 
+    # Check that the securedact_core.connectors package source doesn't import
+    # Microsoft-specific SDKs. This is a static check on the source code,
+    # not a runtime sys.modules check (which is polluted by other tests).
+    connectors_root = Path(__file__).resolve().parents[2] / "src" / "securedact_core" / "connectors"
+    forbidden_imports = {"msal", "msgraph", "azure.identity", "azure.mgmt"}
+
+    for py_file in connectors_root.rglob("*.py"):
+        content = py_file.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if any(alias.name.startswith(f) for f in forbidden_imports):
+                        raise AssertionError(
+                            f"{py_file} imports forbidden Microsoft SDK: {alias.name}"
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and any(node.module.startswith(f) for f in forbidden_imports):
+                    raise AssertionError(
+                        f"{py_file} imports from forbidden Microsoft SDK: {node.module}"
+                    )
+
+    # Also verify the package can be imported (it just shouldn't pull in the SDKs)
     import securedact_core.connectors as connectors
 
     assert connectors is not None
-    # Only check for Microsoft-specific SDKs, not general HTTP libraries
-    for forbidden in ("msal", "msgraph", "azure.identity", "azure.mgmt"):
-        assert forbidden not in sys.modules
 
 
 def test_extract_text_supports_text_formats_only() -> None:

@@ -34,6 +34,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import zipfile
 from pathlib import Path
@@ -46,10 +47,18 @@ from securedact_mcp.connectors.microsoft.config import MicrosoftConnectorConfig
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+_TEST_WORK = Path(tempfile.gettempdir()) / "securedact_mcp_tests" / "m365_managed_tests"
 
-# ---------------------------------------------------------------------------
-# Managed configuration: public client, no secret
-# ---------------------------------------------------------------------------
+
+def _work_dir(name: str) -> Path:
+    """Create a stable scratch directory for test artifacts."""
+    if not _TEST_WORK.is_dir():
+        _TEST_WORK.mkdir(parents=True, exist_ok=True)
+    d = _TEST_WORK / name
+    if d.exists():
+        shutil.rmtree(d)
+    d.mkdir(parents=True)
+    return d
 
 
 def test_managed_microsoft_config_has_no_client_secret() -> None:
@@ -157,13 +166,8 @@ def _patch_msal(monkeypatch, *, app_cls=_RecordingMsalApp):
     monkeypatch.setitem(sys.modules, "msal", _FakeMsalModule())
 
 
-_TEST_WORK = Path(r"C:\Users\User\AppData\Local\Temp\kilo\m365_managed_tests")
-
-
 def _work_dir(name: str) -> Path:
-    """Create a stable scratch directory for test artifacts (tmp_path is
-    flaky on this Windows host due to permission issues in the default
-    pytest tmpdir location)."""
+    """Create a stable scratch directory for test artifacts."""
     if not _TEST_WORK.is_dir():
         _TEST_WORK.mkdir(parents=True, exist_ok=True)
     d = _TEST_WORK / name
@@ -171,6 +175,11 @@ def _work_dir(name: str) -> Path:
         shutil.rmtree(d)
     d.mkdir(parents=True)
     return d
+
+
+# ---------------------------------------------------------------------------
+# Managed configuration: public client, no secret
+# ---------------------------------------------------------------------------
 
 
 def test_run_local_oauth_managed_no_secret_reaches_browser(
@@ -491,7 +500,7 @@ def test_built_wheel_runtime_bootstrap_microsoft_auth_loopback_subprocess() -> N
     uv_exe = shutil.which("uv")
     assert uv_exe is not None
 
-    work = Path(r"C:\Users\User\AppData\Local\Temp\kilo") / "m365_loopback_subprocess"
+    work = Path(tempfile.gettempdir()) / "securedact_mcp_tests" / "m365_loopback_subprocess"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)

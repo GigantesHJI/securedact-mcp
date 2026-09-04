@@ -24,6 +24,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import zipfile
 from pathlib import Path
@@ -99,7 +100,7 @@ def test_loopback_redirect_uri_preserves_ephemeral_port() -> None:
 
 
 def _work_dir(name: str) -> Path:
-    work = Path(r"C:\Users\User\AppData\Local\Temp\kilo\m365_redirect_tests")
+    work = Path(tempfile.gettempdir()) / "securedact_mcp_tests" / "m365_redirect_tests"
     if not work.is_dir():
         work.mkdir(parents=True, exist_ok=True)
     d = work / name
@@ -317,7 +318,7 @@ def test_built_wheel_runtime_bootstrap_microsoft_auth_verify_localhost_subproces
     uv_exe = shutil.which("uv")
     assert uv_exe is not None
 
-    work = Path(r"C:\Users\User\AppData\Local\Temp\kilo") / "m365_redirect_subprocess"
+    work = Path(tempfile.gettempdir()) / "securedact_mcp_tests" / "m365_redirect_subprocess"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)

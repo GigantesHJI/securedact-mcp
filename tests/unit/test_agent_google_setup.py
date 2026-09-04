@@ -411,27 +411,38 @@ def test_upgrade_with_google_preserves_state_and_installs_extra(tmp_path: Path) 
     (data / "google").mkdir()
     (data / "google" / "token.json.enc").write_text("{}")
 
-    runner = FakeRunner()
-    outcome = upgrade_runtime(
-        runtime_path=runtime,
-        data_dir=data,
-        acl_provider=safe_provider,
-        command_runner=runner,
-        google_enabled=True,
-    )
-    assert outcome["upgraded"] is True
-    pip_calls = [
-        " ".join(str(a) for a in c[0])
-        for c in runner.calls
-        if "pip" in [str(a).lower() for a in c[0]]
-    ]
-    assert any("[google]" in c for c in pip_calls)
-    # State (registration, bindings, OAuth vault) is preserved.
-    assert (data / "agent.json").read_text() == '{"agent_id": "agent-1"}'
-    assert (
-        data / "connector-bindings.json"
-    ).read_text() == '{"int-1": {"integration_id": "int-1"}}'
-    assert (data / "google" / "token.json.enc").read_text() == "{}"
+    # Mock fingerprint to differ before/after so the upgrade is reported as changed
+    fingerprints = ["pre-fingerprint", "post-fingerprint"]
+    import securedact_mcp.agent.deploy as deploy_module
+
+    original_fingerprint = deploy_module._compute_runtime_fingerprint
+    deploy_module._compute_runtime_fingerprint = lambda r, runner: fingerprints.pop(0)
+
+    try:
+        runner = FakeRunner()
+        outcome = upgrade_runtime(
+            runtime_path=runtime,
+            data_dir=data,
+            acl_provider=safe_provider,
+            command_runner=runner,
+            google_enabled=True,
+        )
+        assert outcome["upgraded"] is True
+        assert outcome["artifact_changed"] is True
+        pip_calls = [
+            " ".join(str(a) for a in c[0])
+            for c in runner.calls
+            if "pip" in [str(a).lower() for a in c[0]]
+        ]
+        assert any("[google]" in c for c in pip_calls)
+        # State (registration, bindings, OAuth vault) is preserved.
+        assert (data / "agent.json").read_text() == '{"agent_id": "agent-1"}'
+        assert (
+            data / "connector-bindings.json"
+        ).read_text() == '{"int-1": {"integration_id": "int-1"}}'
+        assert (data / "google" / "token.json.enc").read_text() == "{}"
+    finally:
+        deploy_module._compute_runtime_fingerprint = original_fingerprint
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +583,7 @@ def test_resolve_google_selection_no_flag_not_forced(tmp_path: Path) -> None:
             non_interactive=True,
             input_fn=lambda _p: "y",
             output=io.StringIO(),
+            env={},
         )
         is False
     )

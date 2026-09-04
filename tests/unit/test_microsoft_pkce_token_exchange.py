@@ -41,10 +41,12 @@ These tests guard:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import zipfile
 from pathlib import Path
@@ -55,6 +57,11 @@ from securedact_mcp.connectors.microsoft import auth as microsoft_auth
 from securedact_mcp.connectors.microsoft import managed as microsoft_managed
 from securedact_mcp.connectors.microsoft.config import MicrosoftConnectorConfig
 
+# msal is only required by the tests that actually inspect the real MSAL API.
+# Those tests skip cleanly when the optional ``microsoft`` extra is not installed.
+_HAS_MICROSOFT = importlib.util.find_spec("msal") is not None
+requires_microsoft = pytest.mark.skipif(not _HAS_MICROSOFT, reason="microsoft extra not installed")
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -64,6 +71,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 
 
+@requires_microsoft
+@requires_microsoft
 def test_msal_public_client_has_initiate_auth_code_flow() -> None:
     """The installed MSAL package must expose ``initiate_auth_code_flow``."""
 
@@ -78,6 +87,7 @@ def test_msal_public_client_has_initiate_auth_code_flow() -> None:
     )
 
 
+@requires_microsoft
 def test_msal_public_client_has_acquire_token_by_auth_code_flow() -> None:
     """The installed MSAL package must expose ``acquire_token_by_auth_code_flow``."""
 
@@ -92,6 +102,7 @@ def test_msal_public_client_has_acquire_token_by_auth_code_flow() -> None:
     )
 
 
+@requires_microsoft
 def test_msal_public_client_initiate_returns_code_verifier() -> None:
     """``initiate_auth_code_flow`` must return a flow dict with ``code_verifier``."""
 
@@ -185,7 +196,7 @@ def _patch_msal_pkce(monkeypatch):
 
 
 def _work_dir(name: str) -> Path:
-    work = Path(r"C:\Users\User\AppData\Local\Temp\kilo\m365_pkce_tests")
+    work = Path(tempfile.gettempdir()) / "securedact_mcp_tests" / "m365_pkce_tests"
     if not work.is_dir():
         work.mkdir(parents=True, exist_ok=True)
     d = work / name
@@ -422,7 +433,7 @@ def test_built_wheel_runtime_bootstrap_token_exchange_subprocess() -> None:
     uv_exe = shutil.which("uv")
     assert uv_exe is not None
 
-    work = Path(r"C:\Users\User\AppData\Local\Temp\kilo") / "m365_token_exchange_subprocess"
+    work = Path(tempfile.gettempdir()) / "securedact_mcp_tests" / "m365_token_exchange_subprocess"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)

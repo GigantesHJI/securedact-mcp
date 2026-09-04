@@ -65,6 +65,10 @@ google = [
   "google-auth>=2.29,<3",
   "google-auth-oauthlib>=1.2,<2",
 ]
+microsoft = [
+  "msal>=1.37,<2",
+  "requests>=2.32,<3",
+]
 security = [
   "cyclonedx-bom>=6,<8",
   "pip-audit>=2.9,<3",

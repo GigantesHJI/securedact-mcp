@@ -1226,6 +1226,20 @@ wheels = [
 ]
 
 [[package]]
+name = "msal"
+version = "1.38.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b8/1f/10f9d47a63d3a2e61b2c43e15bee6b95682aab827018f9a1b97a80787e25/msal-1.38.0.tar.gz", hash = "sha256:4f10ff1257bacfd1781f22e85bd2b8d43ad1b490f3b6aafd7906671cadedd464", size = 203411, upload-time = "2026-08-24T10:22:46.053Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/ca/d768f77a27d81ed0a6884f2458f8613c31c79b2eb95defbeca2273fd0754/msal-1.38.0-py3-none-any.whl", hash = "sha256:765b9b98b6aa380ee8b8f1c75636e08863edaf0a953498955bd668650dde5d49", size = 131057, upload-time = "2026-08-24T10:22:47.485Z" },
+]
+
+[[package]]
 name = "msgpack"
 version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2343,6 +2357,10 @@ google = [
     { name = "google-auth" },
     { name = "google-auth-oauthlib" },
 ]
+microsoft = [
+    { name = "msal" },
+    { name = "requests" },
+]
 ml = [
     { name = "flair" },
     { name = "gliner" },
@@ -2370,6 +2388,7 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'ml'", specifier = ">=0.28,<1" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100,<7" },
     { name = "mcp", specifier = ">=1.2,<2" },
+    { name = "msal", marker = "extra == 'microsoft'", specifier = ">=1.37,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.17,<2" },
     { name = "pip-audit", marker = "extra == 'security'", specifier = ">=2.9,<3" },
     { name = "pip-licenses", marker = "extra == 'security'", specifier = ">=5,<6" },
@@ -2380,6 +2399,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<8" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=306,<312" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
+    { name = "requests", marker = "extra == 'microsoft'", specifier = ">=2.32,<3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
     { name = "setuptools", marker = "extra == 'dev'", specifier = ">=75" },
     { name = "sigstore", marker = "extra == 'security'", specifier = ">=3,<5" },
@@ -2390,7 +2410,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12,<7" },
     { name = "wheel", marker = "extra == 'dev'", specifier = ">=0.45,<1" },
 ]
-provides-extras = ["ml", "dev", "benchmark", "google", "security"]
+provides-extras = ["ml", "dev", "benchmark", "google", "microsoft", "security"]
 
 [[package]]
 name = "securesystemslib"

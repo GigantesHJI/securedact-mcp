@@ -711,7 +711,17 @@ def run_microsoft_machine_onboarding(
         )
     )
     _bind = bind_microsoft_fn or bind_microsoft_machine
-    _deps_ready = deps_ready_fn or _default_microsoft_deps_ready
+    # One resolution, one interpreter: the probe below and the authorization further
+    # down are guaranteed to talk about the same Python.
+    from .deploy import (
+        _microsoft_runtime_deps_ready,
+        resolve_machine_runtime_python,
+    )
+
+    runtime_python = resolve_machine_runtime_python(runtime_path)
+    _deps_ready = deps_ready_fn or (
+        lambda rp=runtime_python: _microsoft_runtime_deps_ready(rp, command_runner)
+    )
     _select_microsoft = microsoft_selection_fn or resolve_microsoft_selection
 
     # First, decide if Microsoft 365 should be configured (mirrors Google logic)
@@ -732,10 +742,6 @@ def run_microsoft_machine_onboarding(
     print(file=output)
     print("[Microsoft 365]", file=output)
 
-    # Resolve the runtime python FIRST so we print the correct interpreter
-    from .deploy import resolve_machine_runtime_python
-
-    runtime_python = resolve_machine_runtime_python(runtime_path)
     print(
         "Machine runtime interpreter: "
         + (str(runtime_python) if runtime_python is not None else "not available"),

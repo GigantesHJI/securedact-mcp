@@ -201,12 +201,43 @@ def test_status_nonzero_reports_not_installed() -> None:
             "securedact_mcp.agent.service_taskscheduler._legacy_scm_service_exists",
             return_value=False,
         ),
+        patch(
+            "securedact_mcp.agent.service_taskscheduler._find_agent_processes",
+            return_value=[],
+        ),
     ):
         status = _parse_status("SecuRedact Managed Agent", fake_runner)
 
     assert status["installed"] is False
     assert status["running"] is False
     assert status["agent_pids"] == []
+
+
+def test_status_task_absent_but_orphan_process_reports_installed_false_running_true() -> None:
+    """When the task is absent but an orphan/live agent process exists,
+    installed=False and running=True are semantically independent."""
+    from securedact_mcp.agent.service_taskscheduler import SchtasksResult, _parse_status
+
+    def fake_runner(args: list[str]) -> SchtasksResult:
+        return SchtasksResult(
+            returncode=1, stdout="", stderr="ERROR: The system cannot find the file specified."
+        )
+
+    with (
+        patch(
+            "securedact_mcp.agent.service_taskscheduler._legacy_scm_service_exists",
+            return_value=False,
+        ),
+        patch(
+            "securedact_mcp.agent.service_taskscheduler._find_agent_processes",
+            return_value=[9999],
+        ),
+    ):
+        status = _parse_status("SecuRedact Managed Agent", fake_runner)
+
+    assert status["installed"] is False
+    assert status["running"] is True
+    assert status["agent_pids"] == [9999]
 
 
 def test_status_accepts_root_path_task_name() -> None:
@@ -497,15 +528,15 @@ def test_upgrade_uses_bounded_wait_agent_control(
 
     def fake_control(action: str) -> bool:
         actions.append(action)
-        return action == "start"
+        return action == "stop"
 
     monkeypatch.setattr(deploy, "_default_agent_control", fake_control)
     monkeypatch.setattr(deploy, "_compute_runtime_fingerprint", lambda runtime, runner: "same")
 
     class FakeProvision:
         def __init__(self, *a: Any, **kw: Any) -> None:
-            self.runtime = tmp_path / "runtime"
-            self.runtime_python = self.runtime / "Scripts" / "python.exe"
+            self.runtime_path = tmp_path / "runtime"
+            self.runtime_python = self.runtime_path / "Scripts" / "python.exe"
             self.runtime_python.parent.mkdir(parents=True, exist_ok=True)
             self.runtime_python.write_text("")
             self.already_provisioned = False
@@ -522,8 +553,8 @@ def test_upgrade_uses_bounded_wait_agent_control(
 
     deploy.upgrade_runtime(runtime_path=tmp_path / "runtime", data_dir=tmp_path)
     assert "stop" in actions
-    assert "start" in actions
-    assert actions.index("stop") < actions.index("start")
+    # Upgrade uses _run_bootstrap directly for start, not _default_agent_control
+    assert actions == ["stop"]
 
 
 # ---------------------------------------------------------------------------
@@ -771,7 +802,7 @@ def test_upgrade_does_not_touch_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(
         deploy,
         "_run_bootstrap",
-        lambda runner, py, sub, dd: deploy.RunResult(0, stdout="ok"),
+        lambda runner, py, sub, *, data_dir: deploy.RunResult(0, stdout="ok"),
     )
 
     deploy.upgrade_runtime(runtime_path=tmp_path / "runtime", data_dir=data_dir)
@@ -966,17 +997,11 @@ def test_find_agent_processes_unavailable_keeps_installed_correct() -> None:
     def fake_runner(args: list[str]) -> SchtasksResult:
         return SchtasksResult(returncode=0, stdout="")
 
-    import builtins
-
-    original_import = builtins.__import__
-
-    def blocked(name: str, *args: Any, **kwargs: Any):
-        if name == "win32com" or name.startswith("win32com."):
-            raise ImportError("simulated missing pywin32")
-        return original_import(name, *args, **kwargs)
-
     with (
-        patch("builtins.__import__", side_effect=blocked),
+        patch(
+            "securedact_mcp.agent.service_taskscheduler.win32com_client",
+            None,
+        ),
         patch(
             "securedact_mcp.agent.service_taskscheduler._legacy_scm_service_exists",
             return_value=False,

@@ -57,6 +57,7 @@ The scheduled task
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -69,17 +70,30 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from .config import AgentFiles
+try:
+    import win32com.client as win32com_client  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover - non-Windows / missing pywin32
+    win32com_client = None
+
 from .errors import AgentError
 from .safe_log import scrub
 
 logger = logging.getLogger(__name__)
+
+# Legacy SCM service name that must be detected and migrated
+LEGACY_SCM_SERVICE_NAME = "SecuredactAgent"
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 SCHEDULED_TASK_NAME = "SecuRedact Managed Agent"
+# Canonical Task Scheduler root-path form. ``schtasks`` accepts both the bare
+# name and the leading-backslash root form, but querying with the bare name
+# returns ``\SecuRedact Managed Agent`` in its output and JSON payload. We
+# normalise the task name so existence/running detection never depends on the
+# surface form passed in by callers or written back by schtasks itself.
+SCHEDULED_TASK_FULL_PATH = "\\" + SCHEDULED_TASK_NAME
 TASK_DESCRIPTION = (
     "SecuRedact local managed-agent daemon: heartbeats to the SecuRedact control "
     "plane and executes queued Google privacy scans locally. Runs hidden with no "
@@ -98,9 +112,6 @@ _SYSTEM32 = os.path.expandvars("%SystemRoot%\\System32")
 def _system_exe(name: str) -> str:
     return os.path.join(_SYSTEM32, name)
 
-
-DEFAULT_RESTART_COUNT = 3
-DEFAULT_RESTART_INTERVAL = "PT1M"  # 1 minute between restart attempts
 
 # The scheduled task launches the machine-runtime interpreter (``python.exe``)
 # directly against a small launcher script that lives INSIDE the runtime's
@@ -186,6 +197,231 @@ def _launcher_script_path(interpreter: Path) -> Path:
     """Return the absolute path of the in-runtime launcher script."""
 
     return interpreter.parent / AGENT_LOOP_LAUNCHER
+
+
+def _legacy_scm_service_exists() -> bool:
+    """Return True if the legacy SecuredactAgent SCM service exists.
+
+    This service uses the pywin32/pythonservice.exe host and is known to fail
+    with WinError 1053 on this host. It should be migrated to the Task Scheduler
+    backend.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed binary
+            [_system_exe("sc.exe"), "query", LEGACY_SCM_SERVICE_NAME],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        # Return code 0 means service exists (even if STOPPED)
+        # Return code 1060 (ERROR_SERVICE_DOES_NOT_EXIST) means it doesn't exist
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _legacy_scm_service_state() -> str | None:
+    """Return the state of the legacy SCM service if it exists, else None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed binary
+            [_system_exe("sc.exe"), "query", LEGACY_SCM_SERVICE_NAME],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("STATE"):
+                # STATE : 1  STOPPED  (or RUNNING, etc.)
+                parts = line.split()
+                if len(parts) >= 3:
+                    return parts[2].lower()
+        return "unknown"
+    except Exception:
+        return None
+
+
+def _resolve_runtime_root(runtime_python: Path | None = None) -> Path | None:
+    """Return the canonical machine-runtime root used for matching agent PIDs.
+
+    The agent loop runs from ``<ProgramData>\\Securedact\\runtime`` (see
+    :func:`securedact_mcp.agent.deploy.default_runtime_path`). We match on the
+    *directory root* rather than the exact interpreter path so that any future
+    interpreter swap (python.exe / pythonw.exe / patched version) inside the
+    same runtime is still detected as "ours".
+    """
+
+    if runtime_python is not None:
+        # runtime_python is the in-runtime interpreter; its parent chain
+        # includes ``<runtime>`` (i.e. ``.../runtime/Scripts/python.exe``).
+        # Walk up until the directory whose name is the runtime dirname.
+        candidate = runtime_python.resolve().parent
+        for _ in range(4):
+            if candidate.name == "runtime" and candidate.parent.name == "Securedact":
+                return candidate
+            if candidate.parent == candidate:
+                break
+            candidate = candidate.parent
+        # Fall through to the deploy-derived default.
+    try:
+        from . import deploy
+
+        return deploy.default_runtime_path()
+    except Exception:
+        return None
+
+
+def _is_managed_agent_process(
+    executable_path: str, command_line: str, runtime_root: Path | None
+) -> bool:
+    """Return True iff ``(executable_path, command_line)`` matches the managed
+    agent loop invocation contract.
+
+    Conservative matching:
+
+    * ``executable_path`` must lie inside the machine runtime root (when known).
+      This excludes any non-SecuRedact python.exe (developer interpreters,
+      system Python, CI helpers, foreground debug runs).
+    * ``command_line`` must reference ``securedact_agent_loop.py`` — the
+      launcher the scheduled task invokes. We deliberately do not match
+      arbitrary python processes just because they happen to live under
+      ``C:\\ProgramData\\Securedact`` (there are none, but the explicit
+      command-line match future-proofs against accidentally sharing the
+      runtime with another consumer).
+    """
+
+    if not executable_path or not command_line:
+        return False
+    if runtime_root is not None:
+        try:
+            runtime_prefix = str(runtime_root).lower()
+        except Exception:
+            runtime_prefix = ""
+        if not runtime_prefix or not executable_path.lower().startswith(runtime_prefix):
+            return False
+    return "securedact_agent_loop.py" in command_line.lower()
+
+
+def _find_agent_processes(runtime_python: Path | None = None) -> list[int]:
+    """Return PIDs of running managed-agent loop processes.
+
+    Detection is delegated to the Windows-native WMI provider
+    (``Win32_Process``) via ``win32com``. The same provider is what
+    ``Get-CimInstance Win32_Process`` uses, so it reaches processes running in
+    other sessions (including the SYSTEM session that hosts the scheduled
+    task) from a non-elevated caller. This replaces the previous
+    ``wmic.exe``/``tasklist.exe`` approach, which both:
+
+    * depended on the deprecated ``wmic.exe`` (removed from default Win11
+      24H2+ installs), and
+    * used localised / fragile English output parsing.
+
+    The function is fail-safe: any exception (missing pywin32, COM init
+    failure, WMI service unavailable, ACL changes, etc.) returns ``[]`` so
+    that ``installed`` (driven by schtasks) is still authoritative and
+    ``running`` simply reads false on a host where process inspection is
+    unavailable. No command-line material is logged or returned beyond the
+    list of integer PIDs.
+    """
+    if sys.platform != "win32":
+        return []
+    runtime_root = _resolve_runtime_root(runtime_python)
+
+    if win32com_client is None:
+        logger.debug("pywin32 not available; cannot enumerate agent processes")
+        return []
+    get_object = getattr(win32com_client, "GetObject", None)
+    if get_object is None:
+        return []
+
+    query = (
+        'SELECT ProcessId, ExecutablePath, CommandLine FROM Win32_Process WHERE Name = "python.exe"'
+    )
+
+    try:
+        wmi = get_object(r"winmgmts:\\.\root\cimv2")
+    except Exception as exc:
+        logger.debug("WMI connection failed: %s", scrub(str(exc)))
+        return []
+
+    try:
+        procs = wmi.ExecQuery(query)
+    except Exception as exc:
+        logger.debug("WMI ExecQuery failed: %s", scrub(str(exc)))
+        return []
+
+    pids: list[int] = []
+    try:
+        for proc in procs:
+            try:
+                pid = int(proc.ProcessId)
+                exe = str(proc.ExecutablePath or "")
+                cmdline = str(proc.CommandLine or "")
+            except Exception as exc:
+                logger.debug("could not read WMI process record: %s", scrub(str(exc)))
+                continue
+            if _is_managed_agent_process(exe, cmdline, runtime_root):
+                pids.append(pid)
+    except Exception as exc:
+        logger.debug("WMI result iteration failed: %s", scrub(str(exc)))
+        return pids
+
+    return pids
+
+
+def _remove_legacy_scm_service() -> bool:
+    """Stop and delete the legacy SecuredactAgent SCM service if it exists.
+
+    Returns True if the legacy service was found and removal was attempted.
+    Logs warnings but does not raise - the Task Scheduler backend is the
+    canonical mechanism and legacy SCM cleanup is best-effort migration.
+    """
+    if sys.platform != "win32":
+        return False
+    if not _legacy_scm_service_exists():
+        return False
+    logger.warning(
+        "legacy SCM service '%s' detected; removing it as part of migration to Task Scheduler",
+        LEGACY_SCM_SERVICE_NAME,
+    )
+    try:
+        # Stop the service first
+        subprocess.run(  # noqa: S603 - fixed binary
+            [_system_exe("sc.exe"), "stop", LEGACY_SCM_SERVICE_NAME],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        # Delete the service
+        result = subprocess.run(  # noqa: S603 - fixed binary
+            [_system_exe("sc.exe"), "delete", LEGACY_SCM_SERVICE_NAME],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0:
+            logger.info("legacy SCM service '%s' removed successfully", LEGACY_SCM_SERVICE_NAME)
+        else:
+            logger.warning(
+                "failed to remove legacy SCM service '%s': %s",
+                LEGACY_SCM_SERVICE_NAME,
+                scrub(result.stderr),
+            )
+    except Exception as exc:
+        logger.warning(
+            "error removing legacy SCM service '%s': %s", LEGACY_SCM_SERVICE_NAME, scrub(str(exc))
+        )
+    return True
 
 
 _LAUNCHER_SOURCE = '''"""Machine-runtime launcher for the SecuRedact managed-agent loop.
@@ -441,9 +677,14 @@ def _write_xml_file(xml: str) -> Path:
 
 
 def task_exists(name: str, runner: CommandRunner | None = None) -> bool:
-    """Return True when a scheduled task with ``name`` already exists."""
+    """Return True when a scheduled task with ``name`` already exists.
 
-    r = (runner or _default_schtasks_runner)(["/Query", "/TN", name])
+    Existence is determined by the schtasks return code (``rc == 0``), not by
+    parsing human-readable output. The task name is normalised so callers may
+    pass either ``"SecuRedact Managed Agent"`` or the root-path form
+    ``"\\SecuRedact Managed Agent"``.
+    """
+    r = (runner or _default_schtasks_runner)(["/Query", "/TN", _normalize_task_name(name)])
     return r.returncode == 0
 
 
@@ -472,34 +713,95 @@ def _stop_task(name: str, runner: CommandRunner) -> None:
     runner(["/End", "/TN", name])
 
 
+def _normalize_task_name(name: str) -> str:
+    """Return the canonical Task Scheduler ``\\Name`` form for ``name``.
+
+    ``schtasks.exe`` accepts both ``SecuRedact Managed Agent`` and
+    ``\\SecuRedact Managed Agent`` and always emits the leading-backslash form
+    in its output. We normalise here so existence detection does not depend on
+    whichever surface form a caller happened to pass in.
+    """
+    n = name.strip().strip('"')
+    if not n:
+        return n
+    if n.startswith("\\") or n.startswith("/"):
+        return "\\" + n.lstrip("\\/").lstrip()
+    return "\\" + n
+
+
 def _parse_status(name: str, runner: CommandRunner) -> dict[str, object]:
-    result = runner(["/Query", "/TN", name, "/FO", "JSON"])
-    if result.returncode != 0:
-        return {"installed": False, "service_name": name}
-    try:
-        payload = _parse_json_array(result.stdout)
-    except Exception:
-        payload = None
-    if not payload:
-        return {"installed": True, "service_name": name, "state": "unknown"}
-    if not isinstance(payload, list) or not payload:
-        return {"installed": True, "service_name": name, "state": "unknown"}
-    entry = payload[0]
-    if not isinstance(entry, dict):
-        return {"installed": True, "service_name": name, "state": "unknown"}
-    state = str(entry.get("Status", "unknown")).strip().lower() or "unknown"
-    return {"installed": True, "service_name": name, "state": state}
+    """Return the canonical status dict for a Task Scheduler task.
 
+    Existence is determined exclusively by the process/query return code of
+    ``schtasks /Query /TN <name>``. ``rc == 0`` means the task exists; any other
+    code (including localised "not found" messages) means it does not. This is
+    deliberately independent of /FO JSON output, which on some Windows builds
+    returns non-zero even when the task is present and the default
+    (``schtasks /Query``) form returns rc=0.
 
-def _parse_json_array(text: str) -> object | None:
-    import json
-    from typing import cast
+    Running state is determined independently by enumerating actual agent
+    processes via ``tasklist`` (+ ``wmic`` for command-line verification when
+    available). A host without ``wmic`` still reports ``installed=True`` for an
+    existing task; only ``agent_pids`` becomes empty in that case.
 
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return cast("object", data)
+    The optional ``state`` field ("ready"/"running"/"unknown") is best-effort
+    and parsed from /FO JSON only. A parse failure NEVER flips ``installed`` to
+    false — it merely leaves ``state`` as ``"unknown"``.
+    """
+    full_name = _normalize_task_name(name)
+
+    # 1) Existence: ask schtasks in the default (TABLE) format. We deliberately
+    # do NOT use ``/FO JSON`` here: on localised / older Windows builds schtasks
+    # has historically returned non-zero rc for ``/FO JSON`` while the default
+    # TABLE form returned rc=0 for the same task. Deciding existence from the
+    # table-form return code removes that fragility entirely.
+    existence = runner(["/Query", "/TN", full_name])
+    installed = existence.returncode == 0
+
+    # 2) Optional state extraction (best-effort). Only attempted when the task
+    # exists. We do not depend on English human-readable fields such as
+    # "Status" / "Scheduled Task State" because they are localised; the JSON
+    # payload uses a stable key (``State``) but a parse failure here must not
+    # affect ``installed``.
+    state: str = "unknown"
+    if installed:
+        json_result = runner(["/Query", "/TN", full_name, "/FO", "JSON"])
+        if json_result.returncode == 0 and json_result.stdout.strip():
+            try:
+                payload = json.loads(json_result.stdout)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                payload = None
+            if isinstance(payload, list) and payload:
+                entry = payload[0]
+                if isinstance(entry, dict):
+                    raw = entry.get("State") or entry.get("Status")
+                    if raw is not None:
+                        cleaned = str(raw).strip().lower()
+                        if cleaned:
+                            state = cleaned
+
+    # 3) Running detection: enumerate actual agent processes. This is fully
+    # independent of the JSON payload and of ``wmic`` availability; on a host
+    # without ``wmic`` we fall back to matching by image name only and
+    # ``agent_pids`` is returned empty.
+    from . import deploy
+
+    runtime = deploy.default_runtime_path()
+    runtime_python = runtime / "Scripts" / "python.exe"
+    agent_pids = _find_agent_processes(runtime_python if runtime_python.exists() else None)
+
+    legacy_exists = _legacy_scm_service_exists()
+    legacy_state = _legacy_scm_service_state() if legacy_exists else None
+
+    return {
+        "installed": installed,
+        "service_name": SCHEDULED_TASK_NAME,
+        "state": state,
+        "running": len(agent_pids) > 0,
+        "agent_pids": agent_pids,
+        "legacy_scm_service": legacy_exists,
+        "legacy_scm_state": legacy_state,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +829,7 @@ def install_windows_service(
     """
 
     from . import agent_runner, service, service_security
+    from .config import AgentFiles, load_config
 
     runner = command_runner or _default_schtasks_runner
     resolved = service.resolve_service_data_dir(data_dir)
@@ -542,6 +845,11 @@ def install_windows_service(
         )
 
     dev_baseline = service_security.is_dev_baseline_enabled()
+
+    # Migration: remove legacy SCM service if present (best-effort).
+    # The Task Scheduler backend is the canonical mechanism; the legacy
+    # pywin32/SCM service is known to fail with WinError 1053 on this host.
+    _remove_legacy_scm_service()
 
     # Optional, in-memory-only registration (never on the command line).
     agent_id: str | None = None
@@ -563,6 +871,15 @@ def install_windows_service(
         except AgentError as exc:
             raise AgentError(f"registration failed during task install: {exc}") from exc
         agent_id = config.agent_id
+    else:
+        # Reuse existing registration: load agent_id from persisted config so
+        # the result reports the correct agent identity instead of None.
+        try:
+            existing_config = load_config(AgentFiles.resolve(root=resolved / "agent"))
+            agent_id = existing_config.agent_id
+        except Exception:  # noqa: S110 - config missing is expected when no registration exists
+            # If no config exists, agent_id remains None (caller will see this).
+            pass
 
     # Materialise the in-runtime launcher script so the scheduled task invokes
     # the loop directly (no ``python -m`` re-exec into the base interpreter).
@@ -598,6 +915,8 @@ def install_windows_service(
         "running": start,
         "dev_baseline": dev_baseline,
         "agent_id": agent_id,
+        "legacy_scm_removed": _legacy_scm_service_exists()
+        is False,  # True if no legacy service remains
     }
     if dev_baseline:
         from .service_security import DEV_BASELINE_WARNING  # shared with the reference backend

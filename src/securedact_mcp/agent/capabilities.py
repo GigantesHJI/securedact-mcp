@@ -103,3 +103,16 @@ class AgentCapabilities:
 
     def requires_capability(self, capability: str) -> bool:
         return capability in self.capabilities
+
+
+def current_agent_capabilities() -> AgentCapabilities:
+    """Return the canonical capabilities for the currently running agent runtime.
+
+    This is the single source of truth for capability advertisement. It reflects
+    what the installed software supports (provider modules present in the runtime),
+    not what is persisted in the agent config or currently bound via connectors.
+    Both CLI heartbeat and daemon heartbeat must use this helper so they can never
+    advertise different capability sets.
+    """
+
+    return AgentCapabilities.default()

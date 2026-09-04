@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TextIO
 
 from . import agent_runner, service
+from .capabilities import agent_version, current_agent_capabilities
 from .config import AgentConfig, AgentFiles, load_config
 from .connectors import SUPPORTED_BINDING_PLATFORMS
 from .credentials import AgentCredentialStore
@@ -170,7 +171,7 @@ def run_agent(
         client = ControlPlaneClient(config.control_plane_url, credential_provider=store.get)
         try:
             resp = client.heartbeat(
-                agent_version=config.agent_version, capabilities=config.capabilities
+                agent_version=agent_version(), capabilities=current_agent_capabilities()
             )
         except AgentError as exc:
             print(f"heartbeat failed: {scrub(str(exc))}", file=output)

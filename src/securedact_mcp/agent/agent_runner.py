@@ -20,7 +20,12 @@ from typing import Any
 from securedact_core.api import SecuredactEngine
 from securedact_core.policies import Policy
 
-from .capabilities import AgentCapabilities, agent_version, runtime_platform
+from .capabilities import (
+    AgentCapabilities,
+    agent_version,
+    current_agent_capabilities,
+    runtime_platform,
+)
 from .client import ControlPlaneClient
 from .config import (
     CONTROL_PLANE_URL_ENV,
@@ -225,8 +230,8 @@ def agent_status(config: AgentConfig, *, files: AgentFiles | None = None) -> Age
         control_plane_url=config.control_plane_url,
         display_name=config.display_name,
         runtime_platform=config.runtime_platform,
-        agent_version=config.agent_version,
-        supported_platforms=sorted(config.capabilities.supported_platforms),
+        agent_version=agent_version(),
+        supported_platforms=sorted(current_agent_capabilities().supported_platforms),
         last_heartbeat_at=state.last_heartbeat_at,
         entitlement_expires_at=state.entitlement_expires_at,
         current_job_id=state.current_job_id,
@@ -248,7 +253,7 @@ def _heartbeat(
     clock: Callable[[], float] = time.time,
 ) -> None:
     try:
-        client.heartbeat(agent_version=config.agent_version, capabilities=config.capabilities)
+        client.heartbeat(agent_version=agent_version(), capabilities=current_agent_capabilities())
     except Exception as exc:
         # A heartbeat failure is a genuine control-plane comms error; record it.
         state_store.update(last_heartbeat_at=clock(), last_error=scrub(str(exc)))

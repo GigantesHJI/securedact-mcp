@@ -719,9 +719,11 @@ def run_microsoft_machine_onboarding(
     )
 
     runtime_python = resolve_machine_runtime_python(runtime_path)
-    _deps_ready = deps_ready_fn or (
-        lambda rp=runtime_python: _microsoft_runtime_deps_ready(rp, command_runner)
-    )
+
+    def _default_deps_ready(rp: Path | None = runtime_python) -> bool:
+        return _microsoft_runtime_deps_ready(rp, command_runner)
+
+    _deps_ready = deps_ready_fn or _default_deps_ready
     _select_microsoft = microsoft_selection_fn or resolve_microsoft_selection
 
     # First, decide if Microsoft 365 should be configured (mirrors Google logic)

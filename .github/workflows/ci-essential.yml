@@ -35,7 +35,7 @@ jobs:
           python scripts/retry_network.py -- uv sync --frozen --extra dev --extra benchmark
       - name: Validate the repository and benchmark boundaries
         run: |
-          UV_FROZEN="" uv lock --check
+          UV_FROZEN=false uv lock --check
           uv run python scripts/validate_repo.py --require-implementation
           uv run python scripts/validate_repository_size.py
           uv run python scripts/validate_workflows.py
@@ -123,3 +123,4 @@ jobs:
           .clean-venv/bin/securedact-mcp --help
           .clean-venv/bin/securedact-mcp setup --help
           .clean-venv/bin/python scripts/smoke_test_setup.py
+

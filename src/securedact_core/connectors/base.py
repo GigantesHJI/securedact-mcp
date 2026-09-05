@@ -13,6 +13,7 @@ detector logic.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Literal
 
@@ -45,6 +46,48 @@ from .scan import (
     ScanSeverity,
     ScanStatus,
 )
+
+logger = logging.getLogger(__name__)
+
+
+# Structured debug logging for connector scan pipeline (privacy-safe)
+def _log_connector_scan_diagnostics(
+    *,
+    stage: str,
+    resource_id: str | None = None,
+    platform: str | None = None,
+    mime_type: str | None = None,
+    text_chars: int | None = None,
+    findings_count: int | None = None,
+    category_counts: dict[str, int] | None = None,
+    error: str | None = None,
+    engine_status: str | None = None,
+) -> None:
+    """Emit privacy-safe structured diagnostics for the connector scan pipeline."""
+    log_data = {
+        "stage": stage,
+        "connector_scan": True,
+    }
+    if resource_id is not None:
+        log_data["resource_id_hash"] = (
+            resource_id[:8] + "..." if len(resource_id) > 8 else resource_id
+        )
+    if platform is not None:
+        log_data["platform"] = platform
+    if mime_type is not None:
+        log_data["mime_type"] = mime_type
+    if text_chars is not None:
+        log_data["text_chars"] = text_chars
+    if findings_count is not None:
+        log_data["findings_count"] = findings_count
+    if category_counts is not None:
+        log_data["category_counts"] = category_counts
+    if error is not None:
+        log_data["error"] = error
+    if engine_status is not None:
+        log_data["engine_status"] = engine_status
+    logger.debug("conn_scan_diag %s", log_data)
+
 
 _TEXT_MIME_TYPES = frozenset(
     {
@@ -131,6 +174,13 @@ class ConnectorScanner:
         validate_resource_identifier(resource.resource_id, field="resource_id")
 
         if resource.extracted_text is None:
+            _log_connector_scan_diagnostics(
+                stage="scan_start",
+                resource_id=resource.resource_id,
+                platform=resource.platform,
+                mime_type=resource.mime_type,
+                error="resource has no extractable text content",
+            )
             return self._error(
                 resource,
                 context,
@@ -140,7 +190,22 @@ class ConnectorScanner:
             )
 
         text = resource.extracted_text
+        _log_connector_scan_diagnostics(
+            stage="scan_start",
+            resource_id=resource.resource_id,
+            platform=resource.platform,
+            mime_type=resource.mime_type,
+            text_chars=len(text),
+        )
         if len(text) > MAX_INSPECTION_TEXT_CHARS:
+            _log_connector_scan_diagnostics(
+                stage="scan_start",
+                resource_id=resource.resource_id,
+                platform=resource.platform,
+                mime_type=resource.mime_type,
+                text_chars=len(text),
+                error="content too large",
+            )
             return self._error(
                 resource,
                 context,
@@ -169,6 +234,14 @@ class ConnectorScanner:
         try:
             prepared = self._engine.prepare(request)
         except Exception:
+            _log_connector_scan_diagnostics(
+                stage="engine_prepare",
+                resource_id=resource.resource_id,
+                platform=resource.platform,
+                mime_type=resource.mime_type,
+                error="engine prepare exception",
+                engine_status="exception",
+            )
             self._emit(
                 AuditEventType.CONNECTOR_ERROR,
                 resource,
@@ -185,6 +258,16 @@ class ConnectorScanner:
                 "privacy engine was unavailable",
             )
 
+        _log_connector_scan_diagnostics(
+            stage="engine_prepare",
+            resource_id=resource.resource_id,
+            platform=resource.platform,
+            mime_type=resource.mime_type,
+            text_chars=len(text),
+            findings_count=sum(prepared.counts.values()) if prepared.counts else 0,
+            category_counts=dict(prepared.counts) if prepared.counts else {},
+            engine_status=str(prepared.status.value),
+        )
         result = self._translate(resource, context, prepared, integration_id)
         event_type = (
             AuditEventType.CONNECTOR_POLICY_BLOCKED
@@ -202,6 +285,14 @@ class ConnectorScanner:
                 "policy_digest": prepared.policy_digest,
                 "status": str(prepared.status.value),
             },
+        )
+        _log_connector_scan_diagnostics(
+            stage="scan_complete",
+            resource_id=resource.resource_id,
+            platform=resource.platform,
+            mime_type=resource.mime_type,
+            findings_count=sum(result.counts.values()) if result.counts else 0,
+            category_counts=dict(result.counts) if result.counts else {},
         )
         return result
 

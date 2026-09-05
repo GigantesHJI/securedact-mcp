@@ -41,6 +41,57 @@ from ..scan import ScanError, ScanErrorCode, ScanResult, ScanSeverity, ScanStatu
 
 logger = logging.getLogger(__name__)
 
+
+# Structured debug logging for Microsoft scan data path (privacy-safe)
+def _log_scan_diagnostics(
+    *,
+    stage: str,
+    item_id: str | None = None,
+    drive_id: str | None = None,
+    mime_type: str | None = None,
+    file_extension: str | None = None,
+    bytes_fetched: int | None = None,
+    extracted_text_chars: int | None = None,
+    extraction_status: str | None = None,
+    findings_count: int | None = None,
+    category_counts: dict[str, int] | None = None,
+    unsupported_reason: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Emit privacy-safe structured diagnostics for the Microsoft scan pipeline.
+
+    Never logs: file contents, extracted text, PII values, OAuth tokens,
+    or file names (if treated as sensitive by privacy policy).
+    """
+    log_data = {
+        "stage": stage,
+        "microsoft365_scan": True,
+    }
+    if item_id is not None:
+        log_data["item_id_hash"] = item_id[:8] + "..." if len(item_id) > 8 else item_id
+    if drive_id is not None:
+        log_data["drive_id_hash"] = drive_id[:8] + "..." if len(drive_id) > 8 else drive_id
+    if mime_type is not None:
+        log_data["mime_type"] = mime_type
+    if file_extension is not None:
+        log_data["file_extension"] = file_extension
+    if bytes_fetched is not None:
+        log_data["bytes_fetched"] = bytes_fetched
+    if extracted_text_chars is not None:
+        log_data["extracted_text_chars"] = extracted_text_chars
+    if extraction_status is not None:
+        log_data["extraction_status"] = extraction_status
+    if findings_count is not None:
+        log_data["findings_count"] = findings_count
+    if category_counts is not None:
+        log_data["category_counts"] = category_counts
+    if unsupported_reason is not None:
+        log_data["unsupported_reason"] = unsupported_reason
+    if error is not None:
+        log_data["error"] = error
+    logger.debug("ms_scan_diag %s", log_data)
+
+
 GRAPH_HOST = "https://graph.microsoft.com"
 GRAPH_API_VERSION = "v1.0"
 CANONICAL_GRAPH_BASE = f"{GRAPH_HOST}/{GRAPH_API_VERSION}"
@@ -762,6 +813,16 @@ class MicrosoftGraphBrowser:
     ) -> ScanResult:
         normalized = _normalize_content(item.mime_type, item.name, raw)
         if normalized is None:
+            _log_scan_diagnostics(
+                stage="scan_bytes",
+                item_id=item.item_id,
+                drive_id=item.drive_id,
+                mime_type=item.mime_type,
+                file_extension=item.name.split(".")[-1] if "." in item.name else None,
+                bytes_fetched=len(raw),
+                extraction_status="failed_normalize",
+                unsupported_reason="extract_text returned None",
+            )
             return self._unsupported(
                 item,
                 scanner,
@@ -769,8 +830,28 @@ class MicrosoftGraphBrowser:
                 integration_id,
                 "Graph item format cannot be scanned by the SecuRedact pipeline",
             )
+        _log_scan_diagnostics(
+            stage="scan_bytes",
+            item_id=item.item_id,
+            drive_id=item.drive_id,
+            mime_type=item.mime_type,
+            file_extension=item.name.split(".")[-1] if "." in item.name else None,
+            bytes_fetched=len(raw),
+            extracted_text_chars=normalized.char_count,
+            extraction_status="success",
+        )
         resource = self._to_resource(item, extracted_text=normalized.text)
-        return scanner.scan(resource, context, integration_id=integration_id, user_id=user_id)
+        result = scanner.scan(resource, context, integration_id=integration_id, user_id=user_id)
+        _log_scan_diagnostics(
+            stage="scan_complete",
+            item_id=item.item_id,
+            drive_id=item.drive_id,
+            mime_type=item.mime_type,
+            file_extension=item.name.split(".")[-1] if "." in item.name else None,
+            findings_count=sum(result.counts.values()) if result.counts else 0,
+            category_counts=dict(result.counts) if result.counts else {},
+        )
+        return result
 
     def _accumulate(self, summary: DriveScanSummary, result: ScanResult) -> None:
         if result.status == ScanStatus.ERROR:
@@ -780,19 +861,35 @@ class MicrosoftGraphBrowser:
                 summary.files_failed += 1
                 if result.error is not None and len(summary.errors) < 25:
                     summary.errors.append(result.error)
+            _log_scan_diagnostics(
+                stage="accumulate",
+                item_id=result.resource_id,
+                findings_count=0,
+                category_counts={},
+                extraction_status="error",
+                error=result.error.message if result.error else "unknown",
+            )
             return
         summary.files_scanned += 1
+        findings_total = sum(result.counts.values()) if result.counts else 0
         if result.severity == ScanSeverity.NONE and not result.counts:
             summary.files_clean += 1
         else:
             summary.files_with_findings += 1
-        summary.findings_total += sum(result.counts.values())
+        summary.findings_total += findings_total
         # Aggregate per-category counts so the control-plane-safe summary can
         # report which kinds of findings were detected (never the values).
         for entity_type, count in (result.counts or {}).items():
             summary.category_counts[entity_type] = summary.category_counts.get(
                 entity_type, 0
             ) + int(count)
+        _log_scan_diagnostics(
+            stage="accumulate",
+            item_id=result.resource_id,
+            findings_count=findings_total,
+            category_counts=dict(result.counts) if result.counts else {},
+            extraction_status="accumulated",
+        )
 
     def _unsupported(
         self,
@@ -802,6 +899,14 @@ class MicrosoftGraphBrowser:
         integration_id: str | None,
         message: str,
     ) -> ScanResult:
+        _log_scan_diagnostics(
+            stage="unsupported",
+            item_id=item.item_id,
+            drive_id=item.drive_id,
+            mime_type=item.mime_type,
+            file_extension=item.name.split(".")[-1] if "." in item.name else None,
+            unsupported_reason=message,
+        )
         resource = self._to_resource(item, extracted_text=None)
         return ScanResult(
             status=ScanStatus.ERROR,
@@ -815,6 +920,12 @@ class MicrosoftGraphBrowser:
         )
 
     def _error_result(self, item_id: str, code: ScanErrorCode, message: str) -> ScanResult:
+        _log_scan_diagnostics(
+            stage="error_result",
+            item_id=item_id,
+            error=message,
+            extraction_status="error",
+        )
         # Use a fingerprint for the resource_id even in error cases
         fingerprint = self._compute_fingerprint("driveItem", item_id)
         return ScanResult(
@@ -834,31 +945,95 @@ class MicrosoftGraphBrowser:
         """
 
         if item.is_folder:
+            _log_scan_diagnostics(
+                stage="retrieve_content",
+                item_id=item.item_id,
+                drive_id=item.drive_id,
+                mime_type=item.mime_type,
+                file_extension=item.name.split(".")[-1] if "." in item.name else None,
+                extraction_status="skipped_folder",
+            )
             return None
 
         if item.size is not None and item.size > self._max_download_bytes:
+            _log_scan_diagnostics(
+                stage="retrieve_content",
+                item_id=item.item_id,
+                drive_id=item.drive_id,
+                mime_type=item.mime_type,
+                file_extension=item.name.split(".")[-1] if "." in item.name else None,
+                extraction_status="skipped_size_limit",
+                error=f"size {item.size} exceeds max {self._max_download_bytes}",
+            )
             return None
 
-        if item.mime_type and is_text_format(mime_type=item.mime_type, name=item.name):
+        if is_text_format(mime_type=item.mime_type, name=item.name):
             if item.download_url:
                 try:
-                    return self._transport.get_content(
+                    content = self._transport.get_content(
                         item.download_url,
                         max_bytes=self._max_download_bytes,
                     )
-                except MicrosoftApiError:
-                    return None
+                    _log_scan_diagnostics(
+                        stage="retrieve_content",
+                        item_id=item.item_id,
+                        drive_id=item.drive_id,
+                        mime_type=item.mime_type,
+                        file_extension=item.name.split(".")[-1] if "." in item.name else None,
+                        bytes_fetched=len(content) if content else 0,
+                        extraction_status="success_download_url",
+                    )
+                    return content
+                except MicrosoftApiError as exc:
+                    _log_scan_diagnostics(
+                        stage="retrieve_content",
+                        item_id=item.item_id,
+                        drive_id=item.drive_id,
+                        mime_type=item.mime_type,
+                        file_extension=item.name.split(".")[-1] if "." in item.name else None,
+                        extraction_status="failed_download_url",
+                        error=str(exc),
+                    )
+                    # Fall through to Graph content endpoint
             # Fallback to Graph content endpoint
             try:
-                return self._transport.get_content(
+                content = self._transport.get_content(
                     f"drives/{_quote_path_segment(item.drive_id or '')}"
                     f"/items/{_quote_path_segment(item.item_id)}/content",
                     max_bytes=self._max_download_bytes,
                 )
-            except MicrosoftApiError:
+                _log_scan_diagnostics(
+                    stage="retrieve_content",
+                    item_id=item.item_id,
+                    drive_id=item.drive_id,
+                    mime_type=item.mime_type,
+                    file_extension=item.name.split(".")[-1] if "." in item.name else None,
+                    bytes_fetched=len(content) if content else 0,
+                    extraction_status="success_graph_content_endpoint",
+                )
+                return content
+            except MicrosoftApiError as exc:
+                _log_scan_diagnostics(
+                    stage="retrieve_content",
+                    item_id=item.item_id,
+                    drive_id=item.drive_id,
+                    mime_type=item.mime_type,
+                    file_extension=item.name.split(".")[-1] if "." in item.name else None,
+                    extraction_status="failed_graph_content_endpoint",
+                    error=str(exc),
+                )
                 return None
 
         # Binary formats not supported by the existing pipeline.
+        _log_scan_diagnostics(
+            stage="retrieve_content",
+            item_id=item.item_id,
+            drive_id=item.drive_id,
+            mime_type=item.mime_type,
+            file_extension=item.name.split(".")[-1] if "." in item.name else None,
+            extraction_status="unsupported_format",
+            unsupported_reason=f"mime_type={item.mime_type} not recognized as text format",
+        )
         return None
 
     def _fetch_item(self, drive_id: str, item_id: str) -> MicrosoftGraphItem:

@@ -12,11 +12,13 @@ from pydantic import ValidationError
 from securedact_core import SecuredactEngine
 from securedact_core.connectors import (
     ConnectorCapability,
+    ConnectorIdentity,
     ConnectorResource,
     ConnectorScanner,
     ResourceKind,
     ScanContext,
     extract_text,
+    validate_opaque_identifier,
     validate_resource_identifier,
 )
 from securedact_core.connectors.microsoft import (
@@ -33,6 +35,8 @@ from securedact_core.connectors.microsoft import (
     has_write_scope,
     safe_diagnostic,
 )
+from securedact_core.connectors.microsoft.browser import _quote_path_segment
+from securedact_core.connectors.contracts import InvalidResourceIdentifierError
 from securedact_core.connectors.scan import ScanErrorCode, ScanSeverity, ScanStatus
 from securedact_core.production import build_production_engine
 from tests.unit.microsoft_transport_fake import FakeMicrosoftTransport
@@ -695,3 +699,193 @@ class TestSafeDiagnostics:
         # No tokens or credentials
         assert "authorization" not in str(diag).lower()
         assert "bearer" not in str(diag).lower()
+
+
+# ---------------------------------------------------------------------------
+# Regression: real production Graph drive_id with '!' must be accepted as a
+# valid opaque identifier, while path-style validators (resource_id, org_id,
+# tenant_id) keep their existing path-traversal protection unchanged.
+# ---------------------------------------------------------------------------
+
+# The exact real-machine drive id reported as a production blocker.
+REAL_PRODUCTION_DRIVE_ID = "b!eO_jJqnieUqfFFH_45H33QYSQaqUvcdMtX_FBc0fNLGMN1YjM6S5QYlSDL85byHq"
+
+
+def _identity() -> ConnectorIdentity:
+    return ConnectorIdentity(
+        org_id="org-1",
+        integration_id="integration-1",
+        tenant_id="tenant-A",
+        platform=MICROSOFT_365_PLATFORM,
+        user_id="user-123",
+    )
+
+
+def test_validate_opaque_identifier_accepts_real_production_drive_id() -> None:
+    # The exact real-machine Graph drive id with '!' must validate as an
+    # opaque identifier. The previous path-style validator rejected it.
+    assert (
+        validate_opaque_identifier(REAL_PRODUCTION_DRIVE_ID, field="drive_id")
+        == REAL_PRODUCTION_DRIVE_ID
+    )
+
+
+def test_validate_opaque_identifier_rejects_empty() -> None:
+    with pytest.raises(InvalidResourceIdentifierError):
+        validate_opaque_identifier("", field="drive_id")
+
+
+def test_validate_opaque_identifier_rejects_oversized() -> None:
+    with pytest.raises(InvalidResourceIdentifierError):
+        validate_opaque_identifier("a" * 1025, field="drive_id")
+    # The boundary value is accepted.
+    assert validate_opaque_identifier("a" * 1024, field="drive_id") == "a" * 1024
+
+
+def test_validate_opaque_identifier_rejects_control_characters() -> None:
+    for bad in ("abc\x00def", "abc\rdef", "abc\ndef", "abc\tdef", "abc\x7fdef"):
+        with pytest.raises(InvalidResourceIdentifierError):
+            validate_opaque_identifier(bad, field="drive_id")
+
+
+def test_validate_opaque_identifier_accepts_other_legitimate_graph_shapes() -> None:
+    for value in (
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+        "01DABLGYKSDD4QV4YZXBPQJZYZQXZTLLMQS63RYBNMDJSDY6PCJCEAAAAAAAAAA",
+        "01DABLGYK_abc.def-+=",
+        "b!abc_DEF-ghi.123",
+        "driveWithBang!InMiddle",
+        "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+    ):
+        assert validate_opaque_identifier(value, field="drive_id") == value
+
+
+def test_validate_resource_identifier_still_rejects_path_traversal() -> None:
+    # Path-style validator must keep its existing path-traversal protection.
+    with pytest.raises(InvalidResourceIdentifierError):
+        validate_resource_identifier("..", field="resource_id")
+    with pytest.raises(InvalidResourceIdentifierError):
+        validate_resource_identifier("a b", field="resource_id")
+    with pytest.raises(InvalidResourceIdentifierError):
+        validate_resource_identifier("../evil", field="resource_id")
+    # And it still rejects the real Graph drive_id -- this is by design:
+    # the Graph drive_id is opaque, not path-style, so the path-style
+    # validator is the wrong validator for it.
+    with pytest.raises(InvalidResourceIdentifierError):
+        validate_resource_identifier(REAL_PRODUCTION_DRIVE_ID, field="resource_id")
+
+
+def test_connector_resource_path_style_validation_unchanged() -> None:
+    # resource_id / org_id / tenant_id remain path-style validated. The real
+    # Graph drive id MUST be rejected as a path-style resource_id; the
+    # browser uses opaque validation before it reaches a ConnectorResource.
+    with pytest.raises(ValidationError):
+        _resource(resource_id=REAL_PRODUCTION_DRIVE_ID)
+    with pytest.raises(ValidationError):
+        _resource(resource_id="../evil")
+
+
+def test_quote_path_segment_encodes_drive_id_for_graph_request() -> None:
+    # The drive id with '!' must be percent-encoded into a single URL path
+    # segment so it cannot escape into an unintended Graph endpoint/path.
+    encoded = _quote_path_segment(REAL_PRODUCTION_DRIVE_ID)
+    # '!' is encoded as %21; '_' and alphanumerics are not.
+    assert "%21" in encoded
+    assert encoded.startswith("b%21eO_jJqnieUqfFFH_45H33QYSQaqUvcdMtX_")
+    # The encoded form is a single path segment.
+    assert "/" not in encoded
+    assert ".." not in encoded
+
+
+def test_quote_path_segment_rejects_path_separators() -> None:
+    with pytest.raises(MicrosoftApiError):
+        _quote_path_segment("abc/def")
+    with pytest.raises(MicrosoftApiError):
+        _quote_path_segment("abc%2Fdef")
+
+
+def test_quote_path_segment_rejects_empty() -> None:
+    with pytest.raises(MicrosoftApiError):
+        _quote_path_segment("")
+
+
+def test_browser_round_trip_with_real_production_drive_id() -> None:
+    """End-to-end: discovery -> drive scan accepts a b!... drive_id."""
+    transport = FakeMicrosoftTransport()
+    drive_id = REAL_PRODUCTION_DRIVE_ID
+    transport.add_drive(
+        id=drive_id,
+        name="OneDrive for Business",
+        driveType="business",
+    )
+    folder_id = "root-folder-id"
+    item_id = "real-item-id"
+    transport.add_item(
+        drive_id,
+        id=item_id,
+        name="notes.txt",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": folder_id, "driveId": drive_id, "path": "/drive/root:/"},
+    )
+    transport.set_content(drive_id, item_id, b"hello pii: a@b.test")
+
+    browser = MicrosoftGraphBrowser(_identity(), transport)
+    drives = browser.list_drives()
+    assert any(d.drive_id == drive_id for d in drives)
+
+    fetched = browser.get_drive(drive_id)
+    assert fetched.drive_id == drive_id
+
+    # Add a root-level file so the drive scan walks into it.
+    transport.add_item(
+        drive_id,
+        id="root-file-id",
+        name="root-notes.txt",
+        file={"mimeType": "text/plain"},
+        parentReference={"id": "root", "driveId": drive_id, "path": "/drive/root:/"},
+    )
+    transport.set_content(drive_id, "root-file-id", b"hello pii: a@b.test")
+
+    summary = browser.scan_drive(drive_id, ConnectorScanner(_engine()))
+    assert summary.drive_id == drive_id
+    assert summary.status == "completed"
+    # The scan must have actually downloaded and processed the file content.
+    assert summary.files_scanned == 1
+    assert summary.files_unsupported == 0
+    assert summary.files_failed == 0
+    assert "email" in summary.category_counts
+
+
+def test_browser_rejects_empty_drive_id() -> None:
+    transport = FakeMicrosoftTransport()
+    browser = MicrosoftGraphBrowser(_identity(), transport)
+    with pytest.raises(InvalidResourceIdentifierError):
+        browser.get_drive("")
+
+
+def test_browser_rejects_oversized_drive_id() -> None:
+    transport = FakeMicrosoftTransport()
+    browser = MicrosoftGraphBrowser(_identity(), transport)
+    with pytest.raises(InvalidResourceIdentifierError):
+        browser.get_drive("a" * 1025)
+
+
+def test_browser_rejects_control_chars_in_drive_id() -> None:
+    transport = FakeMicrosoftTransport()
+    browser = MicrosoftGraphBrowser(_identity(), transport)
+    with pytest.raises(InvalidResourceIdentifierError):
+        browser.get_drive("abc\x00def")
+
+
+def test_browser_rejects_path_separator_in_drive_id() -> None:
+    """A drive id containing '/' is rejected at URL construction.
+
+    The opaque validator permits '/' (Graph itself does not emit it), but the
+    URL builder refuses to encode a path separator because it would let the
+    value escape into an unintended Graph endpoint/path. This is the real
+    path-traversal / URL-injection boundary for opaque Graph ids.
+    """
+    transport = FakeMicrosoftTransport()
+    browser = MicrosoftGraphBrowser(_identity(), transport)
+    with pytest.raises(MicrosoftApiError):
+        browser.get_drive("abc/def")

@@ -505,7 +505,7 @@ def run_agent_loop(
     logger.info(
         "agent loop starting agent_id=%s version=%s idle_sleep=%s",
         scrub(config.agent_id),
-        config.agent_version,
+        agent_version(),
         idle_sleep,
     )
     while True:

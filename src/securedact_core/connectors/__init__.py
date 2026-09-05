@@ -17,6 +17,7 @@ from .contracts import (
     NormalizedContent,
     ResourceKind,
     ScanContext,
+    validate_opaque_identifier,
     validate_resource_identifier,
 )
 from .scan import (
@@ -47,5 +48,6 @@ __all__ = [
     "ScanStatus",
     "extract_text",
     "is_text_format",
+    "validate_opaque_identifier",
     "validate_resource_identifier",
 ]

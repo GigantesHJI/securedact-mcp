@@ -30,7 +30,7 @@ from ..contracts import (
     NormalizedContent,
     ResourceKind,
     ScanContext,
-    validate_resource_identifier,
+    validate_opaque_identifier,
 )
 from ..fingerprint import (
     FingerprintConfig,
@@ -279,7 +279,7 @@ def _parse_item(
     item_id = str(item.get("id", ""))
     if not item_id:
         raise MicrosoftApiError("Graph driveItem is missing an id")
-    validate_resource_identifier(item_id, field="item_id")
+    validate_opaque_identifier(item_id, field="item_id")
 
     # Determine if it's a folder
     is_folder = "folder" in item
@@ -293,9 +293,9 @@ def _parse_item(
     parent_id = parent_ref.get("id")
     drive_id = parent_ref.get("driveId")
     if parent_id:
-        validate_resource_identifier(str(parent_id), field="parent_id")
+        validate_opaque_identifier(str(parent_id), field="parent_id")
     if drive_id:
-        validate_resource_identifier(str(drive_id), field="drive_id")
+        validate_opaque_identifier(str(drive_id), field="drive_id")
 
     size = item.get("size")
     download_url = item.get("@microsoft.graph.downloadUrl")
@@ -326,7 +326,7 @@ def _parse_drive(drive: dict[str, Any]) -> MicrosoftDrive:
     drive_id = str(drive.get("id", ""))
     if not drive_id:
         raise MicrosoftApiError("Graph drive is missing an id")
-    validate_resource_identifier(drive_id, field="drive_id")
+    validate_opaque_identifier(drive_id, field="drive_id")
 
     drive_type = drive.get("driveType", "")
     owner = None
@@ -348,7 +348,7 @@ def _parse_site(site: dict[str, Any]) -> MicrosoftSite:
     site_id = str(site.get("id", ""))
     if not site_id:
         raise MicrosoftApiError("Graph site is missing an id")
-    validate_resource_identifier(site_id, field="site_id")
+    validate_opaque_identifier(site_id, field="site_id")
 
     return MicrosoftSite(
         site_id=site_id,
@@ -427,8 +427,10 @@ class MicrosoftGraphBrowser:
     def get_drive(self, drive_id: str) -> MicrosoftDrive:
         """Get a specific drive by ID."""
 
-        validate_resource_identifier(drive_id, field="drive_id")
-        data = self._transport.get_json(f"drives/{drive_id}?$select=id,name,driveType,owner")
+        validate_opaque_identifier(drive_id, field="drive_id")
+        data = self._transport.get_json(
+            f"drives/{_quote_path_segment(drive_id)}?$select=id,name,driveType,owner"
+        )
         return _parse_drive(data)
 
     def list_sites(self) -> list[MicrosoftSite]:
@@ -453,15 +455,19 @@ class MicrosoftGraphBrowser:
     def get_site(self, site_id: str) -> MicrosoftSite:
         """Get a specific site by ID."""
 
-        validate_resource_identifier(site_id, field="site_id")
-        data = self._transport.get_json(f"sites/{site_id}?$select=id,displayName,webUrl")
+        validate_opaque_identifier(site_id, field="site_id")
+        data = self._transport.get_json(
+            f"sites/{_quote_path_segment(site_id)}?$select=id,displayName,webUrl"
+        )
         return _parse_site(data)
 
     def get_site_drive(self, site_id: str) -> MicrosoftDrive:
         """Get the default document library (drive) for a SharePoint site."""
 
-        validate_resource_identifier(site_id, field="site_id")
-        data = self._transport.get_json(f"sites/{site_id}/drive?$select=id,name,driveType,owner")
+        validate_opaque_identifier(site_id, field="site_id")
+        data = self._transport.get_json(
+            f"sites/{_quote_path_segment(site_id)}/drive?$select=id,name,driveType,owner"
+        )
         return _parse_drive(data)
 
     def list_children(
@@ -475,12 +481,15 @@ class MicrosoftGraphBrowser:
         Results are paginated up to ``max_pages``.
         """
 
-        validate_resource_identifier(drive_id, field="drive_id")
+        validate_opaque_identifier(drive_id, field="drive_id")
         if folder_id is None:
-            relative = f"drives/{drive_id}/root/children"
+            relative = f"drives/{_quote_path_segment(drive_id)}/root/children"
         else:
-            validate_resource_identifier(folder_id, field="folder_id")
-            relative = f"drives/{drive_id}/items/{folder_id}/children"
+            validate_opaque_identifier(folder_id, field="folder_id")
+            relative = (
+                f"drives/{_quote_path_segment(drive_id)}"
+                f"/items/{_quote_path_segment(folder_id)}/children"
+            )
 
         relative += f"?$select={_quote(_SELECT_FIELDS)}"
         if self._page_size:
@@ -509,8 +518,8 @@ class MicrosoftGraphBrowser:
         ``org_id``/``tenant_id`` are taken from the server-resolved identity.
         """
 
-        validate_resource_identifier(drive_id, field="drive_id")
-        validate_resource_identifier(item_id, field="item_id")
+        validate_opaque_identifier(drive_id, field="drive_id")
+        validate_opaque_identifier(item_id, field="item_id")
         item = self._fetch_item(drive_id, item_id)
         if item.is_folder:
             raise MicrosoftApiError(
@@ -535,8 +544,8 @@ class MicrosoftGraphBrowser:
         second scanner. Microsoft 365 content is downloaded and processed.
         """
 
-        validate_resource_identifier(drive_id, field="drive_id")
-        validate_resource_identifier(item_id, field="item_id")
+        validate_opaque_identifier(drive_id, field="drive_id")
+        validate_opaque_identifier(item_id, field="item_id")
         try:
             item = self._fetch_item(drive_id, item_id)
         except MicrosoftApiError as exc:
@@ -584,8 +593,8 @@ class MicrosoftGraphBrowser:
         execution lease alive without any concurrent threads.
         """
 
-        validate_resource_identifier(drive_id, field="drive_id")
-        validate_resource_identifier(folder_id, field="folder_id")
+        validate_opaque_identifier(drive_id, field="drive_id")
+        validate_opaque_identifier(folder_id, field="folder_id")
         source_type = SOURCE_TYPE_SHAREPOINT_DRIVE if site_id else SOURCE_TYPE_ONEDRIVE
         summary = DriveScanSummary(
             source=source_type,
@@ -629,7 +638,7 @@ class MicrosoftGraphBrowser:
         ``heartbeat`` is threaded into the walk (see :meth:`scan_folder`).
         """
 
-        validate_resource_identifier(drive_id, field="drive_id")
+        validate_opaque_identifier(drive_id, field="drive_id")
         source_type = SOURCE_TYPE_SHAREPOINT_DRIVE if site_id else SOURCE_TYPE_ONEDRIVE
         summary = DriveScanSummary(
             source=source_type,
@@ -842,7 +851,8 @@ class MicrosoftGraphBrowser:
             # Fallback to Graph content endpoint
             try:
                 return self._transport.get_content(
-                    f"drives/{item.drive_id}/items/{item.item_id}/content",
+                    f"drives/{_quote_path_segment(item.drive_id or '')}"
+                    f"/items/{_quote_path_segment(item.item_id)}/content",
                     max_bytes=self._max_download_bytes,
                 )
             except MicrosoftApiError:
@@ -853,7 +863,8 @@ class MicrosoftGraphBrowser:
 
     def _fetch_item(self, drive_id: str, item_id: str) -> MicrosoftGraphItem:
         data = self._transport.get_json(
-            f"drives/{drive_id}/items/{item_id}?$select={_quote(_SELECT_FIELDS)}"
+            f"drives/{_quote_path_segment(drive_id)}"
+            f"/items/{_quote_path_segment(item_id)}?$select={_quote(_SELECT_FIELDS)}"
         )
         return _parse_item(data)
 
@@ -1025,6 +1036,30 @@ def safe_diagnostic(exc: MicrosoftApiError) -> dict[str, object]:
 
 
 def _quote(value: str) -> str:
+    return quote(value, safe="")
+
+
+def _quote_path_segment(value: str) -> str:
+    """URL-encode a single opaque Graph id into a safe path segment.
+
+    Validates that the value does not attempt to escape the path segment by
+    embedding ``/`` or ``%`` (the encoding used here is single-segment
+    percent-encoding with an empty safe set). The value is itself an opaque
+    identifier produced by Microsoft Graph, not user-supplied; this helper is
+    the real boundary against path-traversal / URL injection for opaque Graph
+    ids -- not a character allowlist on the value's bytes.
+    """
+
+    if not value:
+        raise MicrosoftApiError(
+            "opaque Graph identifier must not be empty",
+            status_code=400,
+        )
+    if "/" in value or "%" in value:
+        raise MicrosoftApiError(
+            "opaque Graph identifier cannot contain path separators or percent escapes",
+            status_code=400,
+        )
     return quote(value, safe="")
 
 

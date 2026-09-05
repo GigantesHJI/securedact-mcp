@@ -145,6 +145,10 @@ class FakeMicrosoftTransport:
         raise MicrosoftApiError("unexpected path", status_code=400)
 
     def get_content(self, path: str, *, max_bytes: int | None = None) -> bytes:
+        # Match production transport behaviour: Graph path segments are
+        # percent-encoded by the request builder, so the receiver decodes them.
+        path = urllib.parse.unquote(path)
+
         # Handle download URLs
         if path.startswith("http"):
             # Extract item info from download URL if possible

@@ -19,7 +19,7 @@ from typing import TextIO
 from . import agent_runner, service
 from .capabilities import agent_version, current_agent_capabilities
 from .config import AgentConfig, AgentFiles, load_config
-from .connectors import SUPPORTED_BINDING_PLATFORMS
+from .connectors import SUPPORTED_BINDING_PLATFORMS, ConnectorBindingStore
 from .credentials import AgentCredentialStore
 from .errors import AgentError
 from .safe_log import scrub
@@ -169,9 +169,12 @@ def run_agent(
         from .client import ControlPlaneClient
 
         client = ControlPlaneClient(config.control_plane_url, credential_provider=store.get)
+        connector_bindings = ConnectorBindingStore(files).list_for_heartbeat()
         try:
             resp = client.heartbeat(
-                agent_version=agent_version(), capabilities=current_agent_capabilities()
+                agent_version=agent_version(),
+                capabilities=current_agent_capabilities(),
+                connector_bindings=connector_bindings,
             )
         except AgentError as exc:
             print(f"heartbeat failed: {scrub(str(exc))}", file=output)

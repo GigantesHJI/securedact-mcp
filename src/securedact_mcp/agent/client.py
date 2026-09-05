@@ -139,16 +139,19 @@ class ControlPlaneClient:
         )
 
     def heartbeat(
-        self, *, agent_version: str, capabilities: AgentCapabilities
+        self,
+        *,
+        agent_version: str,
+        capabilities: AgentCapabilities,
+        connector_bindings: list[dict[str, str]] | None = None,
     ) -> HeartbeatResponse:
-        resp = self._post(
-            "/v1/agents/heartbeat",
-            auth=True,
-            json_body={
-                "agent_version": agent_version,
-                "capabilities": capabilities.to_registration_payload(),
-            },
-        )
+        body: dict[str, Any] = {
+            "agent_version": agent_version,
+            "capabilities": capabilities.to_registration_payload(),
+        }
+        if connector_bindings is not None:
+            body["connector_bindings"] = connector_bindings
+        resp = self._post("/v1/agents/heartbeat", auth=True, json_body=body)
         body = self._ok(resp, 200, "heartbeat")
         return HeartbeatResponse(
             server_time=str(body.get("server_time", "")),

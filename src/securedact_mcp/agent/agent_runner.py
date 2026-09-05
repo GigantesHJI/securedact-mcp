@@ -251,9 +251,16 @@ def _heartbeat(
     state_store: AgentStateStore,
     *,
     clock: Callable[[], float] = time.time,
+    files: AgentFiles | None = None,
 ) -> None:
+    files = files or AgentFiles.resolve()
+    connector_bindings = ConnectorBindingStore(files).list_for_heartbeat()
     try:
-        client.heartbeat(agent_version=agent_version(), capabilities=current_agent_capabilities())
+        client.heartbeat(
+            agent_version=agent_version(),
+            capabilities=current_agent_capabilities(),
+            connector_bindings=connector_bindings,
+        )
     except Exception as exc:
         # A heartbeat failure is a genuine control-plane comms error; record it.
         state_store.update(last_heartbeat_at=clock(), last_error=scrub(str(exc)))
@@ -508,7 +515,7 @@ def run_agent_loop(
             break
         iterations += 1
         try:
-            _heartbeat(config, client, state_store, clock=clock)
+            _heartbeat(config, client, state_store, clock=clock, files=files)
             try:
                 manager.ensure_valid()
             except EntitlementError as exc:

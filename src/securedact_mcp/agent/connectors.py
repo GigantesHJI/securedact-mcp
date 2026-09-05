@@ -11,13 +11,17 @@ lives in the platform's credential store.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, List
 
 from .config import AgentFiles
 from .errors import ConnectorBindingError
+from .safe_log import scrub
 
 SUPPORTED_BINDING_PLATFORMS = frozenset({"google_workspace", "microsoft365"})
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -99,3 +103,36 @@ class ConnectorBindingStore:
         tmp = self._path.with_suffix(".tmp")
         tmp.write_text(json.dumps(bindings, indent=2, sort_keys=True), encoding="utf-8")
         tmp.replace(self._path)
+
+    def list_for_heartbeat(self) -> List[dict[str, str]]:
+        """Return privacy-bounded bindings for heartbeat advertisement.
+
+        Returns only the minimal metadata required by the control plane:
+        - local_connector_ref: the integration_id (opaque reference)
+        - platform: the platform identifier (google_workspace or microsoft365)
+
+        Never includes: local_profile, display_name, OAuth material, tokens,
+        tenant IDs, drive/site/item IDs, or filesystem paths.
+
+        If the binding store is missing or corrupt, returns an empty list
+        and logs a scrubbed diagnostic. Heartbeat itself continues to work.
+        """
+        try:
+            bindings = self.list()
+        except Exception as exc:
+            logger.warning("connector binding store unreadable for heartbeat: %s", scrub(str(exc)))
+            return []
+        result = []
+        for binding in bindings:
+            if binding.platform not in SUPPORTED_BINDING_PLATFORMS:
+                logger.warning(
+                    "unknown platform in binding store, skipping: %s", scrub(binding.platform)
+                )
+                continue
+            result.append(
+                {
+                    "local_connector_ref": binding.integration_id,
+                    "platform": binding.platform,
+                }
+            )
+        return result

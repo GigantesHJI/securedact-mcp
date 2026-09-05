@@ -611,7 +611,12 @@ def test_heartbeat_sends_running_version(monkeypatch: pytest.MonkeyPatch, tmp_pa
     sent_versions: list[str] = []
 
     class FakeClient:
-        def heartbeat(self, agent_version: str, capabilities: Any) -> Any:
+        def heartbeat(
+            self,
+            agent_version: str,
+            capabilities: Any,
+            connector_bindings: list[dict[str, str]] | None = None,
+        ) -> Any:
             sent_versions.append(agent_version)
             from securedact_mcp.agent.client import HeartbeatResponse
 
@@ -623,7 +628,7 @@ def test_heartbeat_sends_running_version(monkeypatch: pytest.MonkeyPatch, tmp_pa
                 entitlement_refresh_required=False,
             )
 
-    agent_runner._heartbeat(config, FakeClient(), state_store)  # type: ignore[arg-type]
+    agent_runner._heartbeat(config, FakeClient(), state_store, files=files)  # type: ignore[arg-type]
     from securedact_mcp import __version__
 
     assert sent_versions == [__version__]
@@ -1087,7 +1092,12 @@ def test_heartbeat_sends_running_version_with_microsoft_capability(
     sent_payloads: list[dict] = []
 
     class FakeClient:
-        def heartbeat(self, agent_version: str, capabilities: Any) -> Any:
+        def heartbeat(
+            self,
+            agent_version: str,
+            capabilities: Any,
+            connector_bindings: list[dict[str, str]] | None = None,
+        ) -> Any:
             sent_payloads.append(
                 {
                     "agent_version": agent_version,
@@ -1105,7 +1115,7 @@ def test_heartbeat_sends_running_version_with_microsoft_capability(
                 entitlement_refresh_required=False,
             )
 
-    agent_runner._heartbeat(config, FakeClient(), state_store)
+    agent_runner._heartbeat(config, FakeClient(), state_store, files=files)
 
     assert len(sent_payloads) == 1
     payload = sent_payloads[0]

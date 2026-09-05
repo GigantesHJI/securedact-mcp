@@ -21,6 +21,7 @@ from securedact_core.connectors import (
     validate_opaque_identifier,
     validate_resource_identifier,
 )
+from securedact_core.connectors.contracts import InvalidResourceIdentifierError
 from securedact_core.connectors.microsoft import (
     CANONICAL_GRAPH_BASE,
     FILE_MIME_TYPES,
@@ -36,7 +37,6 @@ from securedact_core.connectors.microsoft import (
     safe_diagnostic,
 )
 from securedact_core.connectors.microsoft.browser import _quote_path_segment
-from securedact_core.connectors.contracts import InvalidResourceIdentifierError
 from securedact_core.connectors.scan import ScanErrorCode, ScanSeverity, ScanStatus
 from securedact_core.production import build_production_engine
 from tests.unit.microsoft_transport_fake import FakeMicrosoftTransport

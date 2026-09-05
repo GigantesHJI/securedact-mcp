@@ -22,6 +22,15 @@ from .safe_log import scrub
 
 SUPPORTED_BINDING_PLATFORMS = frozenset({"google_workspace", "microsoft365"})
 
+# The new connector-binding heartbeat acknowledgement protocol is Microsoft-only.
+# Google Workspace retains its existing binding semantics: a Google Workspace
+# ``Integration.id`` is bound locally by storing a ``ConnectorBinding`` for the
+# agent, but Google is NOT part of the con_* acknowledgement identity contract.
+# The control plane rejects any Google binding advertised as a con_*/local
+# connector ref, so advertising Google bindings in heartbeat would fail the
+# entire heartbeat before the (valid) Microsoft binding can be acknowledged.
+HEARTBEAT_ACKNOWLEDGEMENT_PLATFORMS = frozenset({"microsoft365"})
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,7 +119,16 @@ class ConnectorBindingStore:
 
         Returns only the minimal metadata required by the control plane:
         - local_connector_ref: the integration_id (opaque reference)
-        - platform: the platform identifier (google_workspace or microsoft365)
+        - platform: the platform identifier (microsoft365)
+
+        Only platforms participating in the heartbeat acknowledgement protocol
+        (``HEARTBEAT_ACKNOWLEDGEMENT_PLATFORMS``, currently ``microsoft365``) are
+        advertised. Google Workspace bindings are retained locally with their
+        existing semantics but are NOT advertised in the heartbeat payload: the
+        control plane rejects any binding that is not a Microsoft con_*
+        ``local_connector_ref``, so including a Google ``Integration.id`` would
+        fail the entire heartbeat before a valid Microsoft binding can be
+        acknowledged.
 
         Never includes: local_profile, display_name, OAuth material, tokens,
         tenant IDs, drive/site/item IDs, or filesystem paths.
@@ -125,10 +143,12 @@ class ConnectorBindingStore:
             return []
         result = []
         for binding in bindings:
-            if binding.platform not in SUPPORTED_BINDING_PLATFORMS:
-                logger.warning(
-                    "unknown platform in binding store, skipping: %s", scrub(binding.platform)
-                )
+            if binding.platform not in HEARTBEAT_ACKNOWLEDGEMENT_PLATFORMS:
+                if binding.platform not in SUPPORTED_BINDING_PLATFORMS:
+                    logger.warning(
+                        "unknown platform in binding store, skipping: %s",
+                        scrub(binding.platform),
+                    )
                 continue
             result.append(
                 {

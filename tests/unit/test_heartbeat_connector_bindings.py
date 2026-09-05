@@ -36,6 +36,7 @@ from securedact_mcp.agent.capabilities import AgentCapabilities, current_agent_c
 from securedact_mcp.agent.client import ControlPlaneClient, HeartbeatResponse
 from securedact_mcp.agent.config import AgentConfig, AgentFiles, save_config
 from securedact_mcp.agent.connectors import (
+    HEARTBEAT_ACKNOWLEDGEMENT_PLATFORMS,
     SUPPORTED_BINDING_PLATFORMS,
     ConnectorBinding,
     ConnectorBindingStore,
@@ -541,8 +542,14 @@ def test_missing_local_binding_still_fails_microsoft_job(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_google_binding_appears_in_heartbeat(tmp_path: Path) -> None:
-    """Google bindings must also appear in the heartbeat payload."""
+def test_google_binding_is_excluded_from_heartbeat_payload(tmp_path: Path) -> None:
+    """Google bindings must NOT appear in the heartbeat acknowledgement payload.
+
+    The control plane rejects any binding that is not a Microsoft con_*
+    ``local_connector_ref``. Google Workspace retains its existing binding
+    semantics (a local ``ConnectorBinding`` keyed by the Google ``Integration.id``)
+    but Google is not part of the new con_* acknowledgement identity contract.
+    """
 
     config = _make_config(tmp_path)
     bind_connector(
@@ -564,10 +571,10 @@ def test_google_binding_appears_in_heartbeat(tmp_path: Path) -> None:
         for u, b in zip(transport.captured_urls, transport.captured_bodies, strict=False)
         if u.endswith("/v1/agents/heartbeat")
     )
-    assert any(
-        b.get("local_connector_ref") == "con_google_001" and b.get("platform") == "google_workspace"
-        for b in heartbeat_body["connector_bindings"]
-    )
+    refs = [b.get("local_connector_ref") for b in heartbeat_body["connector_bindings"]]
+    platforms = [b.get("platform") for b in heartbeat_body["connector_bindings"]]
+    assert "con_google_001" not in refs
+    assert "google_workspace" not in platforms
 
 
 def test_google_heartbeat_does_not_send_microsoft_metadata(
@@ -651,3 +658,351 @@ def test_supported_binding_platforms_unchanged() -> None:
     """The supported platform set must not have drifted."""
 
     assert SUPPORTED_BINDING_PLATFORMS == frozenset({"google_workspace", "microsoft365"})
+
+
+def test_heartbeat_acknowledgement_platforms_microsoft_only() -> None:
+    """The heartbeat acknowledgement protocol must advertise only Microsoft.
+
+    Google Workspace retains its existing binding semantics but does not
+    participate in the con_* acknowledgement identity contract.
+    """
+
+    assert HEARTBEAT_ACKNOWLEDGEMENT_PLATFORMS == frozenset({"microsoft365"})
+    # Sanity: every acknowledged platform is a supported binding platform,
+    # but not the reverse.
+    assert HEARTBEAT_ACKNOWLEDGEMENT_PLATFORMS <= SUPPORTED_BINDING_PLATFORMS
+    assert HEARTBEAT_ACKNOWLEDGEMENT_PLATFORMS != SUPPORTED_BINDING_PLATFORMS
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat-regression: Google bindings must not poison the heartbeat
+# ---------------------------------------------------------------------------
+# These tests pin down the narrow fix for the production regression where
+# existing Google Workspace bindings caused the entire heartbeat to fail with
+# ``No connector found for local_connector_ref=... platform=google_workspace``
+# before the Microsoft con_* binding could be acknowledged.
+
+
+def _heartbeat_body_for(transport: _CapturingTransport) -> dict[str, Any]:
+    return next(
+        b
+        for u, b in zip(transport.captured_urls, transport.captured_bodies, strict=False)
+        if u.endswith("/v1/agents/heartbeat")
+    )
+
+
+# (1) Existing Google bindings do not make heartbeat fail.
+def test_existing_google_binding_does_not_make_heartbeat_fail(tmp_path: Path) -> None:
+    """A pre-existing Google binding must not poison the heartbeat.
+
+    Reproduction of the production regression: agent had two Google Workspace
+    bindings and one Microsoft srr_*/con_* binding. The daemon's heartbeat
+    failed because Google bindings were being advertised and the control plane
+    rejected them as unknown ``local_connector_ref`` for the Microsoft
+    acknowledgement contract.
+    """
+
+    files = AgentFiles.resolve(root=tmp_path / "agent")
+    config = _make_config(tmp_path)
+
+    # Simulate the exact production state: two Google Workspace bindings.
+    bind_connector(
+        config,
+        "5cf3b6faa26f52d841d08b21fae4fe5a",
+        "google_workspace",
+        files=files,
+    )
+    bind_connector(
+        config,
+        "9db63be0e4437be6c21816bdde91942f",
+        "google_workspace",
+        files=files,
+    )
+    # Plus a Microsoft con_* binding the local agent has actually bound.
+    bind_connector(
+        config,
+        "con_microsoft_prod_001",
+        "microsoft365",
+        files=files,
+    )
+
+    transport = _CapturingTransport()
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_test"),
+        transport=transport,
+    )
+    state_store = AgentStateStore(files)
+    # If Google is mistakenly advertised, the control plane will reject the
+    # heartbeat with 400 binding_not_found. We expect 200, with only the
+    # Microsoft entry present.
+    _heartbeat(config, client, state_store, files=files)
+
+    body = _heartbeat_body_for(transport)
+    bindings = body["connector_bindings"]
+    assert len(bindings) == 1
+    assert bindings[0] == {
+        "local_connector_ref": "con_microsoft_prod_001",
+        "platform": "microsoft365",
+    }
+
+
+# (2) Google bindings are not incorrectly interpreted as con_* acknowledgement refs.
+def test_google_bindings_are_not_interpreted_as_con_refs(tmp_path: Path) -> None:
+    """Google ``Integration.id`` values must not appear in the heartbeat at all.
+
+    The control plane joins ``TenantConnection.local_connector_ref`` to the
+    advertised ``local_connector_ref`` for the platform. Google Workspace never
+    populated ``TenantConnection.local_connector_ref`` with the Google
+    ``Integration.id``, so any advertised Google ref would be rejected.
+    """
+
+    store = _make_store(tmp_path)
+    google_id = "5cf3b6faa26f52d841d08b21fae4fe5a"
+    store.bind(ConnectorBinding(integration_id=google_id, platform="google_workspace"))
+    advertised = store.list_for_heartbeat()
+    assert advertised == []
+    # But the local binding is still preserved for Google's own local workflow.
+    assert any(b.integration_id == google_id for b in store.list())
+
+
+# (3) Microsoft con_* binding is advertised/acknowledged.
+def test_microsoft_con_ref_is_advertised(tmp_path: Path) -> None:
+    """A Microsoft con_* binding must be advertised exactly once with its platform."""
+
+    files = AgentFiles.resolve(root=tmp_path / "agent")
+    config = _make_config(tmp_path)
+    bind_connector(config, "con_dedicated_opaque_ref_001", "microsoft365", files=files)
+
+    transport = _CapturingTransport()
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_test"),
+        transport=transport,
+    )
+    state_store = AgentStateStore(files)
+    _heartbeat(config, client, state_store, files=files)
+
+    body = _heartbeat_body_for(transport)
+    assert body["connector_bindings"] == [
+        {
+            "local_connector_ref": "con_dedicated_opaque_ref_001",
+            "platform": "microsoft365",
+        }
+    ]
+
+
+# (4) Microsoft malformed/unknown ref still fails closed at the CONTROL PLANE.
+# The MCP side cannot itself enforce control-plane semantics; it must hand the
+# raw opaque ref to the control plane and let it fail closed. Here we lock
+# down the contract: only Microsoft entries are sent; everything else (including
+# malformed) is dropped on the MCP side so it cannot be misread as a Microsoft
+# ref by the control plane.
+def test_malformed_ref_is_dropped_or_passes_through(tmp_path: Path) -> None:
+    """Malformed entries do not silently leak invalid data into the heartbeat.
+
+    A corrupt binding row raises on parse; the documented contract is that
+    ``list_for_heartbeat`` returns an empty list (and the heartbeat still
+    succeeds) so a malformed entry cannot inject a fake Microsoft ref or
+    bypass the acknowledgement gate. The control plane would otherwise be the
+    only line of defense; this keeps the MCP fail-closed too.
+    """
+
+    files = AgentFiles.resolve(root=tmp_path / "agent")
+    files.ensure()
+    # One good Microsoft entry plus one malformed row (missing platform).
+    files.connector_bindings.write_text(
+        json.dumps(
+            {
+                "con_ok": {"integration_id": "con_ok", "platform": "microsoft365"},
+                "con_bad": {"integration_id": "con_bad"},  # missing platform
+            }
+        ),
+        encoding="utf-8",
+    )
+    advertised = ConnectorBindingStore(files).list_for_heartbeat()
+    # Documented contract: any malformed row fails closed to [].
+    assert advertised == []
+
+
+# (5) Cross-org Microsoft ref still fails closed - enforced on the control plane side
+# (see SecuRedactedApp.py tests/test_microsoft_managed_agent.py
+# ``test_heartbeat_with_cross_org_ref_rejected``). The MCP side must not
+# accidentally invent, normalize, or rewrite the ref. The advertised value
+# is exactly what the local agent bound.
+def test_mcp_advertises_exact_local_ref(tmp_path: Path) -> None:
+    """The MCP must advertise the exact opaque ref stored locally, untouched."""
+
+    store = _make_store(tmp_path)
+    store.bind(
+        ConnectorBinding(
+            integration_id="con_orgA_specific_001",
+            platform="microsoft365",
+        )
+    )
+    advertised = store.list_for_heartbeat()
+    assert advertised[0]["local_connector_ref"] == "con_orgA_specific_001"
+
+
+# (6) Mixed Google + Microsoft local bindings work.
+def test_mixed_google_and_microsoft_bindings_only_advertise_microsoft(tmp_path: Path) -> None:
+    """Mixed local bindings: only Microsoft is advertised for acknowledgement."""
+
+    files = AgentFiles.resolve(root=tmp_path / "agent")
+    config = _make_config(tmp_path)
+    bind_connector(
+        config,
+        "5cf3b6faa26f52d841d08b21fae4fe5a",
+        "google_workspace",
+        files=files,
+    )
+    bind_connector(
+        config,
+        "9db63be0e4437be6c21816bdde91942f",
+        "google_workspace",
+        files=files,
+    )
+    bind_connector(
+        config,
+        "srr_legacy_microsoft_ref_001_aaaaaaaaaaaaaa",
+        "microsoft365",
+        files=files,
+    )
+
+    transport = _CapturingTransport()
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_test"),
+        transport=transport,
+    )
+    state_store = AgentStateStore(files)
+    _heartbeat(config, client, state_store, files=files)
+
+    body = _heartbeat_body_for(transport)
+    refs = [b["local_connector_ref"] for b in body["connector_bindings"]]
+    assert refs == ["srr_legacy_microsoft_ref_001_aaaaaaaaaaaaaa"]
+    # Google ids must not appear.
+    assert "5cf3b6faa26f52d841d08b21fae4fe5a" not in refs
+    assert "9db63be0e4437be6c21816bdde91942f" not in refs
+
+    # But the local binding store still has all three (Google workflow preserved).
+    local = list_connectors(config, files=files)
+    assert len(local) == 3
+
+
+# (7) Empty binding list retains documented no-op semantics.
+def test_empty_binding_list_heartbeat_succeeds(tmp_path: Path) -> None:
+    """An empty binding list must heartbeat successfully (documented no-op)."""
+
+    files = AgentFiles.resolve(root=tmp_path / "agent")
+    config = _make_config(tmp_path)
+    transport = _CapturingTransport()
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_test"),
+        transport=transport,
+    )
+    state_store = AgentStateStore(files)
+    _heartbeat(config, client, state_store, files=files)
+    body = _heartbeat_body_for(transport)
+    assert body["connector_bindings"] == []
+
+
+# (8) OAuth/token/path/profile/display-name material is not advertised.
+def test_no_secret_or_path_material_in_heartbeat_payload(tmp_path: Path) -> None:
+    """The heartbeat payload must not contain any sensitive material."""
+
+    files = AgentFiles.resolve(root=tmp_path / "agent")
+    config = _make_config(tmp_path)
+    bind_connector(
+        config,
+        "con_with_profile_and_display",
+        "microsoft365",
+        profile="super-secret-profile-name",
+        display_name="Acme Corp Highly Sensitive Display Name",
+        files=files,
+    )
+    transport = _CapturingTransport()
+    client = ControlPlaneClient(
+        "https://cp.example.com",
+        credential_provider=lambda: AgentCredential("sra_test"),
+        transport=transport,
+    )
+    state_store = AgentStateStore(files)
+    _heartbeat(config, client, state_store, files=files)
+    body_blob = json.dumps(_heartbeat_body_for(transport))
+    for forbidden in (
+        "super-secret-profile-name",
+        "Acme Corp Highly Sensitive Display Name",
+        "local_profile",
+        "display_name",
+        "access_token",
+        "refresh_token",
+        "C:\\ProgramData",
+        "token.json.enc",
+        "graph.microsoft.com",
+    ):
+        assert forbidden not in body_blob, f"heartbeat payload leaks {forbidden!r}"
+
+
+# (9) Existing Google scan behavior remains unchanged.
+# Google scan-job identity semantics live in google_setup.py / provider_google.py
+# which use ConnectorBindingStore.list() / .get() (NOT list_for_heartbeat()).
+# Lock down that contract here so a future refactor cannot accidentally route
+# Google scan-job identity through the heartbeat advertisement path.
+def test_google_setup_does_not_use_list_for_heartbeat() -> None:
+    """Google scan-job identity must not depend on heartbeat advertisement."""
+
+    import inspect
+
+    from securedact_mcp.agent import google_setup, provider_google
+
+    for module in (google_setup, provider_google):
+        source = inspect.getsource(module)
+        assert "list_for_heartbeat" not in source, (
+            f"{module.__name__} must not route through heartbeat acknowledgement"
+        )
+
+
+# (10) CLI and daemon heartbeat use the same canonical binding advertisement
+# logic (already covered by ``test_cli_and_daemon_heartbeat_share_canonical_helper``
+# above). The additional contract: that single helper is Microsoft-only.
+def test_canonical_helper_is_microsoft_only(tmp_path: Path) -> None:
+    """The single canonical helper must be Microsoft-only by construction."""
+
+    files = AgentFiles.resolve(root=tmp_path)
+    files.ensure()
+    store = ConnectorBindingStore(files)
+    store.bind(
+        ConnectorBinding(
+            integration_id="5cf3b6faa26f52d841d08b21fae4fe5a",
+            platform="google_workspace",
+        )
+    )
+    store.bind(
+        ConnectorBinding(
+            integration_id="con_only_one_kept",
+            platform="microsoft365",
+        )
+    )
+    advertised = store.list_for_heartbeat()
+    assert len(advertised) == 1
+    assert advertised[0]["local_connector_ref"] == "con_only_one_kept"
+    assert advertised[0]["platform"] == "microsoft365"
+
+
+def _tmp_factory():
+    """Helper returning a fresh tmp_path-like factory (avoids pytest arg shadowing)."""
+
+    import tempfile
+
+    class _T:
+        def __init__(self) -> None:
+            self._d = tempfile.TemporaryDirectory()
+
+        def __truediv__(self, other):  # type: ignore[no-untyped-def]
+            from pathlib import Path
+
+            return Path(self._d.name) / other
+
+    return _T()._d.name

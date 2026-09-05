@@ -10,10 +10,11 @@ lives in the platform's credential store.
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any
 
 from .config import AgentFiles
 from .errors import ConnectorBindingError
@@ -104,7 +105,7 @@ class ConnectorBindingStore:
         tmp.write_text(json.dumps(bindings, indent=2, sort_keys=True), encoding="utf-8")
         tmp.replace(self._path)
 
-    def list_for_heartbeat(self) -> List[dict[str, str]]:
+    def list_for_heartbeat(self) -> builtins.list[dict[str, str]]:
         """Return privacy-bounded bindings for heartbeat advertisement.
 
         Returns only the minimal metadata required by the control plane:

@@ -6,6 +6,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version 0.1.0 was an unpublished release attempt. Version 0.1.1 is the first
 public server release.
 
+## [Unreleased]
+
+## [0.6.0] - 2026-09-06
+
+This release delivers end-to-end Microsoft 365 managed-agent scanning on the local
+machine, building on the managed-agent foundation established in 0.5.0. It adds
+local-first Microsoft OAuth, server-generated `con_*` connector identity binding,
+OneDrive managed scans with real Graph opaque drive IDs, DOCX retrieval and
+paragraph-safe extraction, Flair PERSON/LOCATION detection in the managed runtime,
+and fail-closed contextual-model readiness. Google Workspace managed-agent
+scanning remains fully backward compatible.
+
+### Added
+
+- **Microsoft 365 managed-agent scanning (local-first).** `securedact-mcp setup`
+  now provisions the Microsoft connector dependencies into the machine-owned
+  runtime (installing `securedact-mcp[microsoft]==<running version>` plus a
+  fail-closed post-install import check), authorizes Microsoft **locally on the
+  machine** against the machine data root (`C:\ProgramData\Securedact`) using the
+  SecuRedact-managed Entra application, and creates the machine-local connector
+  binding through the existing shipped binding mechanism. The OAuth token is
+  written only to the machine vault; it is never sent to the control plane and
+  never placed on the command line, in the environment, or in logs. A valid
+  machine token is reused idempotently; a user-profile token is never silently
+  migrated. Microsoft is only required when actually configured, so a fresh
+  install without Microsoft does not pull the Microsoft extra.
+  `securedact-mcp agent service upgrade --microsoft` re-provisions the Microsoft
+  extra while preserving registration, token, and bindings.
+
+- **Machine-runtime Microsoft OAuth authorization and SecuRedact-managed Entra app.**
+  Microsoft authorization now executes *inside* the machine-owned runtime (via
+  the `runtime_bootstrap microsoft-auth --loopback` subcommand), so a missing
+  `msal` in the setup CLI's interpreter can no longer break onboarding and the
+  same Microsoft code the scheduled agent uses is what authorizes. The default
+  production path uses a **SecuRedact-managed** Microsoft Entra application
+  (`SECUREDACT_MICROSOFT_MANAGED_CLIENT_ID`); normal customers never create
+  their own Entra app registration. Bring-your-own (BYO) Microsoft Entra OAuth
+  is now an explicit advanced/enterprise option (`--microsoft-byo` /
+  `SECUREDACT_MICROSOFT_BYO`), not the default onboarding experience. A missing
+  runtime dependency, or a managed-app authorization that does not complete,
+  fails closed (no machine binding, agent not reported ready) rather than
+  prompting the customer for OAuth credentials.
+
+- **Server-generated `con_*` local connector identity.** The control plane now
+  issues stable, opaque `con_*` identifiers for each connector binding. The
+  managed agent resolves `con_*` → local profile at job execution time; the raw
+  integration ID never leaves the machine. Heartbeat and job submission include
+  the `con_*` identity for control-plane acknowledgement.
+
+- **Authenticated heartbeat binding acknowledgement.** The agent heartbeat now
+  advertises bound `con_*` connectors with their capabilities. The control plane
+  acknowledges bindings and only dispatches jobs for acknowledged connectors.
+
+- **Microsoft readiness state.** `securedact-mcp status` and the agent heartbeat
+  report Microsoft readiness (`microsoft_graph` capability) when the connector is
+  bound, authorized, and has at least one target configured.
+
+- **OneDrive managed scans with real Graph opaque drive IDs.** The managed agent
+  executes claimed `microsoft365` jobs entirely locally: it resolves the
+  `con_*` binding, uses the locally stored OAuth token to call Microsoft Graph
+  (`Files.Read` scope), browses drives/folders/files using opaque Graph resource
+  identifiers (driveId, itemId), retrieves content, scans with `securedact_core`,
+  and submits only bounded safe summary metadata (categories, counts, severity,
+  review flag) to the control plane. Verified with a fake Graph transport +
+  fake control plane and regression tests for PII-exfiltration and OAuth-token-
+  exfiltration.
+
+- **DOCX retrieval and paragraph/run-safe text extraction.** OneDrive files
+  with MIME type `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+  (`.docx`) are now scannable. The extractor parses `word/document.xml`,
+  extracts text paragraph-by-paragraph preserving boundaries (newline separation),
+  joins runs within paragraphs preserving `xml:space="preserve"` spacing, and
+  enforces security bounds (50 MB compressed, 10 MB extracted, 100× compression
+  ratio limit) to prevent zip bombs. Arbitrary ZIP files (`application/zip`) are
+  rejected.
+
+- **Flair PERSON/LOCATION detection in the managed-agent runtime.** The
+  contextual model (Flair NER) is now enabled in the managed-agent runtime for
+  both Google and Microsoft scans. The `SECUREDACT_REQUIRE_FLAIR=1` gate is
+  enforced at runtime provisioning; a missing or corrupted model fails closed
+  (agent not reported ready) rather than silently degrading to deterministic
+  only. The `flair` extra is installed into the machine runtime when either
+  Google or Microsoft is enabled.
+
+- **Fail-closed contextual-model readiness.** The privacy engine now raises
+  `JobExecutionError(code="engine_unavailable_local")` if the Flair engine is
+  unavailable when required, instead of silently falling back. This applies to
+  both managed-agent job execution and MCP server requests when
+  `SECUREDACT_REQUIRE_FLAIR=1`.
+
+- **Privacy-safe scan diagnostics.** Scan results submitted to the control plane
+  contain only category counts, severity, and a review flag — never raw detected
+  values, document content, OAuth tokens, or file paths. A defense-in-depth
+  forbidden-substring scan rejects any leaked PII value, OAuth token, or content
+  key before submission.
+
+- **Google Workspace managed-agent scanning remains backward compatible.**
+  Existing Google bindings, tokens, and onboarding flows continue to work
+  unchanged. The Microsoft and Google connectors share the same `con_*`
+  identity contract, heartbeat format, and job execution pipeline.
+
 ## [0.5.0] - 2026-08-31
 
 This release combines the finalized managed-agent work (Google Workspace onboarding,

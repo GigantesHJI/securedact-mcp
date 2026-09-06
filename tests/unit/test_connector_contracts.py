@@ -16,6 +16,8 @@ from securedact_core.connectors import (
     ScanSeverity,
     ScanStatus,
     extract_text,
+    is_extractable_format,
+    is_scannable_format,
     validate_resource_identifier,
 )
 from securedact_core.connectors.scan import ScanErrorCode
@@ -160,3 +162,276 @@ def test_scanner_enforces_size_limit_without_silent_truncation() -> None:
     assert result.status == ScanStatus.ERROR
     assert result.error is not None
     assert result.error.code == ScanErrorCode.CONTENT_TOO_LARGE
+
+
+def _make_docx(document_xml: str) -> bytes:
+    """Create a minimal DOCX file with the given document.xml content."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "[Content_Types].xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>""",
+        )
+        zf.writestr(
+            "_rels/.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>""",
+        )
+        zf.writestr("word/document.xml", document_xml)
+        zf.writestr(
+            "word/_rels/document.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>""",
+        )
+    return buf.getvalue()
+
+
+def test_is_extractable_format_recognizes_docx() -> None:
+    assert is_extractable_format(
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert is_extractable_format(name="test.docx")
+    assert is_extractable_format(name="document.DOCX")
+    assert not is_extractable_format(mime_type="application/pdf")
+    assert not is_extractable_format(name="test.pdf")
+
+
+def test_is_scannable_format_includes_docx() -> None:
+    assert is_scannable_format(mime_type="text/plain")
+    assert is_scannable_format(
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert is_scannable_format(name="test.docx")
+    assert not is_scannable_format(mime_type="application/pdf")
+
+
+def test_extract_text_docx_contiguous_email_and_phone() -> None:
+    """Email and phone in a single run should be extracted and detected."""
+    doc_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Contact Jane Doe at jane.doe@example.com or +31 6 12345678.</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    docx_bytes = _make_docx(doc_xml)
+    result = extract_text(
+        docx_bytes,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        name="test.docx",
+    )
+    assert result is not None
+    assert "jane.doe@example.com" in result.text
+    assert "+31 6 12345678" in result.text
+    # Engine should detect both
+    from securedact_core import SecuredactEngine
+    from securedact_core.api import RedactionRequest, ResponseMode
+    from securedact_core.production import build_production_engine
+
+    engine = SecuredactEngine(build_production_engine(require_contextual=False))
+    request = RedactionRequest(
+        text=result.text,
+        policy="strict_external_ai",
+        language="en",
+        response_mode=ResponseMode.REVIEW,
+    )
+    engine_result = engine.prepare(request)
+    assert engine_result.counts.get("email", 0) == 1
+    assert engine_result.counts.get("phone", 0) == 1
+
+
+def test_extract_text_docx_email_split_across_runs_no_space() -> None:
+    """Email split across runs WITHOUT space should be joined correctly."""
+    doc_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Contact Jane Doe at jane.doe</w:t>
+      </w:r>
+      <w:r>
+        <w:t>@example.com</w:t>
+      </w:r>
+      <w:r>
+        <w:t> or +31 6 12345678.</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    docx_bytes = _make_docx(doc_xml)
+    result = extract_text(
+        docx_bytes,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        name="test.docx",
+    )
+    assert result is not None
+    assert "jane.doe@example.com" in result.text
+    assert "+31 6 12345678" in result.text
+
+
+def test_extract_text_docx_email_split_across_runs_with_space_preserved() -> None:
+    """Email split across runs WITH space in first run - space is preserved (valid DOCX behavior)."""
+    doc_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Contact Jane Doe at jane.doe </w:t>
+      </w:r>
+      <w:r>
+        <w:t>@example.com</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    docx_bytes = _make_docx(doc_xml)
+    result = extract_text(
+        docx_bytes,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        name="test.docx",
+    )
+    assert result is not None
+    # Space is preserved from the XML - this is correct behavior
+    assert "jane.doe @example.com" in result.text
+
+
+def test_extract_text_docx_phone_split_across_runs() -> None:
+    """Phone number split across runs should work."""
+    doc_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Call me at +31 </w:t>
+      </w:r>
+      <w:r>
+        <w:t>6 12345678</w:t>
+      </w:r>
+      <w:r>
+        <w:t>.</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    docx_bytes = _make_docx(doc_xml)
+    result = extract_text(
+        docx_bytes,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        name="test.docx",
+    )
+    assert result is not None
+    assert "+31 6 12345678" in result.text
+
+
+def test_extract_text_docx_multiple_paragraphs_separated() -> None:
+    """Multiple paragraphs should be separated by newlines, not concatenated."""
+    doc_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>First paragraph with jane.doe@example.com</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>Second paragraph with +31 6 12345678</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    docx_bytes = _make_docx(doc_xml)
+    result = extract_text(
+        docx_bytes,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        name="test.docx",
+    )
+    assert result is not None
+    assert "\n" in result.text
+    # Email should not merge with next paragraph
+    assert "jane.doe@example.comSecond" not in result.text
+    assert "jane.doe@example.com\nSecond" in result.text
+
+
+def test_extract_text_docx_preserve_space_attribute() -> None:
+    """xml:space='preserve' should be respected for leading/trailing spaces."""
+    doc_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t xml:space="preserve">Contact Jane Doe at </w:t>
+      </w:r>
+      <w:r>
+        <w:t>jane.doe@example.com</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    docx_bytes = _make_docx(doc_xml)
+    result = extract_text(
+        docx_bytes,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        name="test.docx",
+    )
+    assert result is not None
+    assert "Contact Jane Doe at jane.doe@example.com" in result.text
+
+
+def test_extract_text_docx_real_world_style() -> None:
+    """Real-world style: Email split across runs with space in label, phone in next paragraph."""
+    doc_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:t>Email: </w:t>
+      </w:r>
+      <w:r>
+        <w:t>test.person@example.com</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>Phone: +31 6 12345678</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+    docx_bytes = _make_docx(doc_xml)
+    result = extract_text(
+        docx_bytes,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        name="test.docx",
+    )
+    assert result is not None
+    assert "Email: test.person@example.com" in result.text
+    assert "Phone: +31 6 12345678" in result.text
+    assert "\n" in result.text  # Paragraph separation
+
+
+def test_extract_text_docx_unsupported_zip_rejected() -> None:
+    """Arbitrary ZIP files (application/zip) should not be extractable."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("test.txt", "hello")
+    zip_bytes = buf.getvalue()
+    # Not DOCX MIME type, not .docx extension
+    result = extract_text(zip_bytes, mime_type="application/zip", name="test.zip")
+    assert result is None

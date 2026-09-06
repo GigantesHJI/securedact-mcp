@@ -8,7 +8,13 @@ the scan request/result model.
 
 from __future__ import annotations
 
-from .base import ConnectorScanner, extract_text, is_text_format
+from .base import (
+    ConnectorScanner,
+    extract_text,
+    is_extractable_format,
+    is_scannable_format,
+    is_text_format,
+)
 from .contracts import (
     ConnectorCapability,
     ConnectorIdentity,
@@ -47,6 +53,8 @@ __all__ = [
     "ScanSeverity",
     "ScanStatus",
     "extract_text",
+    "is_extractable_format",
+    "is_scannable_format",
     "is_text_format",
     "validate_opaque_identifier",
     "validate_resource_identifier",

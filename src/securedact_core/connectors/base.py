@@ -13,9 +13,12 @@ detector logic.
 
 from __future__ import annotations
 
+import io
 import logging
 import time
+import zipfile
 from typing import Any, Literal
+from xml.etree import ElementTree
 
 from ..api import (
     PrepareOutcome,
@@ -104,6 +107,35 @@ _TEXT_EXTENSIONS = frozenset(
     {".txt", ".md", ".markdown", ".csv", ".json", ".html", ".htm", ".xml", ".log"}
 )
 
+_EXTRACTABLE_DOCUMENT_MIME_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+)
+_EXTRACTABLE_DOCUMENT_EXTENSIONS = frozenset({".docx"})
+
+
+def is_extractable_format(*, mime_type: str | None = None, name: str | None = None) -> bool:
+    """Return whether the given format is a supported extractable document format.
+
+    Unlike :func:`is_text_format`, this covers binary container formats (e.g. DOCX)
+    whose text content can be extracted by the SecuRedact pipeline.
+    """
+    if mime_type in _EXTRACTABLE_DOCUMENT_MIME_TYPES:
+        return True
+    if name:
+        lowered = name.lower()
+        if any(lowered.endswith(ext) for ext in _EXTRACTABLE_DOCUMENT_EXTENSIONS):
+            return True
+    return False
+
+
+def is_scannable_format(*, mime_type: str | None = None, name: str | None = None) -> bool:
+    """Return whether the given format can be scanned (direct text or extractable document)."""
+    return is_text_format(mime_type=mime_type, name=name) or is_extractable_format(
+        mime_type=mime_type, name=name
+    )
+
 
 def is_text_format(*, mime_type: str | None = None, name: str | None = None) -> bool:
     """Return whether the given format is extractable with core dependencies."""
@@ -130,15 +162,107 @@ def extract_text(
     that claims to be text but fails UTF-8 decoding is treated as unsupported.
     """
 
-    if not is_text_format(mime_type=mime_type, name=name):
+    if not is_scannable_format(mime_type=mime_type, name=name):
         return None
+
+    # Handle direct text formats
+    if is_text_format(mime_type=mime_type, name=name):
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        return NormalizedContent(
+            text=text, source_format=mime_type or "text/plain", char_count=len(text)
+        )
+
+    # Handle extractable document formats (e.g., DOCX)
+    if is_extractable_format(mime_type=mime_type, name=name):
+        extracted = _extract_document_text(raw, mime_type=mime_type, name=name)
+        if extracted is not None:
+            # Use a short format identifier for extractable documents
+            doc_format = _doc_format_identifier(mime_type, name)
+            return NormalizedContent(
+                text=extracted, source_format=doc_format, char_count=len(extracted)
+            )
+        return None
+
+    return None
+
+
+def _doc_format_identifier(mime_type: str | None, name: str | None) -> str:
+    """Return a short format identifier for extractable documents (max 64 chars)."""
+    if mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return "docx"
+    if name and name.lower().endswith(".docx"):
+        return "docx"
+    return "extractable"
+
+
+def _extract_document_text(
+    raw: bytes,
+    *,
+    mime_type: str | None = None,
+    name: str | None = None,
+) -> str | None:
+    """Extract text from supported document formats (DOCX, etc.).
+
+    Returns the extracted text or ``None`` if extraction fails or format is not supported.
+    Implements security bounds to prevent zip bombs and excessive resource consumption.
+    """
+    if not is_extractable_format(mime_type=mime_type, name=name):
+        return None
+
+    # Security bounds
+    MAX_COMPRESSED_BYTES = 50 * 1024 * 1024  # 50 MB
+    MAX_EXTRACTED_BYTES = 10 * 1024 * 1024  # 10 MB
+    MAX_COMPRESSION_RATIO = 100
+
+    if len(raw) > MAX_COMPRESSED_BYTES:
+        return None
+
     try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            # Check for zip bomb indicators
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
+            if total_uncompressed > MAX_EXTRACTED_BYTES:
+                return None
+            if len(raw) > 0 and total_uncompressed / len(raw) > MAX_COMPRESSION_RATIO:
+                return None
+
+            # Look for word/document.xml in DOCX
+            doc_xml_name = "word/document.xml"
+            if doc_xml_name not in zf.namelist():
+                return None
+
+            # Read and parse the document XML
+            with zf.open(doc_xml_name) as doc_xml:
+                doc_bytes = doc_xml.read()
+                if len(doc_bytes) > MAX_EXTRACTED_BYTES:
+                    return None
+
+            # Parse XML and extract text from w:t elements
+            # DOCX uses the namespace http://schemas.openxmlformats.org/wordprocessingml/2006/main
+            # The DOCX file comes from the user's own Microsoft 365 tenant (Graph download),
+            # not from untrusted external sources. Size limits prevent billion laughs attacks.
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            root = ElementTree.fromstring(doc_bytes)  # noqa: S314
+
+            # Extract text paragraph by paragraph to preserve boundaries
+            paragraphs = []
+            for p_elem in root.iter(f"{{{ns['w']}}}p"):
+                # Join runs within the same paragraph
+                # Spacing is already encoded in the w:t elements (xml:space="preserve" or explicit spaces)
+                para_texts = []
+                for t_elem in p_elem.iter(f"{{{ns['w']}}}t"):
+                    if t_elem.text:
+                        para_texts.append(t_elem.text)
+                if para_texts:
+                    paragraphs.append("".join(para_texts))
+
+            # Join paragraphs with newline to maintain separation
+            return "\n".join(paragraphs) if paragraphs else ""
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, ElementTree.ParseError, KeyError, OSError):
         return None
-    return NormalizedContent(
-        text=text, source_format=mime_type or "text/plain", char_count=len(text)
-    )
 
 
 def _severity_from_counts(counts: dict[str, int]) -> ScanSeverity:

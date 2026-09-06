@@ -22,7 +22,7 @@ from ...audit import (
     emit_audit_event,
 )
 from ...firewall import MAX_INSPECTION_TEXT_CHARS
-from ..base import ConnectorScanner, extract_text, is_text_format
+from ..base import ConnectorScanner, extract_text, is_scannable_format
 from ..contracts import (
     ConnectorCapability,
     ConnectorIdentity,
@@ -116,6 +116,16 @@ FILE_MIME_TYPES = frozenset(
         "text/xml",
     }
 )
+
+# Extractable document MIME types (binary containers with extractable text)
+EXTRACTABLE_DOCUMENT_MIME_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+)
+
+# Combined set of all scannable MIME types for Microsoft Graph
+SCANNABLE_MIME_TYPES = FILE_MIME_TYPES | EXTRACTABLE_DOCUMENT_MIME_TYPES
 
 # OAuth scopes (least privilege for this milestone)
 USER_READ_SCOPE = "User.Read"
@@ -967,7 +977,7 @@ class MicrosoftGraphBrowser:
             )
             return None
 
-        if is_text_format(mime_type=item.mime_type, name=item.name):
+        if is_scannable_format(mime_type=item.mime_type, name=item.name):
             if item.download_url:
                 try:
                     content = self._transport.get_content(
@@ -1032,7 +1042,7 @@ class MicrosoftGraphBrowser:
             mime_type=item.mime_type,
             file_extension=item.name.split(".")[-1] if "." in item.name else None,
             extraction_status="unsupported_format",
-            unsupported_reason=f"mime_type={item.mime_type} not recognized as text format",
+            unsupported_reason=f"mime_type={item.mime_type} not recognized as scannable format",
         )
         return None
 
@@ -1151,14 +1161,7 @@ class MicrosoftGraphBrowser:
 def _normalize_content(mime_type: str | None, name: str, raw: bytes) -> NormalizedContent | None:
     """Return :class:`NormalizedContent` for a supported format, else ``None``."""
 
-    if mime_type in FILE_MIME_TYPES:
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-        return NormalizedContent(text=text, source_format=mime_type, char_count=len(text))
-
-    # Other text formats go through the shared extractor.
+    # Use the shared extractor which handles both direct text and extractable documents
     return extract_text(raw, mime_type=mime_type, name=name)
 
 

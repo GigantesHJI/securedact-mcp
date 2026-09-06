@@ -472,6 +472,9 @@ def _run_one_job(
             )
             return
 
+    if engine is None:
+        raise JobExecutionError("privacy engine unavailable", code="engine_unavailable_local")
+
     def _heartbeat_callback() -> None:
         _job_heartbeat(client, claim, clock=clock)
 

@@ -82,6 +82,8 @@ def _runner_transport(
 @pytest.fixture
 def patched(monkeypatch):
     # Avoid building a real privacy engine / real Google provider in tests.
+    # Disable Flair/contextual detectors for deterministic testing.
+    monkeypatch.setenv("SECUREDACT_REQUIRE_FLAIR", "0")
     monkeypatch.setattr(
         agent_runner.SecuredactEngine, "from_environment", staticmethod(lambda: object())
     )

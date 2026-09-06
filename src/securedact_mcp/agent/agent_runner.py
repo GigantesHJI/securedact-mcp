@@ -58,6 +58,9 @@ from .reducer import (
     build_safe_result_dict,
     validate_safe_result,
 )
+# Import build_runtime and RuntimeLifecycle lazily to avoid pulling in MCP at module import time
+# from ..server import build_runtime
+# from ..runtime_lifecycle import RuntimeLifecycle
 from .safe_log import scrub
 from .state import AgentStateStore
 
@@ -384,6 +387,7 @@ def _run_one_job(
     *,
     clock: Callable[[], float] = time.time,
     files: AgentFiles | None = None,
+    lifecycle: Any | None = None,
 ) -> None:
     try:
         claim = JobClaim.from_claim(claim_dict)
@@ -416,21 +420,54 @@ def _run_one_job(
         )
         return
 
-    try:
-        engine = SecuredactEngine.from_environment()
-    except Exception as exc:
-        logger.warning("privacy engine unavailable: %s", scrub(str(exc)))
-        engine = None
+    # Use the engine from the runtime lifecycle (includes Flair/contextual detectors)
+    if lifecycle is not None:
+        engine = SecuredactEngine(lifecycle.engine)
 
-    if engine is None:
-        _finalize_job(
-            state_store,
-            client,
-            claim,
-            _failed_result(policy, "engine_unavailable_local"),
-            clock=clock,
-        )
-        return
+        # Wait for contextual model to be ready if required
+        if lifecycle.engine.require_contextual:
+            block = lifecycle.privacy_block()
+            if block is not None:
+                # Wait for model to load (with timeout)
+                if not lifecycle.wait_until_terminal(timeout=120.0):
+                    logger.warning("contextual model load timed out for job %s", claim.job_id)
+                    _finalize_job(
+                        state_store,
+                        client,
+                        claim,
+                        _failed_result(policy, "contextual_model_load_timeout"),
+                        clock=clock,
+                    )
+                    return
+                # Check again after waiting
+                block = lifecycle.privacy_block()
+                if block is not None:
+                    logger.warning("contextual model failed to load for job %s: %s", claim.job_id, block)
+                    _finalize_job(
+                        state_store,
+                        client,
+                        claim,
+                        _failed_result(policy, block["failure_code"]),
+                        clock=clock,
+                    )
+                    return
+    else:
+        # Fallback to environment-based engine (for tests and legacy compatibility)
+        try:
+            engine = SecuredactEngine.from_environment()
+        except Exception as exc:
+            logger.warning("privacy engine unavailable: %s", scrub(str(exc)))
+            engine = None
+
+        if engine is None:
+            _finalize_job(
+                state_store,
+                client,
+                claim,
+                _failed_result(policy, "engine_unavailable_local"),
+                clock=clock,
+            )
+            return
 
     def _heartbeat_callback() -> None:
         _job_heartbeat(client, claim, clock=clock)
@@ -484,6 +521,9 @@ def run_agent_loop(
     files: AgentFiles | None = None,
 ) -> int:
     """Run the managed-agent pull loop until stopped or ``max_iterations`` reached."""
+    # Import lazily to avoid pulling in MCP at module import time
+    from ..server import build_runtime
+    from ..runtime_lifecycle import RuntimeLifecycle
 
     files = files or AgentFiles.resolve()
     store = AgentCredentialStore(config.agent_id, root=files.root)
@@ -492,6 +532,19 @@ def run_agent_loop(
     )
     manager = EntitlementManager(client)
     state_store = AgentStateStore(files)
+
+    # Build the production runtime with Flair/contextual detectors
+    runtime = build_runtime()
+    lifecycle = RuntimeLifecycle(
+        runtime.engine,
+        enabled_languages=runtime.enabled_languages,
+        initial_error=runtime.contextual_error,
+        initial_failure_code=runtime.contextual_failure_code,
+        prepare_loader=runtime.prepare_loader,
+    )
+    # Start background model loading if needed
+    if lifecycle.snapshot().contextual_state.value not in {"ready", "not_configured", "failed"}:
+        lifecycle.start_background()
 
     try:
         ent = manager.activate()
@@ -536,11 +589,13 @@ def run_agent_loop(
             continue
 
         try:
-            _run_one_job(claim, client, config, state_store, clock=clock, files=files)
+            _run_one_job(claim, client, config, state_store, clock=clock, files=files, lifecycle=lifecycle)
         except AgentRevokedError:
             break
         except Exception as exc:
             state_store.update(last_error=scrub(str(exc)))
             logger.exception("unexpected error handling job: %s", scrub(str(exc)))
 
+    # Shutdown the lifecycle
+    lifecycle.shutdown()
     return iterations

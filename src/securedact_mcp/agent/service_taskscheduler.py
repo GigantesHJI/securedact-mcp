@@ -127,7 +127,7 @@ AGENT_LOOP_LAUNCHER = "securedact_agent_loop.py"
 # Non-secret operational environment delivered to the background process. No
 # credential, token, OAuth secret, lease secret, or entitlement JWT is ever
 # included here.
-ENV_SECUREDACT_REQUIRE_FLAIR = "0"
+ENV_SECUREDACT_REQUIRE_FLAIR = "1"
 ENV_PYTHONNOUSERSITE = "1"
 
 

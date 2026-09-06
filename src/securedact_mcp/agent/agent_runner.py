@@ -58,6 +58,7 @@ from .reducer import (
     build_safe_result_dict,
     validate_safe_result,
 )
+
 # Import build_runtime and RuntimeLifecycle lazily to avoid pulling in MCP at module import time
 # from ..server import build_runtime
 # from ..runtime_lifecycle import RuntimeLifecycle
@@ -442,7 +443,9 @@ def _run_one_job(
                 # Check again after waiting
                 block = lifecycle.privacy_block()
                 if block is not None:
-                    logger.warning("contextual model failed to load for job %s: %s", claim.job_id, block)
+                    logger.warning(
+                        "contextual model failed to load for job %s: %s", claim.job_id, block
+                    )
                     _finalize_job(
                         state_store,
                         client,
@@ -522,8 +525,8 @@ def run_agent_loop(
 ) -> int:
     """Run the managed-agent pull loop until stopped or ``max_iterations`` reached."""
     # Import lazily to avoid pulling in MCP at module import time
-    from ..server import build_runtime
     from ..runtime_lifecycle import RuntimeLifecycle
+    from ..server import build_runtime
 
     files = files or AgentFiles.resolve()
     store = AgentCredentialStore(config.agent_id, root=files.root)
@@ -589,7 +592,9 @@ def run_agent_loop(
             continue
 
         try:
-            _run_one_job(claim, client, config, state_store, clock=clock, files=files, lifecycle=lifecycle)
+            _run_one_job(
+                claim, client, config, state_store, clock=clock, files=files, lifecycle=lifecycle
+            )
         except AgentRevokedError:
             break
         except Exception as exc:

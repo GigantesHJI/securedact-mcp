@@ -26,6 +26,7 @@ dist/
 *.egg
 MANIFEST
 *.spec
+!scripts/installer.spec
 *.manifest
 
 # Environment files and credentials

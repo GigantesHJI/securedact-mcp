@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import sys
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -243,6 +244,50 @@ def test_provision_creates_runtime_and_hardens_acl(tmp_path: Path, monkeypatch) 
     # (the vSA is absent, and the user is RX only).
     assert "alice:(OI)(CI)F" not in icacls_args
     assert result.already_provisioned is False
+
+
+def test_provision_creates_copies_when_venv_creates_copies(tmp_path: Path, monkeypatch) -> None:
+    """``venv_creates_copies=True`` must include ``--copies`` in the venv command
+    so the ProgramData runtime is self-contained and does not depend on the
+    PyInstaller onedir bundle surviving after install."""
+    monkeypatch.setattr(deploy, "is_elevated", lambda: True)
+    runtime = tmp_path / "runtime"
+    runner = FakeRunner()
+    result = provision_machine_runtime(
+        runtime_path=runtime,
+        acl_provider=safe_provider,
+        command_runner=runner,
+        base_python=Path(sys.executable),
+        venv_creates_copies=True,
+    )
+    assert isinstance(result, ProvisionResult)
+    assert result.already_provisioned is False
+    venv_calls = [c for c in runner.calls if "venv" in " ".join(c[0]).lower()]
+    assert venv_calls, "venv was not invoked"
+    venv_cmd = " ".join(str(a) for a in venv_calls[0][0]).lower()
+    assert "--copies" in venv_calls[0][0], (
+        f"venv --copies must be present when venv_creates_copies=True; got: {venv_cmd}"
+    )
+
+
+def test_provision_omits_copies_when_not_requested(tmp_path: Path, monkeypatch) -> None:
+    """Default (``venv_creates_copies=False``) must NOT add ``--copies``."""
+    monkeypatch.setattr(deploy, "is_elevated", lambda: True)
+    runtime = tmp_path / "runtime"
+    runner = FakeRunner()
+    result = provision_machine_runtime(
+        runtime_path=runtime,
+        acl_provider=safe_provider,
+        command_runner=runner,
+        base_python=Path(sys.executable),
+    )
+    assert isinstance(result, ProvisionResult)
+    venv_calls = [c for c in runner.calls if "venv" in " ".join(c[0]).lower()]
+    assert venv_calls
+    assert "--copies" not in venv_calls[0][0], (
+        "venv --copies must NOT be present by default; "
+        f"got: {' '.join(str(a) for a in venv_calls[0][0])}"
+    )
 
 
 def test_provision_rejects_user_writable_runtime(tmp_path: Path, monkeypatch) -> None:

@@ -1411,6 +1411,7 @@ def provision_machine_runtime(
     version: str | None = None,
     wheel_path: Path | str | None = None,
     base_python: str | None = None,
+    venv_creates_copies: bool = False,
     command_runner: CommandRunner | None = None,
     acl_provider: Callable[[Path], list[tuple[str, str, set[str]]]] | None = None,
     force: bool = False,
@@ -1536,7 +1537,19 @@ def provision_machine_runtime(
     #    is copied under ProgramData, so it is admin-owned regardless of the
     #    bootstrapping interpreter.
     base = base_python or sys.executable
-    created = runner([str(base), "-m", "venv", str(runtime)], RunInput())
+    venv_cmd = [str(base), "-m", "venv"]
+    # ``--copies`` forces CPython to COPY the interpreter and DLL files verbatim
+    # into the venv (instead of the default redirector `pyvenv.cfg home=`
+    # linkage). This is REQUIRED for a self-contained ProgramData runtime when
+    # the base interpreter is a PyInstaller-bundled onedir CPython whose
+    # extraction dir may be relocated or cleaned after install. The redirected
+    # form would leave the runtime python.exe dead once the onedir bundle is
+    # moved/deleted. The default (redirector) behaviour is retained for
+    # interactive/dev runs where the base interpreter is a real system Python.
+    if venv_creates_copies:
+        venv_cmd.append("--copies")
+    venv_cmd.append(str(runtime))
+    created = runner(venv_cmd, RunInput())
     if created.returncode != 0:
         raise AgentError(f"failed to create machine runtime venv: {created.stderr}")
 
@@ -1788,6 +1801,8 @@ def install_service_from_runtime(
     command_runner: CommandRunner | None = None,
     acl_provider: Callable[[Path], list[tuple[str, str, set[str]]]] | None = None,
     installing_user: str | None = None,
+    base_python: str | None = None,
+    venv_creates_copies: bool = False,
     dev_local: bool = False,
     google_enabled: bool = False,
     microsoft_enabled: bool = False,
@@ -1799,9 +1814,15 @@ def install_service_from_runtime(
     runtime, so no SCM ``ImagePath`` / ``pythonservice.exe`` host is required.
 
     When ``token`` is supplied the agent is registered (the one-time token is
-    consumed in-memory only, never on the task command line, in the environment,
-    or on disk). When ``token`` is ``None`` an existing valid registration is
-    reused and only the scheduled task is (re)created -- no new token is consumed.
+    consumed in-memory only, never on the task command line, in the
+    environment, or on disk). When ``token`` is ``None`` an existing valid
+    registration is reused and only the scheduled task is (re)created -- no
+    new token is consumed.
+
+    ``base_python`` selects the interpreter used to build the machine runtime
+    venv. On a clean machine this is the bundled CPython (PyInstaller onedir);
+    when None the deploying interpreter is used. ``venv_creates_copies``
+    forces a self-contained (copied, non-redirector) runtime venv.
     """
 
     provisioned = provision_machine_runtime(
@@ -1810,6 +1831,8 @@ def install_service_from_runtime(
         command_runner=command_runner,
         acl_provider=acl_provider,
         installing_user=installing_user,
+        base_python=base_python,
+        venv_creates_copies=venv_creates_copies,
         # The runtime is initially hardened WITHOUT the service ACE (the vSA is
         # added by the future production hardening pass, after the task exists).
         include_service_acl=False,

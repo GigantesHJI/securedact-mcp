@@ -6,7 +6,7 @@ import json
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Protocol, TextIO, cast
+from typing import Any, Protocol, TextIO, cast
 
 from .agent import cli as agent_cli
 from .model_installer import (
@@ -201,7 +201,57 @@ def build_parser() -> argparse.ArgumentParser:
     if microsoft_cli_commands is not None:
         microsoft_cli_commands.build_microsoft_parser(commands)
     agent_cli.build_agent_parser(commands)
+    _build_installer_parser(commands)
     return parser
+
+
+def _build_installer_parser(commands: argparse._SubParsersAction[Any]) -> None:
+    """Register the customer-facing installer/bootstrap subcommand.
+
+    The installer is the zero-PowerShell install path used by the Business
+    dashboard. It consumes a bounded bootstrap config (no arbitrary commands)
+    and reuses the proven ``deploy`` pipeline.
+    """
+
+    from .agent import installer as agent_installer
+
+    installer_parser = commands.add_parser(
+        "installer",
+        help="customer-facing managed-agent installer (Business dashboard bootstrap)",
+    )
+    sub = installer_parser.add_subparsers(dest="installer_command", required=False)
+    run = sub.add_parser("run", help="execute the install pipeline")
+    run.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to the bootstrap config JSON (or set SECUREDACT_BOOTSTRAP_CONFIG).",
+    )
+    run.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="upgrade the existing runtime instead of consuming a new token",
+    )
+    run.add_argument(
+        "--heartbeat-timeout",
+        type=float,
+        default=30.0,
+        help="seconds to wait for the initial heartbeat (default: 30)",
+    )
+    validate = sub.add_parser("validate-config", help="validate the bootstrap config and exit")
+    validate.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to the bootstrap config JSON.",
+    )
+    contract = sub.add_parser(
+        "describe-contract",
+        help="print the documented dashboard bootstrap contract (JSON)",
+    )
+    del contract  # the parser only needs to register the subcommand
+    # Expose helpers as no-arg utilities for the installer module main().
+    installer_parser.set_defaults(_installer_module=agent_installer)
 
 
 def _format_bytes(value: int | None) -> str:
@@ -596,6 +646,58 @@ def main(
 
     if arguments.command == "agent":
         return agent_cli.run_agent(arguments, input_fn=input_fn, output=output)
+
+    if arguments.command == "installer":
+        from .agent import installer as agent_installer
+
+        sub_cmd = getattr(arguments, "installer_command", None)
+        if sub_cmd is None or sub_cmd == "run":
+            try:
+                config = agent_installer.load_bootstrap_config_from_path(
+                    getattr(arguments, "config", None)
+                )
+            except agent_installer.BootstrapConfigError as exc:
+                print(
+                    json.dumps({"error": "bootstrap_config_invalid", "message": str(exc)}),
+                    file=output,
+                )
+                return 2
+            if getattr(arguments, "upgrade", False):
+                result = agent_installer.run_upgrade(config)
+            else:
+                result = agent_installer.run_install(
+                    config,
+                    heartbeat_timeout_seconds=getattr(arguments, "heartbeat_timeout", 30.0),
+                )
+            print(json.dumps(result.to_dict()), file=output)
+            return 0 if result.success else 1
+        if sub_cmd == "validate-config":
+            try:
+                config = agent_installer.load_bootstrap_config_from_path(
+                    getattr(arguments, "config", None)
+                )
+            except agent_installer.BootstrapConfigError as exc:
+                print(
+                    json.dumps({"error": "bootstrap_config_invalid", "message": str(exc)}),
+                    file=output,
+                )
+                return 2
+            print(
+                json.dumps({"valid": True, "config": config.to_log_safe_dict()}),
+                file=output,
+            )
+            return 0
+        if sub_cmd == "describe-contract":
+            print(
+                json.dumps(agent_installer.documented_bootstrap_contract()),
+                file=output,
+            )
+            return 0
+        print(
+            json.dumps({"error": "unknown_installer_command", "command": sub_cmd}),
+            file=output,
+        )
+        return 2
 
     try:
         store = ModelStore.resolve()

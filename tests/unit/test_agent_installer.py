@@ -43,6 +43,10 @@ from securedact_mcp.agent.installer import (
     sha256_of_payload,
 )
 
+# Synthetic registration token for tests. Low-entropy (repeated chars) so it
+# is clearly a fixture; still matches the production srr_<id>_<secret> regex.
+TEST_REGISTRATION_TOKEN = "srr_test_AAAA"  # noqa: S105
+
 # ---------------------------------------------------------------------------
 # Helpers / fakes
 # ---------------------------------------------------------------------------
@@ -61,7 +65,7 @@ def _valid_config_dict(**overrides: Any) -> dict[str, Any]:
     base = {
         "schema": BOOTSTRAP_SCHEMA,
         "control_plane_url": "https://www.securedact.com",
-        "registration_token": "srr_abc123_def456ghi789",
+        "registration_token": TEST_REGISTRATION_TOKEN,
         "recommended_version": "0.6.0",
         "expires_at": _future_iso(),
         "installer_url": "https://www.securedact.com/download/installer-0.6.0.exe",
@@ -213,7 +217,7 @@ def test_parse_bootstrap_config_rejects_http_non_localhost() -> None:
 
 
 def test_parse_bootstrap_config_never_echoes_token_on_error() -> None:
-    secret = "srr_abc123_def456ghi789"  # noqa: S105
+    secret = TEST_REGISTRATION_TOKEN
     cfg = _valid_config_dict(registration_token=secret, expires_at="bad-date")
     try:
         parse_bootstrap_config(cfg)
@@ -388,8 +392,8 @@ def test_run_install_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert "verify-heartbeat" in step_names
     # No step must have leaked the secret token into its message.
     for step in result.steps:
-        assert "srr_abc123_def456ghi789" not in step.message
-        assert "srr_abc123" not in step.message
+        assert TEST_REGISTRATION_TOKEN not in step.message
+        assert "srr_test" not in step.message
 
 
 def test_run_install_version_mismatch_fails_closed(
@@ -505,7 +509,7 @@ def test_run_install_does_not_persist_token_on_failure(
     assert result.error_code == "runtime_provision_failed"
     # The token must not appear anywhere in the result envelope.
     blob = json.dumps(result.to_dict())
-    assert "srr_abc123_def456ghi789" not in blob
+    assert TEST_REGISTRATION_TOKEN not in blob
 
 
 def test_run_install_no_arbitrary_command_surface(
@@ -535,7 +539,7 @@ def test_run_install_no_arbitrary_command_surface(
 def test_default_ui_printer_emits_no_token(capsys: pytest.CaptureFixture[str]) -> None:
     buf = io.StringIO()
     printer = installer.default_ui_printer(stream=buf)
-    secret_token = "srr_abc123_def456ghi789"  # noqa: S105
+    secret_token = TEST_REGISTRATION_TOKEN
     printer(InstallerStep("register-agent", "ok", f"token={secret_token}"))
     output = buf.getvalue()
     assert secret_token not in output

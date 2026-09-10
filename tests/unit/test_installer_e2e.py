@@ -31,6 +31,10 @@ from securedact_mcp.agent.installer import (
     run_upgrade,
 )
 
+# Synthetic registration token for tests. Low-entropy (repeated chars) so it
+# is clearly a fixture; still matches the production srr_<id>_<secret> regex.
+TEST_REGISTRATION_TOKEN = "srr_test_AAAA"  # noqa: S105
+
 # ---------------------------------------------------------------------------
 # Shared fakes
 # ---------------------------------------------------------------------------
@@ -57,7 +61,7 @@ def _valid_config_dict(**overrides: Any) -> dict[str, Any]:
     cfg = {
         "schema": BOOTSTRAP_SCHEMA,
         "control_plane_url": "https://www.securedact.com",
-        "registration_token": "srr_e2e_abcdefghij12345",
+        "registration_token": TEST_REGISTRATION_TOKEN,
         "recommended_version": "0.6.0",
         "expires_at": _future_iso(),
         "models": [],
@@ -145,7 +149,7 @@ def test_e2e_first_install_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert result.agent_id == "agent-e2e-001"
     # Envelope must never include the srr_* token.
     blob = json.dumps(result.to_dict())
-    assert "srr_e2e_abcdefghij12345" not in blob
+    assert TEST_REGISTRATION_TOKEN not in blob
     # All six canonical steps present in the success path.
     step_names = [s.name for s in result.steps]
     assert step_names == [
@@ -267,7 +271,7 @@ def test_e2e_bootstrap_config_file_round_trip(tmp_path: Path) -> None:
     loaded = load_bootstrap_config_from_path(cfg_path)
     assert loaded.recommended_version == "0.6.0"
     # The token from the file is what we'd consume; the rest is policy.
-    assert loaded.registration_token == "srr_e2e_abcdefghij12345"  # noqa: S105
+    assert loaded.registration_token == TEST_REGISTRATION_TOKEN
     # Re-write the config with a poisoned field: the loader must reject.
     poisoned = json.loads(cfg_path.read_text())
     poisoned["shell_command"] = "calc.exe"

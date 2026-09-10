@@ -25,6 +25,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "install_agent_bootstrap.py"
 
+# Synthetic registration token for tests. Low-entropy (repeated chars) so it
+# is clearly a fixture; still matches the production srr_<id>_<secret> regex.
+TEST_REGISTRATION_TOKEN = "srr_test_AAAA"  # noqa: S105
+
 
 def _load_launcher() -> object:
     spec = importlib.util.spec_from_file_location("bootstrap_launcher", LAUNCHER)
@@ -51,7 +55,7 @@ def _write_config(tmp_path: Path, **overrides: object) -> Path:
     cfg = {
         "schema": BOOTSTRAP_SCHEMA,
         "control_plane_url": "https://www.securedact.com",
-        "registration_token": "srr_abc123_def456ghi789",
+        "registration_token": TEST_REGISTRATION_TOKEN,
         "recommended_version": "0.6.0",
         "expires_at": _future(),
         "models": [],

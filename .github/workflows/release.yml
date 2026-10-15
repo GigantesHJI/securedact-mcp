@@ -79,12 +79,12 @@ jobs:
         run: uv run cyclonedx-py environment --output-format JSON --output-file dist/securedact-mcp.cdx.json
       - name: Generate checksums and repository provenance record
         run: uv run python scripts/release_metadata.py metadata
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: securedact-mcp-release-candidate
           path: dist/*
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: securedact-mcp-distributions
           path: |
